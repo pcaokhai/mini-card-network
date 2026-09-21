@@ -1,0 +1,20 @@
+{
+  "eventId": "6f1c2a7d-3b8e-4f6a-9c5d-7e9b1a3c5e7f",
+  "eventType": "TransactionApproved",
+  "source": "ISSUER",
+  "occurredAt": "2026-09-21T07:32:08.182Z",
+  "businessDate": "2026-09-21",
+  "rrn": "626514000123",
+  "stan": "000123",
+  "transmissionDateTime": "0921073208",
+  "acquirerId": "970499",
+  "terminalId": "00000042",
+  "transactionType": "PURCHASE",
+  "amount": 250000,
+  "currency": "704",
+  "status": "APPROVED",
+  "responseCode": "00",
+  "authCode": "A00123",
+  "originalRrn": null,
+  "maskedPan": "970436******4417"
+}
