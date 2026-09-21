@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ISO 8583 network-management server (MCN-201). Uses jPOS's own QServer/ISOServer/NACChannel
+  stack directly (org.jpos.q2.iso.QServer) instead of a custom QBean wrapper class - it already
+  does everything this story needs: TCP accept, 2-byte-length framing, per-connection threads.
+-->
+<iso-server class="org.jpos.q2.iso.QServer" logger="Q2" name="iso-server">
+  <attr name="port" type="int">${ISO_PORT:8000}</attr>
+  <attr name="maxSessions" type="int">100</attr>
+
+  <channel class="org.jpos.iso.channel.NACChannel" packager="org.jpos.iso.packager.GenericPackager">
+    <property name="packager-config" value="cfg/iso87ascii.xml" />
+  </channel>
+
+  <request-listener class="io.mcn.issuer.adapter.iso.NetworkManagementListener" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+  </request-listener>
+</iso-server>
