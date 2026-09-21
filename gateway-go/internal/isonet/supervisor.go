@@ -103,7 +103,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			signOffCtx, cancel := context.WithTimeout(context.Background(), s.cfg.EchoTimeout)
-			_ = s.signOff(signOffCtx)
+			_ = s.signOff(signOffCtx) //nolint:contextcheck // deliberately detached: ctx is already Done, sign-off still needs to send
 			cancel()
 			return nil
 		case err := <-serveErr:
