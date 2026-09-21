@@ -54,7 +54,7 @@ src/dist/cfg/        iso87ascii.xml packager (generated from contracts/iso8583/p
 
 ## Java rules
 
-- Java 21: records for value objects and DTOs, sealed interfaces for results (`AuthorizationResult permits Approved, Declined`), pattern matching `switch` over sealed types, `var` only when the type is obvious.
+- Java 25: records for value objects and DTOs, sealed interfaces for results (`AuthorizationResult permits Approved, Declined`), pattern matching `switch` over sealed types, `var` only when the type is obvious.
 - Constructor injection only, all fields `final`. No static mutable state. No service locators.
 - No `null` returns from public methods: return `Optional` for "maybe" queries; never use `Optional` as a field or parameter.
 - Exceptions: domain exceptions extend `IssuerException` and carry a `ResponseCode`. `ResponseCodeMapper` is the single mapping to field 39 and to HTTP problem types.

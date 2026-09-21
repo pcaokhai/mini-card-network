@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      iss: ${{ steps.filter.outputs.iss }}
+      gw: ${{ steps.filter.outputs.gw }}
+      web: ${{ steps.filter.outputs.web }}
+      set: ${{ steps.filter.outputs.set }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            iss:
+              - 'issuer-jpos/**'
+            gw:
+              - 'gateway-go/**'
+            web:
+              - 'web-next/**'
+            set:
+              - 'settlement/**'
+
+  lint-test-iss:
+    needs: changes
+    if: needs.changes.outputs.iss == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint + test issuer-jpos
+        run: |
+          if [ -f issuer-jpos/build.gradle.kts ] || [ -f issuer-jpos/build.gradle ]; then
+            cd issuer-jpos && ./gradlew spotlessCheck test
+          else
+            echo "skip: issuer-jpos not scaffolded yet"
+          fi
+
+  lint-test-gw:
+    needs: changes
+    if: needs.changes.outputs.gw == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint + test gateway-go
+        run: |
+          if [ -f gateway-go/go.mod ]; then
+            cd gateway-go && golangci-lint run ./... && go test ./...
+          else
+            echo "skip: gateway-go not scaffolded yet"
+          fi
+
+  lint-test-web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint + test web-next
+        run: |
+          if [ -f web-next/package.json ]; then
+            cd web-next && npm ci && npm run lint && npm test
+          else
+            echo "skip: web-next not scaffolded yet"
+          fi
+
+  lint-test-set:
+    needs: changes
+    if: needs.changes.outputs.set == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint + test settlement
+        run: |
+          if [ -f settlement/build.gradle.kts ] || [ -f settlement/build.gradle ]; then
+            cd settlement && ./gradlew spotlessCheck test
+          else
+            echo "skip: settlement not scaffolded yet"
+          fi
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check-contracts.sh
+
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            refactor
+            docs
+            test
+            chore
+            perf
+            ci

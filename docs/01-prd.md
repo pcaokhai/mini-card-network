@@ -75,7 +75,7 @@ Functional (FR-01…FR-18) and non-functional (NFR-01…NFR-10) requirements are
 
 ### 7.3 Technology
 
-Java 21 + jPOS (issuer), Go (gateway, switch), Next.js + TypeScript (web), Java 21 + Spring Boot (settlement), PostgreSQL, Kafka, Toxiproxy, OpenTelemetry, Prometheus, Grafana, Docker Compose. Details and rationale: `02-software-architecture.md` and ADRs.
+Java 25 + jPOS (issuer), Go (gateway, switch), Next.js + TypeScript (web), Java 25 + Spring Boot (settlement), PostgreSQL, Kafka, Toxiproxy, OpenTelemetry, Prometheus, Grafana, Docker Compose. Details and rationale: `02-software-architecture.md` and ADRs.
 
 ### 7.4 Assumptions (to validate)
 
