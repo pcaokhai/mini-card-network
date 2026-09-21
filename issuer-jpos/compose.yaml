@@ -1,0 +1,12 @@
+services:
+  issuer:
+    build: { context: ./issuer-jpos }
+    environment:
+      OTEL_SERVICE_NAME: issuer
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    ports: ["8081:8081", "9465:9465"]
+    stop_grace_period: 35s
+    depends_on: [otel-collector, postgres]
