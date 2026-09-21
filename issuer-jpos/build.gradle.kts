@@ -23,6 +23,7 @@ dependencies {
 
 application { mainClass = "org.jpos.q2.Q2" }
 tasks.named<JavaExec>("run") { workingDir = file("src/dist") }
-distributions { main { contents { from("src/dist") } } }
+// The application plugin already merges src/dist into the distribution by convention;
+// declaring it again here made distTar/distZip see every file twice.
 tasks.test { useJUnitPlatform() }
 spotless { java { googleJavaFormat(); target("src/**/*.java") } }
