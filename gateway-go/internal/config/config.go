@@ -14,6 +14,8 @@ type Config struct {
 	MetricsAddr     string
 	ShutdownTimeout time.Duration
 	TracingEnabled  bool
+	IssuerAddr      string
+	DatabaseURL     string
 }
 
 // Load reads configuration through getenv (os.Getenv in production, a map in tests).
@@ -23,6 +25,8 @@ func Load(getenv func(string) string) (Config, error) {
 		HTTPAddr:       valueOr(getenv("HTTP_ADDR"), ":8080"),
 		MetricsAddr:    valueOr(getenv("METRICS_ADDR"), ":9464"),
 		TracingEnabled: getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "",
+		IssuerAddr:     valueOr(getenv("ISSUER_ADDR"), "toxiproxy:18000"), // docs/02 §8: gateway connects through Toxiproxy
+		DatabaseURL:    getenv("DATABASE_URL"),
 	}
 	timeout, err := time.ParseDuration(valueOr(getenv("SHUTDOWN_TIMEOUT"), "30s"))
 	if err != nil {

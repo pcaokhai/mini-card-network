@@ -38,7 +38,7 @@ func fakeIssuer(t *testing.T) (addr string, closeFn func()) {
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				for {
 					payload, err := ReadFrame(conn)
 					if err != nil {
@@ -86,13 +86,13 @@ func TestSupervisor_connectsSignsOnAndEchoes__MCN_202_AC1(t *testing.T) {
 func TestSupervisor_marksDownAfterThreeFailedEchoes__MCN_202_AC2(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		payload, err := ReadFrame(conn) // sign-on: answer once
 		if err != nil {
 			return

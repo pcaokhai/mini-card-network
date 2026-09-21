@@ -34,7 +34,7 @@ func Migrate(dsn string) error {
 	if err != nil {
 		return fmt.Errorf("open migration connection: %w", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := pingWithRetry(db); err != nil {
 		return fmt.Errorf("wait for database: %w", err)

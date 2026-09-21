@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mcn/gateway-go/internal/iso8583"
+	"github.com/mcn/gateway-go/internal/obs"
 )
 
 // LinkStore is the persistence port the supervisor needs; internal/store implements it.
@@ -59,6 +60,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 			return nil
 		}
 		_ = err // connection lifecycle errors are expected (reconnect loop); logging is the caller's job via obs
+		obs.LinkUp.WithLabelValues(endpointName).Set(0)
 		_ = s.store.SetStatus(ctx, endpointName, "DOWN")
 		_ = s.store.RecordEvent(ctx, "WARN", "Link to issuer is down", "reconnecting with backoff")
 		delay := s.cfg.Backoff.Delay(attempt)
@@ -77,12 +79,13 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = s.store.SetStatus(ctx, endpointName, "CONNECTED")
 
 	if err := s.signOn(conn); err != nil {
 		return err
 	}
+	obs.LinkUp.WithLabelValues(endpointName).Set(1)
 	_ = s.store.SetStatus(ctx, endpointName, "SIGNED_ON")
 	_ = s.store.RecordEvent(ctx, "INFO", "Link to issuer is up", "signed on")
 
@@ -160,7 +163,7 @@ func (s *Supervisor) echo(conn net.Conn) (time.Duration, error) {
 	if err := conn.SetDeadline(start.Add(s.cfg.EchoTimeout)); err != nil {
 		return 0, err
 	}
-	defer conn.SetDeadline(time.Time{})
+	defer func() { _ = conn.SetDeadline(time.Time{}) }()
 	fields, err := s.sendReceive(conn, "0800", map[int]string{7: nowDE7(), 11: s.nextStan(), 70: "301"})
 	if err != nil {
 		return 0, err

@@ -28,5 +28,5 @@ func (b Backoff) Delay(attempt int) time.Duration {
 	if ceiling <= 0 {
 		return 0
 	}
-	return time.Duration(rand.Int64N(int64(ceiling)))
+	return time.Duration(rand.Int64N(int64(ceiling))) //nolint:gosec // jittered reconnect delay, not security-sensitive
 }

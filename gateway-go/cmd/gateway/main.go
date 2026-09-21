@@ -20,7 +20,9 @@ import (
 
 	"github.com/mcn/gateway-go/internal/api"
 	"github.com/mcn/gateway-go/internal/config"
+	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
+	"github.com/mcn/gateway-go/internal/store"
 )
 
 func main() {
@@ -45,6 +47,16 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	if err := store.Migrate(cfg.DatabaseURL); err != nil {
+		return fmt.Errorf("migrate database: %w", err)
+	}
+	pool, err := store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer pool.Close()
+	linkRepo := store.NewLinkRepository(pool)
+	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoFailureLimit: 3}, linkRepo)
 	health := api.NewHealth()
 	r := chi.NewRouter()
 	api.NewRouter(r, health)
@@ -72,6 +84,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return serve(apiServer, apiLn) })
 	g.Go(func() error { return serve(metricsServer, metricsLn) })
+	g.Go(func() error { return supervisor.Run(gctx) })
 	g.Go(func() error {
 		<-gctx.Done()
 		logger.Info("draining", "timeout", cfg.ShutdownTimeout.String())
