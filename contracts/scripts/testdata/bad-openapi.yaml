@@ -1,0 +1,21 @@
+openapi: 3.1.0
+info: { title: bad, version: 1.0.0, description: negative fixture for the Spectral ruleset }
+servers: [{ url: http://localhost }]
+tags: [{ name: t }]
+paths:
+  /v1/badPath:
+    post:
+      tags: [t]
+      operationId: badWrite
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bad' }
+components:
+  schemas:
+    Bad:
+      type: object
+      properties:
+        snake_case_field: { type: string }
