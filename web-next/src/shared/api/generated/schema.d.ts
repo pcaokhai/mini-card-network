@@ -752,7 +752,7 @@ export interface components {
                 label: string;
                 /**
                  * Format: int64
-                 * @description signed minor units
+                 * @description signed minor units, 0 for balance rows
                  */
                 delta: number;
                 /** Format: int64 */
