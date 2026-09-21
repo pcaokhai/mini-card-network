@@ -13,7 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/mcn/gateway-go/internal/api"
@@ -44,8 +46,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	health := api.NewHealth()
+	r := chi.NewRouter()
+	api.NewRouter(r, health)
+	api.MountLab(r)
 	apiServer := &http.Server{
-		Handler:      api.NewRouter(health),
+		Handler:      otelhttp.NewHandler(r, "gateway-http"),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 35 * time.Second,
 		IdleTimeout:  60 * time.Second,

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +18,8 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 
 func TestHealth__MCN_005_AC1(t *testing.T) {
 	health := NewHealth()
-	router := NewRouter(health)
+	router := chi.NewRouter()
+	NewRouter(router, health)
 
 	require.Equal(t, http.StatusOK, get(t, router, "/health/live").Code)
 	ready := get(t, router, "/health/ready")
@@ -27,7 +29,8 @@ func TestHealth__MCN_005_AC1(t *testing.T) {
 
 func TestHealth_readyTurnsDownWhileDraining__MCN_005_AC4(t *testing.T) {
 	health := NewHealth()
-	router := NewRouter(health)
+	router := chi.NewRouter()
+	NewRouter(router, health)
 
 	health.StartDraining()
 
