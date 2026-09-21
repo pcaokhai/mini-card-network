@@ -6,7 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run --project unit",
+    "test:stories": "vitest run --project storybook",
+    "typecheck": "tsc --noEmit",
+    "generate": "openapi-typescript ../contracts/openapi.yaml -o src/shared/api/generated/schema.d.ts && mkdir -p src/mocks/generated && msw-auto-mock ../contracts/openapi.yaml -o src/mocks/generated --typescript --base-url /api -c 200,201,202",
+    "dev:mock": "NEXT_PUBLIC_API_MOCKS=true next dev"
   },
   "dependencies": {
     "@fontsource/be-vietnam-pro": "^5.3.0",
