@@ -13,3 +13,6 @@ coverage/
 .idea/
 .vscode/
 *.iml
+__pycache__/
+*.pyc
+.venv/

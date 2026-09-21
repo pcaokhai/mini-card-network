@@ -1,0 +1,6 @@
+{
+  "name": "unknown-field",
+  "spec": "MCN-87A v1",
+  "packed": "08000000000000000002ABC",
+  "expectedError": "UNKNOWN_FIELD"
+}

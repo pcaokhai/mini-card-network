@@ -1,0 +1,6 @@
+{
+  "name": "truncated-field",
+  "spec": "MCN-87A v1",
+  "packed": "08008220000000000000040000000000000009210733000002003",
+  "expectedError": "TRUNCATED"
+}

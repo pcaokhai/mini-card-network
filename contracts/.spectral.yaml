@@ -1,0 +1,51 @@
+# MCN-003-AC1: project API style rules on top of Spectral's OpenAPI ruleset.
+extends: ["spectral:oas"]
+rules:
+  info-contact: off
+  operation-description: off
+  operation-operationId: error
+  operation-tags: error
+  mcn-idempotency-key-on-writes:
+    description: State-changing operations must require Idempotency-Key (docs/04 §2).
+    severity: error
+    resolved: false
+    given: "$.paths[*][post,put,patch,delete]"
+    then:
+      field: parameters
+      function: schema
+      functionOptions:
+        schema:
+          type: array
+          contains:
+            type: object
+            required: ["$ref"]
+            properties:
+              $ref: { const: "#/components/parameters/IdempotencyKey" }
+  mcn-kebab-case-paths:
+    description: Path segments are kebab-case or {camelCase} parameters.
+    severity: error
+    given: "$.paths[*]~"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^(/([a-z0-9]+(-[a-z0-9]+)*|\\{[a-z][a-zA-Z0-9]*\\}))+$"
+  mcn-camel-case-properties:
+    description: JSON properties are camelCase (docs/04 §2).
+    severity: error
+    given: "$.components.schemas..properties[*]~"
+    then:
+      function: casing
+      functionOptions: { type: camel }
+  mcn-writes-have-problem-response:
+    description: State-changing operations declare the Problem default response.
+    severity: error
+    resolved: false
+    given: "$.paths[*][post,put,patch,delete].responses"
+    then:
+      field: default
+      function: truthy
+overrides:
+  # Lab decode/encode are pure computations without side effects.
+  - files: ["openapi.yaml#/paths/~1v1~1lab~1messages~1decode/post", "openapi.yaml#/paths/~1v1~1lab~1messages~1encode/post"]
+    rules:
+      mcn-idempotency-key-on-writes: "off"

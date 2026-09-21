@@ -1,0 +1,6 @@
+{
+  "name": "trailing-data",
+  "spec": "MCN-87A v1",
+  "packed": "080082200000000000000400000000000000092107330000020030199",
+  "expectedError": "TRAILING_DATA"
+}
