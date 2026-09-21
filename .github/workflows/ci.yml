@@ -73,6 +73,9 @@ jobs:
           else
             echo "skip: gateway-go not scaffolded yet"
           fi
+      - if: hashFiles('gateway-go/go.mod') != ''
+        name: Fuzz ISO 8583 unpack (short)
+        run: cd gateway-go && go test ./internal/iso8583 -run FuzzUnpack -fuzz FuzzUnpack -fuzztime 60s
 
   lint-test-web:
     needs: changes
