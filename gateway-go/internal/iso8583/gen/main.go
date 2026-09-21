@@ -3,7 +3,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"go/format"
 	"log"
 	"os"
 	"sort"
@@ -38,21 +40,25 @@ func main() {
 	}
 	sort.Ints(numbers)
 
-	out, err := os.Create("spec_gen.go")
+	var buf bytes.Buffer
+	fmt.Fprintln(&buf, "// Code generated from contracts/iso8583/packager-spec.yaml by internal/iso8583/gen. DO NOT EDIT.")
+	fmt.Fprintln(&buf, "package iso8583")
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "// Fields is the MCN-87A field table (docs/03 §3).")
+	fmt.Fprintln(&buf, "var Fields = map[int]FieldSpec{")
+	for _, n := range numbers {
+		f := spec.Fields[n]
+		fmt.Fprintf(&buf, "\t%d: {Number: %d, Type: %q, Length: %d, Prefix: %q, Name: %q}, // %s\n",
+			n, n, f.Type, f.Length, f.Prefix, f.Name, f.Name)
+	}
+	fmt.Fprintln(&buf, "}")
+
+	// Format before writing so `go generate` always produces gofmt-clean, committable output.
+	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer out.Close()
-
-	fmt.Fprintln(out, "// Code generated from contracts/iso8583/packager-spec.yaml by internal/iso8583/gen. DO NOT EDIT.")
-	fmt.Fprintln(out, "package iso8583")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "// Fields is the MCN-87A field table (docs/03 §3).")
-	fmt.Fprintln(out, "var Fields = map[int]FieldSpec{")
-	for _, n := range numbers {
-		f := spec.Fields[n]
-		fmt.Fprintf(out, "\t%d: {Number: %d, Type: %q, Length: %d, Prefix: %q, Name: %q}, // %s\n",
-			n, n, f.Type, f.Length, f.Prefix, f.Name, f.Name)
+	if err := os.WriteFile("spec_gen.go", formatted, 0o600); err != nil {
+		log.Fatal(err)
 	}
-	fmt.Fprintln(out, "}")
 }
