@@ -15,6 +15,11 @@ type FieldSpec struct {
 	Name   string
 }
 
+const (
+	prefixLL  = "LL"
+	prefixLLL = "LLL"
+)
+
 var hexRe = regexp.MustCompile(`^[0-9A-F]*$`)
 var digitsRe = regexp.MustCompile(`^[0-9]*$`)
 
@@ -127,9 +132,9 @@ func packField(n int, v string) (string, error) {
 		return "", err
 	}
 	switch spec.Prefix {
-	case "LL":
+	case prefixLL:
 		return pad2(dataLen(spec, v)) + v, nil
-	case "LLL":
+	case prefixLLL:
 		return pad3(dataLen(spec, v)) + v, nil
 	default:
 		return v, nil
@@ -238,7 +243,7 @@ func unpackField(t *taker, n int) (string, error) {
 	size := spec.Length
 	if spec.Prefix != "" {
 		digits := 2
-		if spec.Prefix == "LLL" {
+		if spec.Prefix == prefixLLL {
 			digits = 3
 		}
 		rawLen, err := t.take(digits, "DE "+itoa(n)+" length")
