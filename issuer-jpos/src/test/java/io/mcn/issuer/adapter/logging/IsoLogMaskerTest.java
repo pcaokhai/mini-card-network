@@ -22,7 +22,9 @@ class IsoLogMaskerTest {
     assertThat(dump).contains("970436******4417").doesNotContain("9704360000004417");
     assertThat(dump).contains("48: [MASKED key-material]").doesNotContain("DEADBEEF");
     assertThat(dump).contains("52: [MASKED pin-block]").doesNotContain("7A3F09C21B84D6E0");
-    assertThat(dump).contains("55: [MASKED emv]").doesNotContain("9F2608A1B2C3D4E5F607189F2701809F3602001C");
+    assertThat(dump)
+        .contains("55: [MASKED emv]")
+        .doesNotContain("9F2608A1B2C3D4E5F607189F2701809F3602001C");
     assertThat(dump).contains("000123");
   }
 }

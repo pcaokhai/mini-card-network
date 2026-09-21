@@ -11,7 +11,6 @@ import java.util.Map;
 import java.util.TreeMap;
 import org.jpos.iso.ISOMsg;
 import org.jpos.iso.packager.GenericPackager;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -54,7 +53,8 @@ class PackagerVectorTest {
     vector
         .get("fields")
         .fields()
-        .forEachRemaining(e -> expectedFields.put(Integer.parseInt(e.getKey()), e.getValue().asText()));
+        .forEachRemaining(
+            e -> expectedFields.put(Integer.parseInt(e.getKey()), e.getValue().asText()));
     for (var entry : expectedFields.entrySet()) {
       assertThat(unpacked.getString(entry.getKey()))
           .as("DE " + entry.getKey())

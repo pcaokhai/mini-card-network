@@ -3,7 +3,10 @@ package io.mcn.issuer.adapter.logging;
 import org.jpos.iso.ISOException;
 import org.jpos.iso.ISOMsg;
 
-/** Formats an ISOMsg for logging with PAN masked and other sensitive DEs redacted (docs/02 §7.6, docs/03 §3). */
+/**
+ * Formats an ISOMsg for logging with PAN masked and other sensitive DEs redacted (docs/02 §7.6,
+ * docs/03 §3).
+ */
 public final class IsoLogMasker {
   // DE -> label from packager-spec.yaml's `sensitive:` tag, for fields that are not PAN-shaped
   // digit runs and so cannot use PanMasker's regex (key material, PIN block, EMV TLV).
