@@ -1,0 +1,9 @@
+# Lanes own directories; the Tech Lead owns contracts, infra and docs.
+/issuer-jpos/   @mcn/iss
+/gateway-go/    @mcn/gw
+/web-next/      @mcn/web
+/settlement/    @mcn/set
+/contracts/     @mcn/tech-lead
+/infra/         @mcn/tech-lead
+/docs/          @mcn/tech-lead
+/.github/       @mcn/tech-lead

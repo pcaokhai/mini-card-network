@@ -1,0 +1,48 @@
+# MCN-87A v1 packager definition — source of truth for both codecs.
+# issuer-jpos generates cfg/iso87ascii.xml from this file; gateway-go generates internal/iso8583/spec_gen.go.
+# type: n (numeric, left zero pad) | an / ans (right space pad) | b (binary as ASCII hex, length in BYTES)
+# length: fixed length, or max length when prefix is LL / LLL
+spec: MCN-87A
+version: 1
+mti: { type: n, length: 4 }
+bitmap: { encoding: ascii-hex, secondary: true }
+fields:
+  1:   { name: Secondary bitmap,              type: b,   length: 8 }
+  2:   { name: PAN,                           type: n,   length: 19, prefix: LL, sensitive: pan }
+  3:   { name: Processing code,               type: n,   length: 6 }
+  4:   { name: Amount transaction,            type: n,   length: 12 }
+  7:   { name: Transmission date time,        type: n,   length: 10 }
+  11:  { name: STAN,                          type: n,   length: 6 }
+  12:  { name: Time local transaction,        type: n,   length: 6 }
+  13:  { name: Date local transaction,        type: n,   length: 4 }
+  14:  { name: Expiration date,               type: n,   length: 4, sensitive: expiry }
+  15:  { name: Settlement date,               type: n,   length: 4 }
+  18:  { name: Merchant category code,        type: n,   length: 4 }
+  22:  { name: POS entry mode,                type: n,   length: 3 }
+  25:  { name: POS condition code,            type: n,   length: 2 }
+  32:  { name: Acquiring institution ID,      type: n,   length: 11, prefix: LL }
+  37:  { name: RRN,                           type: an,  length: 12 }
+  38:  { name: Authorization ID response,     type: an,  length: 6 }
+  39:  { name: Response code,                 type: an,  length: 2 }
+  41:  { name: Terminal ID,                   type: ans, length: 8 }
+  42:  { name: Merchant ID,                   type: ans, length: 15 }
+  43:  { name: Card acceptor name location,   type: ans, length: 40 }
+  48:  { name: Additional data private,       type: ans, length: 999, prefix: LLL, sensitive: key-material }
+  49:  { name: Currency code,                 type: n,   length: 3 }
+  52:  { name: PIN block,                     type: b,   length: 8, sensitive: pin-block }
+  53:  { name: Security control info,         type: n,   length: 16 }
+  54:  { name: Additional amounts,            type: an,  length: 120, prefix: LLL }
+  55:  { name: ICC data,                      type: b,   length: 255, prefix: LLL, sensitive: emv }
+  64:  { name: MAC,                           type: b,   length: 8 }
+  70:  { name: Network management code,       type: n,   length: 3 }
+  74:  { name: Credits number,                type: n,   length: 10 }
+  75:  { name: Credits reversal number,       type: n,   length: 10 }
+  76:  { name: Debits number,                 type: n,   length: 10 }
+  77:  { name: Debits reversal number,        type: n,   length: 10 }
+  86:  { name: Credits amount,                type: n,   length: 16 }
+  87:  { name: Credits reversal amount,       type: n,   length: 16 }
+  88:  { name: Debits amount,                 type: n,   length: 16 }
+  89:  { name: Debits reversal amount,        type: n,   length: 16 }
+  90:  { name: Original data elements,        type: n,   length: 42 }
+  97:  { name: Net settlement amount,         type: an,  length: 17 }
+  128: { name: MAC secondary,                 type: b,   length: 8 }

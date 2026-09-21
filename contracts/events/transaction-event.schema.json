@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcn.local/contracts/events/transaction-event.schema.json",
+  "title": "Transaction event (Kafka topics issuer.transactions.v1, acquirer.transactions.v1)",
+  "type": "object",
+  "required": ["eventId", "eventType", "source", "occurredAt", "businessDate", "rrn", "stan", "transmissionDateTime", "acquirerId", "terminalId", "transactionType", "amount", "status"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "eventType": { "enum": ["TransactionApproved", "TransactionDeclined", "TransactionReversed", "HoldCreated", "HoldCompleted", "HoldExpired", "BusinessDateClosed"] },
+    "source": { "enum": ["ISSUER", "ACQUIRER"] },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "businessDate": { "type": "string", "format": "date" },
+    "rrn": { "type": "string" },
+    "stan": { "type": "string" },
+    "transmissionDateTime": { "type": "string", "pattern": "^[0-9]{10}$" },
+    "acquirerId": { "type": "string" },
+    "terminalId": { "type": "string" },
+    "transactionType": { "enum": ["PURCHASE", "PREAUTH", "COMPLETION", "REFUND", "BALANCE", "REVERSAL"] },
+    "amount": { "type": "integer" },
+    "currency": { "type": "string", "default": "704" },
+    "status": { "enum": ["APPROVED", "DECLINED", "REVERSED", "COMPLETED", "EXPIRED"] },
+    "responseCode": { "type": "string" },
+    "authCode": { "type": ["string", "null"] },
+    "originalRrn": { "type": ["string", "null"] },
+    "maskedPan": { "type": "string" }
+  },
+  "additionalProperties": false
+}

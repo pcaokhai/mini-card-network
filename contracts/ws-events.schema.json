@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcn.local/contracts/ws-events.schema.json",
+  "title": "Mini Card Network WebSocket event",
+  "type": "object",
+  "required": ["id", "type", "occurredAt", "data"],
+  "properties": {
+    "id": { "type": "string" },
+    "type": { "enum": ["transaction.created", "transaction.updated", "link.status", "saf.changed", "network.event", "chaos.changed", "chaos.run.progress", "switch.status", "heartbeat"] },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "traceId": { "type": "string" },
+    "data": { "type": "object" }
+  },
+  "allOf": [
+    { "if": { "properties": { "type": { "enum": ["transaction.created", "transaction.updated"] } } },
+      "then": { "properties": { "data": { "$ref": "openapi.yaml#/components/schemas/TransactionSummary" } } } },
+    { "if": { "properties": { "type": { "const": "link.status" } } },
+      "then": { "properties": { "data": { "$ref": "openapi.yaml#/components/schemas/Link" } } } },
+    { "if": { "properties": { "type": { "const": "saf.changed" } } },
+      "then": { "properties": { "data": { "type": "object", "required": ["depth", "deadCount"], "properties": { "depth": { "type": "integer" }, "deadCount": { "type": "integer" } } } } } },
+    { "if": { "properties": { "type": { "const": "network.event" } } },
+      "then": { "properties": { "data": { "$ref": "openapi.yaml#/components/schemas/NetworkEvent" } } } },
+    { "if": { "properties": { "type": { "const": "chaos.changed" } } },
+      "then": { "properties": { "data": { "$ref": "openapi.yaml#/components/schemas/ChaosScenario" } } } },
+    { "if": { "properties": { "type": { "const": "chaos.run.progress" } } },
+      "then": { "properties": { "data": { "$ref": "openapi.yaml#/components/schemas/ChaosRun" } } } },
+    { "if": { "properties": { "type": { "const": "switch.status" } } },
+      "then": { "properties": { "data": { "$ref": "openapi.yaml#/components/schemas/SwitchStatus" } } } }
+  ]
+}

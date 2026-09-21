@@ -1,0 +1,83 @@
+# Data Model
+
+Version 1.0 · 2026-09-21 · Baseline DDL: [`assets/baseline-schema.sql`](assets/baseline-schema.sql)
+
+## 1. Ownership
+
+One PostgreSQL instance, three databases, one role each. A service connects only to its own database (ADR-004).
+
+| Database | Owner service | Migration tool | Location |
+| --- | --- | --- | --- |
+| `issuer` | issuer-jpos | Flyway | `issuer-jpos/src/main/resources/db/migration/V<n>__<desc>.sql` |
+| `acquirer` | gateway-go (also switch tables from Sprint 10) | goose | `gateway-go/migrations/<n>_<desc>.sql` |
+| `settlement` | settlement | Flyway | `settlement/src/main/resources/db/migration/V<n>__<desc>.sql` |
+
+The baseline file shows all three schemas together for review. MCN-301 (issuer), MCN-303 (acquirer) and MCN-703 (settlement) split it into the first migration of each service and add the deltas in §4.
+
+## 2. Tables per schema
+
+| Schema | Table | Purpose | Key constraints |
+| --- | --- | --- | --- |
+| issuer | `account` | Ledger and available balance, overdraft | `chk_available_floor`, optimistic `version` |
+| issuer | `card` | Card status, encrypted PAN, HMAC, PVV, ATC | `pan_hash` unique; no CVV/PIN columns |
+| issuer | `card_limit`, `velocity_counter` | Limits and fast counters | PK (card, type, period[, key]) |
+| issuer | `tran_log` | Every ISO request/response at the issuer | Partitioned by `business_date`; `uq_tran_dedupe`; FK to original |
+| issuer | `auth_hold` | Pre-auth and holds | One per transaction; partial index on ACTIVE expiry |
+| issuer | `journal_entry`, `ledger_posting`, `gl_account` | Double-entry ledger | Deferred trigger Σ D = Σ C |
+| issuer | `key_store` | Keys under LMK + KCV | One ACTIVE per (type, counterparty) |
+| issuer | `acquirer_link`, `system_state`, `cutover_log`, `recon_totals` | Link state, business date, 0500 totals | |
+| issuer | `outbox_event`, `audit_log` | Events to Kafka; append-only audit | Trigger forbids UPDATE/DELETE on audit |
+| acquirer | `merchant`, `terminal` | POS master data | |
+| acquirer | `tran_log`, `tran_state_history` | Transactions and state machine history | Partitioned; `uq_acq_client_req`, `uq_acq_network_key` |
+| acquirer | `saf_queue` | Durable advices | Partial index on due PENDING rows |
+| acquirer | `link_state`, `key_store`, `settlement_batch` | Link, keys, day batch | |
+| settlement | `inbox_event` | Consumer idempotency | PK `event_id` |
+| settlement | `clearing_record` | Final state per transaction per source | Unique per (source, date, acq, TID, STAN, F7) |
+| settlement | `recon_run`, `recon_break`, `net_position`, `clearing_file` | Reconciliation and output | |
+
+## 3. Modeling rules
+
+- **Money:** `BIGINT` minor units + `CHAR(3)` numeric currency. No `NUMERIC`/`DOUBLE` for amounts.
+- **Statuses:** `TEXT` + `CHECK` (not PostgreSQL ENUM) so values can be added in a migration without locking.
+- **Time:** `TIMESTAMPTZ` for instants (UTC), `DATE` for business dates, raw `CHAR(10)` for ISO DE 7 (it has no year).
+- **Partitioning:** `tran_log` tables by month on `business_date`. Every PK/unique constraint includes `business_date` (PostgreSQL requirement). A monthly job (or pg_partman) creates partitions 2 months ahead; missing partition ⇒ alert.
+- **Card data:** `pan_enc` (AES-GCM), `pan_hash` (HMAC-SHA256, separate key), `masked_pan`. Never add columns for CVV, PIN, PIN block, track data, or clear keys.
+- **Audit:** append-only tables are protected by triggers; application roles have no UPDATE/DELETE grants on them.
+- **IDs:** internal `BIGINT` identities; external references are opaque (`cardRef`, RRN). Never expose internal IDs in APIs.
+- **Naming:** `snake_case`, singular table names, `ix_`/`uq_`/`fk_`/`chk_` prefixes, `created_at`/`updated_at` on mutable tables.
+
+## 4. Deltas from the baseline (apply in the first migrations)
+
+| Schema | Change | Reason | Story |
+| --- | --- | --- | --- |
+| issuer | `tran_log.trace_id VARCHAR(32)` | Cross-host tracing by RRN | MCN-302 |
+| issuer | `tran_log.stored_response JSONB` | Byte-exact duplicate replay (DE 38, 39, 4, 54) | MCN-402 |
+| issuer | `tran_log.status` add `REVERSAL_WITHOUT_ORIGINAL` | Reversal before original (ISO §7.3) | MCN-402 |
+| issuer | `idempotency_record(key, route, request_hash, status, body, created_at)` | Admin API idempotency | MCN-308 |
+| acquirer | `outbox_event` (same shape as issuer) | Acquirer events for settlement | MCN-703 |
+| acquirer | `idempotency_record` | REST idempotency | MCN-303 |
+| acquirer | `network_event(id, occurred_at, severity, easy_text, technical_text)` | Network screen timeline | MCN-204 |
+| acquirer | `chaos_run(id, status, requested, completed, result JSONB)` | Chaos run tracking | MCN-404 |
+| acquirer | `key_rotation(id, key_type, status, steps JSONB)` | Rotation workflow | MCN-504 |
+| settlement | `settlement_day(business_date PK, stage, updated_at)` | Wizard stage | MCN-704 |
+
+## 5. Migration rules
+
+1. Forward-only; never edit an applied migration. Fixes are new migrations.
+2. Expand → migrate → contract for breaking changes (add column nullable, backfill, then enforce/drop in a later release).
+3. Each migration is idempotent-safe under Testcontainers from empty and is tested in CI by applying all migrations then running repository tests.
+4. Reserve the migration number in the story plan; one migration per story unless the plan says otherwise.
+5. No data changes in schema migrations except seed/reference data (`response_code`, `gl_account`). Lab seed data comes from `contracts/fixtures/` via a separate seed command.
+
+## 6. Key queries (must be index-backed)
+
+| Query | Index |
+| --- | --- |
+| Find original for reversal by F90 | `ix_tran_orig_match (acquirer_id, stan, transmission_dt_raw)` |
+| Dedupe on insert | `uq_tran_dedupe` |
+| Card history newest first | `ix_tran_card_time (card_id, created_at DESC)` |
+| Lookup by RRN | `ix_tran_rrn`, `ix_acq_rrn` |
+| Due SAF rows | `ix_saf_due (next_retry_at) WHERE status='PENDING'` |
+| Unpublished outbox | `ix_outbox_unpublished (created_at) WHERE published_at IS NULL` |
+| Expired holds | `ix_hold_expiry (expires_at) WHERE status='ACTIVE'` |
+| Reconciliation matching | `uq_clearing` + `ix_clearing_match (business_date, rrn)` |

@@ -1,0 +1,12 @@
+{
+  "_comment": "Lab-only test cards. PAN and PIN are fake and only used by the POS simulator inside gateway-go and by issuer seed data. They must never appear in API responses, logs or the browser.",
+  "cards": [
+    { "cardToken": "tok_normal",  "cardRef": "crd_normal0001",  "pan": "9704360000004417", "expiry": "2811", "pin": "1234", "holderName": "Nguyen Minh Anh", "status": "ACTIVE",  "balance": 5000000, "currency": "704" },
+    { "cardToken": "tok_low",     "cardRef": "crd_lowbal0002",  "pan": "9704360000009021", "expiry": "2903", "pin": "1234", "holderName": "Tran Thu Ha",     "status": "ACTIVE",  "balance": 80000,   "currency": "704" },
+    { "cardToken": "tok_blocked", "cardRef": "crd_blockd0003",  "pan": "9704360000003310", "expiry": "2707", "pin": "1234", "holderName": "Le Quoc Bao",     "status": "BLOCKED", "balance": 2000000, "currency": "704" },
+    { "cardToken": "tok_expired", "cardRef": "crd_expird0004",  "pan": "9704360000007765", "expiry": "2608", "pin": "1234", "holderName": "Pham Gia Huy",    "status": "ACTIVE",  "balance": 1500000, "currency": "704" }
+  ],
+  "terminals": [
+    { "terminalId": "00000042", "merchantId": "GOCPHO000000001", "merchantName": "Ca phe Goc Pho", "mcc": "5814" }
+  ]
+}
