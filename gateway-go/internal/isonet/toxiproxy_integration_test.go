@@ -51,19 +51,19 @@ func TestSupervisor_recoversFromToxiproxyLinkDrop__MCN_202_AC4(t *testing.T) {
 	go func() { _ = sup.Run(ctx) }()
 
 	require.Eventually(t, func() bool {
-		return len(store.statuses) > 0 && store.statuses[len(store.statuses)-1] == statusSignedOn
+		return store.lastStatus() == statusSignedOn
 	}, 10*time.Second, 50*time.Millisecond, "initial sign-on")
 
 	setProxyEnabled(t, "issuer", false)
 	t.Cleanup(func() { setProxyEnabled(t, "issuer", true) })
 
 	require.Eventually(t, func() bool {
-		return store.statuses[len(store.statuses)-1] == "DOWN"
+		return store.lastStatus() == "DOWN"
 	}, 10*time.Second, 50*time.Millisecond, "link goes down")
 
 	setProxyEnabled(t, "issuer", true)
 
 	require.Eventually(t, func() bool {
-		return store.statuses[len(store.statuses)-1] == statusSignedOn
+		return store.lastStatus() == statusSignedOn
 	}, 5*time.Second, 50*time.Millisecond, "AC4: recovers within 5s")
 }
