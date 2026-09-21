@@ -1,21 +1,24 @@
 .PHONY: help up down test lint fmt contracts e2e chaos pci-scan seed
 
-COMPOSE := infra/docker-compose.yml
+# infra/docker-compose.yml (platform) + every <service>/compose.yaml (added by that service's story).
+COMPOSE_FILES := $(wildcard infra/docker-compose.yml) $(wildcard */compose.yaml)
+COMPOSE_FLAGS := $(foreach f,$(COMPOSE_FILES),-f $(f))
 
 help: ## List available targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
 
 up: ## Start infra + all services (docker compose)
-	@if [ -f $(COMPOSE) ]; then \
+	@if [ -n "$(COMPOSE_FILES)" ]; then \
 		test -f .env || cp .env.example .env; \
-		docker compose --project-directory . -f $(COMPOSE) --env-file .env up -d --wait; \
+		docker compose --project-directory . $(COMPOSE_FLAGS) --env-file .env up -d --wait; \
 		if [ -x infra/scripts/post-up.sh ]; then infra/scripts/post-up.sh; fi; \
-	else echo "skip: $(COMPOSE) not scaffolded yet (MCN-002)"; fi
+	else echo "skip: no compose files yet (MCN-002)"; fi
 
 down: ## Stop infra + all services; ARGS=-v to also remove volumes
-	@if [ -f $(COMPOSE) ]; then \
-		docker compose --project-directory . -f $(COMPOSE) --env-file .env down $(ARGS); \
-	else echo "skip: $(COMPOSE) not scaffolded yet (MCN-002)"; fi
+	@if [ -n "$(COMPOSE_FILES)" ]; then \
+		test -f .env || cp .env.example .env; \
+		docker compose --project-directory . $(COMPOSE_FLAGS) --env-file .env down $(ARGS); \
+	else echo "skip: no compose files yet (MCN-002)"; fi
 
 test: ## Unit + integration tests, every service
 	@for d in issuer-jpos settlement; do \
