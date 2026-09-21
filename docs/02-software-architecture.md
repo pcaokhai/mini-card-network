@@ -295,7 +295,7 @@ Pin exact versions in MCN-001 (latest stable at scaffold time) and record them h
 
 | Area | Choice |
 | --- | --- |
-| Issuer | Java 25 (LTS), jPOS (Q2, TransactionManager, JCESecurityModule), Javalin, HikariCP, Flyway, JUnit 5, AssertJ, Testcontainers, ArchUnit, Spotless |
+| Issuer | Java 25 (LTS), jPOS 3.0.1 (Q2, TransactionManager, JCESecurityModule), Javalin 7.2.3, HikariCP, Flyway, JUnit 5 (6.1.3), AssertJ 3.27.3 (pinned below latest.release, a 4.0.0-M1 milestone), Testcontainers, ArchUnit 1.5.0, Spotless 8.10.2 |
 | Gateway / switch | Go 1.26, chi, oapi-codegen (strict server), pgx, sqlc, goose, slog, OpenTelemetry, testify, Testcontainers-go, golangci-lint |
 | Web | Next.js 16.3 App Router, React 19.2, TypeScript strict, Tailwind CSS v4, shadcn/ui, Motion, TanStack Query, Zustand, Zod, openapi-typescript + openapi-fetch, MSW 2.15 + msw-auto-mock, next-intl 4.14, Recharts, React Flow, Vitest 5, Testing Library, Playwright, Storybook (nextjs-vite) |
 | Settlement | Java 25 (LTS), Spring Boot 4.1.1 (resolved via Spring Initializr at MCN-005 scaffold time), Spring Kafka, Spring Data JDBC, Flyway, Testcontainers |

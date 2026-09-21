@@ -1,0 +1,10 @@
+[libraries]
+jpos = { module = "org.jpos:jpos", version = "latest.release" }
+javalin = { module = "io.javalin:javalin", version = "latest.release" }
+micrometer-prometheus = { module = "io.micrometer:micrometer-registry-prometheus", version = "1.17.1" } # pinned: latest.release resolves to a 1.18.0-M1 milestone
+logback = { module = "ch.qos.logback:logback-classic", version = "latest.release" }
+logstash-encoder = { module = "net.logstash.logback:logstash-logback-encoder", version = "latest.release" }
+junit-bom = { module = "org.junit:junit-bom", version = "latest.release" }
+# Pinned, not latest.release: that resolves to 4.0.0-M1, a pre-release milestone.
+assertj = { module = "org.assertj:assertj-core", version = "3.27.3" }
+archunit = { module = "com.tngtech.archunit:archunit-junit5", version = "latest.release" }
