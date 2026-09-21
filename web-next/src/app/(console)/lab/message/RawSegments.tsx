@@ -17,12 +17,11 @@ export function RawSegments() {
   const select = useMessageLab((s) => s.select);
   if (!decoded) return null;
   return (
-    <div className="flex flex-wrap gap-0.5 font-mono text-sm" role="list" aria-label="Raw message">
+    <div className="flex flex-wrap gap-0.5 font-mono text-sm" aria-label="Raw message">
       {decoded.segments.map((seg, i) => (
         <button
           key={`${seg.key}-${i}`}
           type="button"
-          role="listitem"
           aria-current={selectedKey === seg.key}
           onClick={() => select(seg.key)}
           className={`rounded px-1 py-0.5 ${colorFor(seg.key)} ${selectedKey === seg.key ? "ring-2 ring-accent" : ""}`}

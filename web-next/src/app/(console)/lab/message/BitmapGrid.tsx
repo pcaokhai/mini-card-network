@@ -23,7 +23,7 @@ export function BitmapGrid({ page }: { page: "primary" | "secondary" }) {
   const offset = page === "primary" ? 0 : 64;
 
   return (
-    <div role="grid" aria-label={`${page} bitmap`} className="grid grid-cols-8 gap-1">
+    <div role="group" aria-label={`${page} bitmap`} className="grid grid-cols-8 gap-1">
       {bits.map((set, i) => {
         const de = offset + i + 1;
         const key = de === 1 ? "primaryBitmap" : String(de);
@@ -31,7 +31,6 @@ export function BitmapGrid({ page }: { page: "primary" | "secondary" }) {
           <motion.button
             key={de}
             type="button"
-            role="button"
             aria-label={`bit ${de}`}
             aria-pressed={set}
             aria-current={selectedKey === key}
