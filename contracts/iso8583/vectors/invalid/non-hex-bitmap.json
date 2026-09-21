@@ -1,0 +1,6 @@
+{
+  "name": "non-hex-bitmap",
+  "spec": "MCN-87A v1",
+  "packed": "080082200000000000G00400000000000000",
+  "expectedError": "INVALID_BITMAP"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "bad-ll-prefix",
+  "spec": "MCN-87A v1",
+  "packed": "020040000000000000002X9704360000004417",
+  "expectedError": "INVALID_LENGTH"
+}
