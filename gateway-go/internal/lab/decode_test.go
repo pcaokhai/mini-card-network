@@ -2,20 +2,36 @@ package lab
 
 import "testing"
 
+const purchaseVector = "0200723E448108E0920116970436000000441700000000000025000009210732080001231432080921281109215814051000697049962651400012300000042GOCPHO000000001CA PHE GOC PHO           HO CHI MINH  VN7047A3F09C21B84D6E00209F2608A1B2C3D4E5F607189F2701809F3602001C4E1D7B02C9A3F815"
+
+func findField(fields []Field, de string) *Field {
+	for i := range fields {
+		if fields[i].DE == de {
+			return &fields[i]
+		}
+	}
+	return nil
+}
+
+func findSegment(segments []Segment, key string) *Segment {
+	for i := range segments {
+		if segments[i].Key == key {
+			return &segments[i]
+		}
+	}
+	return nil
+}
+
 func TestDecode_masksPANAndReturnsEasyAndTechnicalNames__MCN_103_AC1_AC4(t *testing.T) {
-	d, err := Decode("0200723E448108E0920116970436000000441700000000000025000009210732080001231432080921281109215814051000697049962651400012300000042GOCPHO000000001CA PHE GOC PHO           HO CHI MINH  VN7047A3F09C21B84D6E00209F2608A1B2C3D4E5F607189F2701809F3602001C4E1D7B02C9A3F815")
+	d, err := Decode(purchaseVector)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
 	if d.MTI != "0200" {
 		t.Fatalf("MTI = %q", d.MTI)
 	}
-	var pan *Field
-	for i := range d.Fields {
-		if d.Fields[i].DE == "2" {
-			pan = &d.Fields[i]
-		}
-	}
+
+	pan := findField(d.Fields, "2")
 	if pan == nil {
 		t.Fatal("DE 2 not found")
 	}
@@ -25,10 +41,13 @@ func TestDecode_masksPANAndReturnsEasyAndTechnicalNames__MCN_103_AC1_AC4(t *test
 	if pan.TechnicalName != "PAN" {
 		t.Fatalf("technicalName = %q, want PAN", pan.TechnicalName)
 	}
-	for _, s := range d.Segments {
-		if s.Key == "2" && s.Text != "16970436******4417" {
-			t.Fatalf("PAN leaked via segment text: %q", s.Text)
-		}
+
+	panSegment := findSegment(d.Segments, "2")
+	if panSegment == nil {
+		t.Fatal("DE 2 segment not found")
+	}
+	if panSegment.Text != "16970436******4417" {
+		t.Fatalf("PAN leaked via segment text: %q", panSegment.Text)
 	}
 }
 

@@ -1,3 +1,5 @@
+// Package lab wraps internal/iso8583 with human-readable names and PAN masking for the
+// Message Lab API (MCN-103).
 package lab
 
 import (
