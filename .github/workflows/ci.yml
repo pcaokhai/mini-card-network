@@ -35,10 +35,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - if: hashFiles('issuer-jpos/build.gradle.kts', 'issuer-jpos/build.gradle') != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
       - name: Lint + test issuer-jpos
         run: |
           if [ -f issuer-jpos/build.gradle.kts ] || [ -f issuer-jpos/build.gradle ]; then
-            cd issuer-jpos && ./gradlew spotlessCheck test
+            cd issuer-jpos && ./gradlew --no-daemon spotlessCheck test
           else
             echo "skip: issuer-jpos not scaffolded yet"
           fi
@@ -87,10 +92,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - if: hashFiles('settlement/build.gradle.kts', 'settlement/build.gradle') != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
       - name: Lint + test settlement
         run: |
           if [ -f settlement/build.gradle.kts ] || [ -f settlement/build.gradle ]; then
-            cd settlement && ./gradlew spotlessCheck test
+            cd settlement && ./gradlew --no-daemon spotlessCheck test
           else
             echo "skip: settlement not scaffolded yet"
           fi
