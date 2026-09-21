@@ -1,0 +1,21 @@
+<configuration>
+  <!-- docs/02 §7.6 fields; trace_id/span_id come from the OpenTelemetry Java agent's MDC injection. -->
+  <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+      <fieldNames>
+        <timestamp>ts</timestamp>
+        <version>[ignore]</version>
+      </fieldNames>
+      <customFields>{"service":"issuer"}</customFields>
+      <decorator class="net.logstash.logback.mask.MaskingJsonGeneratorDecorator">
+        <valueMask>
+          <value>\b(\d{6})\d{3,9}(\d{4})\b</value>
+          <mask>$1******$2</mask>
+        </valueMask>
+      </decorator>
+    </encoder>
+  </appender>
+  <root level="INFO">
+    <appender-ref ref="JSON"/>
+  </root>
+</configuration>
