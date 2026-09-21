@@ -609,7 +609,7 @@ components:
             required: [label, delta, atStep]
             properties:
               label: { type: string }
-              delta: { type: integer, format: int64, description: signed minor units, 0 for balance rows }
+              delta: { type: integer, format: int64, description: 'signed minor units, 0 for balance rows' }
               balanceAfter: { type: [integer, 'null'], format: int64 }
               atStep: { type: integer }
     DecodedMessage:
