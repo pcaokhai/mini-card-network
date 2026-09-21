@@ -54,10 +54,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - if: hashFiles('gateway-go/go.mod') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway-go/go.mod
+      - if: hashFiles('gateway-go/go.mod') != ''
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: gateway-go
+          args: --timeout=5m
       - name: Lint + test gateway-go
         run: |
           if [ -f gateway-go/go.mod ]; then
-            cd gateway-go && golangci-lint run ./... && go test ./...
+            cd gateway-go && go test -race -count=1 ./...
           else
             echo "skip: gateway-go not scaffolded yet"
           fi
