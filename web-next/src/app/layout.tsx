@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import { MockProvider } from "@/mocks/MockProvider";
+import { QueryProvider } from "@/shared/api/QueryProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -16,7 +17,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     <html lang={locale} className="h-full antialiased">
       <body className="min-h-full bg-canvas font-sans text-ink">
         <NextIntlClientProvider locale={locale} messages={messages}>
-          <MockProvider>{children}</MockProvider>
+          <MockProvider>
+            <QueryProvider>{children}</QueryProvider>
+          </MockProvider>
         </NextIntlClientProvider>
       </body>
     </html>
