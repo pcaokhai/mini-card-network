@@ -14,5 +14,11 @@
     "stan": { "easy": "Sequence number", "hint": "Increasing number that pairs each answer with its question." },
     "mti": { "easy": "Message type", "hint": "Four digits saying whether a message is a request, answer, reversal or network message." },
     "rc": { "easy": "Result code", "hint": "00 means approved; other codes explain the decline." }
+  },
+  "lab": {
+    "de": "DE", "name": "Field", "format": "Format", "value": "Value",
+    "selectHint": "Select an element in the message, bitmap or field table to see details.",
+    "mtiVersion": "Version", "mtiClass": "Message class", "mtiFunction": "Function", "mtiOrigin": "Origin",
+    "pasteHint": "Paste a raw ISO 8583 message, or pick a sample", "primaryBitmap": "Primary bitmap", "secondaryBitmap": "Secondary bitmap"
   }
 }
