@@ -1,0 +1,11 @@
+services:
+  gateway:
+    build: { context: ./gateway-go }
+    environment:
+      OTEL_SERVICE_NAME: gateway
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+      HTTP_ADDR: ":8080"
+      METRICS_ADDR: ":9464"
+    ports: ["8080:8080", "9464:9464"]
+    stop_grace_period: 35s
+    depends_on: [otel-collector]
