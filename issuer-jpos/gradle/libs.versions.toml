@@ -8,3 +8,8 @@ junit-bom = { module = "org.junit:junit-bom", version = "latest.release" }
 # Pinned, not latest.release: that resolves to 4.0.0-M1, a pre-release milestone.
 assertj = { module = "org.assertj:assertj-core", version = "3.27.3" }
 archunit = { module = "com.tngtech.archunit:archunit-junit5", version = "latest.release" }
+postgresql = { module = "org.postgresql:postgresql", version = "latest.release" }
+hikaricp = { module = "com.zaxxer:HikariCP", version = "latest.release" }
+flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version = "latest.release" }
+testcontainers-postgresql = { module = "org.testcontainers:postgresql", version = "latest.release" }
+testcontainers-junit = { module = "org.testcontainers:junit-jupiter", version = "latest.release" }

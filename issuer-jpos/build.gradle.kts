@@ -13,12 +13,17 @@ dependencies {
     implementation(libs.micrometer.prometheus)
     implementation(libs.logback)
     implementation(libs.logstash.encoder)
+    implementation(libs.postgresql)
+    implementation(libs.hikaricp)
+    implementation(libs.flyway.postgresql)
     testImplementation(platform(libs.junit.bom))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.junit.jupiter:junit-jupiter-params")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation(libs.assertj)
     testImplementation(libs.archunit)
+    testImplementation(libs.testcontainers.postgresql)
+    testImplementation(libs.testcontainers.junit)
 }
 
 val generatePackager = tasks.register<GeneratePackagerTask>("generatePackager") {
