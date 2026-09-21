@@ -213,7 +213,7 @@ Switch circuit breaker opens after 3 consecutive echo failures or > 50% errors o
 
 ### 7.3 Concurrency and consistency
 
-- Issuer authorization: pessimistic row lock on `account` within one transaction (ADR-007 candidate if contention measured). Optimistic `version` used by admin updates.
+- Issuer authorization: pessimistic row lock on `account` within one transaction (write a new ADR if measured contention forces a different strategy). Optimistic `version` used by admin updates.
 - Gateway: one DB transaction per state transition; state transitions validated by the state machine; MUX registration before socket write.
 - Outbox in the same transaction as business writes; relay publishes at-least-once; consumers idempotent.
 
