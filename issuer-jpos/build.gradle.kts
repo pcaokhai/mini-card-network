@@ -21,6 +21,13 @@ dependencies {
     testImplementation(libs.archunit)
 }
 
+val generatePackager = tasks.register<GeneratePackagerTask>("generatePackager") {
+    specFile.set(layout.projectDirectory.file("../contracts/iso8583/packager-spec.yaml"))
+    outputFile.set(layout.projectDirectory.file("src/dist/cfg/iso87ascii.xml"))
+}
+tasks.named("compileJava") { dependsOn(generatePackager) }
+tasks.named("test") { dependsOn(generatePackager) }
+
 application { mainClass = "org.jpos.q2.Q2" }
 tasks.named<JavaExec>("run") { workingDir = file("src/dist") }
 // The application plugin already merges src/dist into the distribution by convention;

@@ -1,6 +1,10 @@
 node_modules/
 .next/
 dist/
+# jPOS's application-plugin convention uses src/dist/ as a real, committed source tree
+# (cfg/, deploy/), not a build output directory — do not ignore it (MCN-102).
+!**/src/dist/
+!**/src/dist/**
 build/
 target/
 *.class

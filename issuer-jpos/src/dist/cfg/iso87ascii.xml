@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE isopackager PUBLIC
+        "-//jPOS/jPOS Generic Packager DTD 1.0//EN"
+        "http://jpos.org/dtd/generic-packager-1.0.dtd">
+
+<!-- Code generated from contracts/iso8583/packager-spec.yaml by :generatePackager. DO NOT EDIT. -->
+
+<isopackager>
+  <isofield id="0" length="4" name="MESSAGE TYPE INDICATOR" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="1" length="16" name="BIT MAP" class="org.jpos.iso.IFA_BITMAP"/>
+  <isofield id="2" length="19" name="PAN" class="org.jpos.iso.IFA_LLNUM"/>
+  <isofield id="3" length="6" name="PROCESSING CODE" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="4" length="12" name="AMOUNT TRANSACTION" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="7" length="10" name="TRANSMISSION DATE TIME" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="11" length="6" name="STAN" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="12" length="6" name="TIME LOCAL TRANSACTION" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="13" length="4" name="DATE LOCAL TRANSACTION" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="14" length="4" name="EXPIRATION DATE" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="15" length="4" name="SETTLEMENT DATE" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="18" length="4" name="MERCHANT CATEGORY CODE" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="22" length="3" name="POS ENTRY MODE" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="25" length="2" name="POS CONDITION CODE" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="32" length="11" name="ACQUIRING INSTITUTION ID" class="org.jpos.iso.IFA_LLNUM"/>
+  <isofield id="37" length="12" name="RRN" class="org.jpos.iso.IF_CHAR"/>
+  <isofield id="38" length="6" name="AUTHORIZATION ID RESPONSE" class="org.jpos.iso.IF_CHAR"/>
+  <isofield id="39" length="2" name="RESPONSE CODE" class="org.jpos.iso.IF_CHAR"/>
+  <isofield id="41" length="8" name="TERMINAL ID" class="org.jpos.iso.IF_CHAR"/>
+  <isofield id="42" length="15" name="MERCHANT ID" class="org.jpos.iso.IF_CHAR"/>
+  <isofield id="43" length="40" name="CARD ACCEPTOR NAME LOCATION" class="org.jpos.iso.IF_CHAR"/>
+  <isofield id="48" length="999" name="ADDITIONAL DATA PRIVATE" class="org.jpos.iso.IFA_LLLCHAR"/>
+  <isofield id="49" length="3" name="CURRENCY CODE" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="52" length="8" name="PIN BLOCK" class="org.jpos.iso.IFA_BINARY"/>
+  <isofield id="53" length="16" name="SECURITY CONTROL INFO" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="54" length="120" name="ADDITIONAL AMOUNTS" class="org.jpos.iso.IFA_LLLCHAR"/>
+  <isofield id="55" length="255" name="ICC DATA" class="io.mcn.issuer.adapter.iso.IFA_LLLHEXBINARY"/>
+  <isofield id="64" length="8" name="MAC" class="org.jpos.iso.IFA_BINARY"/>
+  <isofield id="70" length="3" name="NETWORK MANAGEMENT CODE" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="74" length="10" name="CREDITS NUMBER" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="75" length="10" name="CREDITS REVERSAL NUMBER" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="76" length="10" name="DEBITS NUMBER" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="77" length="10" name="DEBITS REVERSAL NUMBER" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="86" length="16" name="CREDITS AMOUNT" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="87" length="16" name="CREDITS REVERSAL AMOUNT" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="88" length="16" name="DEBITS AMOUNT" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="89" length="16" name="DEBITS REVERSAL AMOUNT" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="90" length="42" name="ORIGINAL DATA ELEMENTS" class="org.jpos.iso.IFA_NUMERIC"/>
+  <isofield id="97" length="17" name="NET SETTLEMENT AMOUNT" class="org.jpos.iso.IF_CHAR"/>
+  <isofield id="128" length="8" name="MAC SECONDARY" class="org.jpos.iso.IFA_BINARY"/>
+</isopackager>
