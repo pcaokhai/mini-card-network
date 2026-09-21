@@ -85,8 +85,8 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | web-next | Next.js App Router, TypeScript | POS simulator, ops console, BFF | none (stateless) | REST to GW/ISS-Admin/SET; WS from GW |
 | gateway-go | Go | Acquirer host: REST/WS API, ISO build/send, MUX, SAF, chaos control, switch (S10+) | `acquirer` DB | REST+WS (openapi), ISO client, Kafka producer (outbox) |
-| issuer-jpos | Java 21, jPOS Q2, Javalin | Issuer host: authorization, ledger, keys, admin API | `issuer` DB | ISO server, REST admin API, Kafka producer (outbox) |
-| settlement | Java 21, Spring Boot | Clearing, reconciliation, net position, clearing file | `settlement` DB | Kafka consumer, REST API |
+| issuer-jpos | Java 25, jPOS Q2, Javalin | Issuer host: authorization, ledger, keys, admin API | `issuer` DB | ISO server, REST admin API, Kafka producer (outbox) |
+| settlement | Java 25, Spring Boot | Clearing, reconciliation, net position, clearing file | `settlement` DB | Kafka consumer, REST API |
 | Toxiproxy | Toxiproxy | Fault injection on the ISO link | — | Admin API used by gateway `chaos` |
 | PostgreSQL | PostgreSQL 16 | Three separate databases | — | — |
 | Kafka | Kafka (KRaft) | Transaction events | topics | — |

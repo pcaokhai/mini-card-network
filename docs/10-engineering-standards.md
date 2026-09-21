@@ -62,7 +62,7 @@ Anti-patterns that fail review: god services, anemic "manager" classes holding a
 - Public APIs (exported Go identifiers, public Java types, shared TS components) have doc comments.
 - Formatting is automatic (Spotless/google-java-format, gofmt/goimports, Prettier); never argue style in review.
 
-### 4.2 Java 21 (issuer-jpos, settlement)
+### 4.2 Java 25 (issuer-jpos, settlement)
 
 - Records for value objects/DTOs/commands; sealed interfaces + pattern-matching `switch` for closed result sets.
 - `final` fields, constructor injection, immutable collections (`List.copyOf`). No Lombok.
