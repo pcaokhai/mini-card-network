@@ -59,10 +59,10 @@ jobs:
         with:
           go-version-file: gateway-go/go.mod
       - if: hashFiles('gateway-go/go.mod') != ''
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          # "latest" resolves to a cached release built with an older Go than go.mod targets
-          # (v1.64.8/go1.24 vs our go1.26.1) and fails with "language version...is lower".
+          # v6 of this action only supports golangci-lint v1; our .golangci.yml is v2 format
+          # (per the plan) and needs v7 of the action to install a v2.x binary at all.
           version: v2.6.1
           working-directory: gateway-go
           args: --timeout=5m
