@@ -6,11 +6,15 @@ help: ## List available targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
 
 up: ## Start infra + all services (docker compose)
-	@if [ -f $(COMPOSE) ]; then docker compose -f $(COMPOSE) up -d; \
+	@if [ -f $(COMPOSE) ]; then \
+		test -f .env || cp .env.example .env; \
+		docker compose --project-directory . -f $(COMPOSE) --env-file .env up -d --wait; \
+		if [ -x infra/scripts/post-up.sh ]; then infra/scripts/post-up.sh; fi; \
 	else echo "skip: $(COMPOSE) not scaffolded yet (MCN-002)"; fi
 
-down: ## Stop infra + all services
-	@if [ -f $(COMPOSE) ]; then docker compose -f $(COMPOSE) down -v; \
+down: ## Stop infra + all services; ARGS=-v to also remove volumes
+	@if [ -f $(COMPOSE) ]; then \
+		docker compose --project-directory . -f $(COMPOSE) --env-file .env down $(ARGS); \
 	else echo "skip: $(COMPOSE) not scaffolded yet (MCN-002)"; fi
 
 test: ## Unit + integration tests, every service

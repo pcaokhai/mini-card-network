@@ -1,0 +1,3 @@
+[
+  { "name": "issuer", "listen": "0.0.0.0:18000", "upstream": "issuer:8000", "enabled": true }
+]

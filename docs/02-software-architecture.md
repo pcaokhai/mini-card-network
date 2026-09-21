@@ -299,7 +299,7 @@ Pin exact versions in MCN-001 (latest stable at scaffold time) and record them h
 | Gateway / switch | Go 1.26, chi, oapi-codegen (strict server), pgx, sqlc, goose, slog, OpenTelemetry, testify, Testcontainers-go, golangci-lint |
 | Web | Next.js App Router, TypeScript strict, Tailwind CSS, shadcn/ui, Motion, TanStack Query, Zustand, Zod, openapi-typescript + openapi-fetch, MSW, next-intl, Recharts, React Flow, Vitest, Testing Library, Playwright, Storybook |
 | Settlement | Java 25 (LTS), Spring Boot 3, Spring Kafka, Spring Data JDBC, Flyway, Testcontainers |
-| Platform | PostgreSQL 16, Kafka (KRaft), Toxiproxy, OpenTelemetry Collector, Prometheus, Tempo, Grafana, Docker Compose, GitHub Actions |
+| Platform | PostgreSQL 16 (`postgres:16-alpine`), Kafka KRaft (`apache/kafka:3.8.0`), Toxiproxy (`ghcr.io/shopify/toxiproxy:2.9.0`), OpenTelemetry Collector (`otel/opentelemetry-collector-contrib:0.108.0`), Prometheus (`prom/prometheus:v2.54.0`), Tempo (`grafana/tempo:2.5.0`), Grafana (`grafana/grafana:11.1.0`), Docker Compose, GitHub Actions |
 
 > Pinned in MCN-001. Java 25 (LTS) supersedes the earlier "Java 21" draft in this
 > section to match root `CLAUDE.md` and the installed toolchain (Corretto 25).
