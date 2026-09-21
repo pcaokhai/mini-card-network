@@ -1,0 +1,18 @@
+{
+  "app": { "name": "Mini Card Network", "tagline": "Learning environment" },
+  "nav": {
+    "groups": { "main": "Transactions", "lab": "Learn and experiment", "manage": "Manage" },
+    "overview": "Overview", "pos": "POS terminal", "transactions": "Transaction journey",
+    "messageLab": "Message lab", "chaosLab": "Chaos lab",
+    "cards": "Cards and accounts", "security": "Security and keys", "settlement": "Close of day", "network": "Network operations"
+  },
+  "header": { "search": "Search RRN, last 4 digits, terminal ID", "linkUnknown": "Checking connection" },
+  "modeToggle": { "label": "Display mode", "easy": "Easy", "expert": "Expert" },
+  "comingSoon": { "title": "This screen arrives in {release}", "body": "The shell is ready. Content is built in this release's stories." },
+  "glossary": {
+    "rrn": { "easy": "Reference number", "hint": "Unique number used to look up a transaction for disputes and reconciliation." },
+    "stan": { "easy": "Sequence number", "hint": "Increasing number that pairs each answer with its question." },
+    "mti": { "easy": "Message type", "hint": "Four digits saying whether a message is a request, answer, reversal or network message." },
+    "rc": { "easy": "Result code", "hint": "00 means approved; other codes explain the decline." }
+  }
+}
