@@ -63,10 +63,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - if: hashFiles('web-next/package.json') != ''
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web-next/package.json
+      - if: hashFiles('web-next/package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web-next/.nvmrc
+          cache: pnpm
+          cache-dependency-path: web-next/pnpm-lock.yaml
       - name: Lint + test web-next
         run: |
           if [ -f web-next/package.json ]; then
-            cd web-next && npm ci && npm run lint && npm test
+            make -C web-next lint test
           else
             echo "skip: web-next not scaffolded yet"
           fi

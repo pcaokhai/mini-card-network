@@ -1,0 +1,36 @@
+@import "tailwindcss";
+@import "@fontsource/be-vietnam-pro/400.css";
+@import "@fontsource/be-vietnam-pro/500.css";
+@import "@fontsource/be-vietnam-pro/600.css";
+@import "@fontsource/be-vietnam-pro/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+
+/* Design tokens (design canvas). Semantic status colors are reserved for transaction outcomes. */
+@theme {
+  --color-canvas: #f5f4ef;
+  --color-surface: #ffffff;
+  --color-border: #e4e2da;
+  --color-ink: #17181c;
+  --color-muted: #5e6068;
+  --color-accent: #0b6e75;
+  --color-accent-soft: #e3f1f1;
+  --color-ok: #1e7045;
+  --color-ok-soft: #e4f2ea;
+  --color-bad: #b42318;
+  --color-bad-soft: #fbe9e7;
+  --color-warn: #8a4f06;
+  --color-warn-soft: #fbf0dc;
+  --color-rev: #4b3da6;
+  --color-rev-soft: #eceafb;
+  --font-sans: "Be Vietnam Pro", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius-card: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

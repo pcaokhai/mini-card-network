@@ -1,0 +1,69 @@
+{
+  "name": "web-next",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "vitest run --project unit",
+    "test:stories": "vitest run --project storybook",
+    "typecheck": "next typegen && tsc --noEmit",
+    "generate": "openapi-typescript ../contracts/openapi.yaml -o src/shared/api/generated/schema.d.ts && mkdir -p src/mocks/generated && msw-auto-mock ../contracts/openapi.yaml -o src/mocks/generated --typescript --base-url /api -c 200,201,202",
+    "dev:mock": "NEXT_PUBLIC_API_MOCKS=true next dev",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
+  },
+  "dependencies": {
+    "@fontsource/be-vietnam-pro": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@tanstack/react-query": "^5.103.1",
+    "motion": "^13.4.0",
+    "next": "16.3.5",
+    "next-intl": "^4.14.5",
+    "openapi-fetch": "^0.17.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "^4.6.5",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@faker-js/faker": "^10.6.0",
+    "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "jsdom": "^30.1.0",
+    "msw": "^2.15.0",
+    "msw-auto-mock": "^0.32.1",
+    "openapi-typescript": "^7.13.0",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^5.0.1",
+    "storybook": "^10.6.0",
+    "@storybook/nextjs-vite": "^10.6.0",
+    "@chromatic-com/storybook": "latest",
+    "@storybook/addon-vitest": "^10.6.0",
+    "@storybook/addon-a11y": "^10.6.0",
+    "@storybook/addon-docs": "^10.6.0",
+    "@storybook/addon-mcp": "^10.6.0",
+    "vite": "latest",
+    "eslint-plugin-storybook": "^10.6.0",
+    "@vitest/browser-playwright": "5.0.1",
+    "@vitest/coverage-v8": "5.0.1",
+    "playwright": "latest"
+  },
+  "packageManager": "pnpm@11.10.0",
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
+  }
+}

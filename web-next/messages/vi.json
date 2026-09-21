@@ -1,0 +1,18 @@
+{
+  "app": { "name": "Mini Card Network", "tagline": "Môi trường học tập" },
+  "nav": {
+    "groups": { "main": "Giao dịch", "lab": "Học và thử nghiệm", "manage": "Quản lý" },
+    "overview": "Tổng quan", "pos": "Máy POS", "transactions": "Hành trình giao dịch",
+    "messageLab": "Phòng lab message", "chaosLab": "Phòng lab sự cố",
+    "cards": "Thẻ và tài khoản", "security": "Bảo mật và khóa", "settlement": "Chốt ngày và đối soát", "network": "Vận hành mạng"
+  },
+  "header": { "search": "Tìm mã tra soát, 4 số cuối thẻ, mã máy POS", "linkUnknown": "Đang kiểm tra kết nối" },
+  "modeToggle": { "label": "Chế độ hiển thị", "easy": "Dễ hiểu", "expert": "Chuyên sâu" },
+  "comingSoon": { "title": "Màn hình này sẽ có ở {release}", "body": "Khung ứng dụng đã sẵn sàng. Nội dung được xây trong các story của bản phát hành này." },
+  "glossary": {
+    "rrn": { "easy": "Mã tra soát", "hint": "Mã duy nhất để tra cứu một giao dịch khi khiếu nại hoặc đối soát." },
+    "stan": { "easy": "Số thứ tự giao dịch", "hint": "Số tăng dần để ghép câu trả lời với đúng câu hỏi." },
+    "mti": { "easy": "Loại message", "hint": "Bốn chữ số cho biết message là yêu cầu, trả lời, hủy hay quản lý mạng." },
+    "rc": { "easy": "Mã kết quả", "hint": "00 là đồng ý; các mã khác cho biết lý do từ chối." }
+  }
+}

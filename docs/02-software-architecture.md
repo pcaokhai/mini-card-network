@@ -297,7 +297,7 @@ Pin exact versions in MCN-001 (latest stable at scaffold time) and record them h
 | --- | --- |
 | Issuer | Java 25 (LTS), jPOS (Q2, TransactionManager, JCESecurityModule), Javalin, HikariCP, Flyway, JUnit 5, AssertJ, Testcontainers, ArchUnit, Spotless |
 | Gateway / switch | Go 1.26, chi, oapi-codegen (strict server), pgx, sqlc, goose, slog, OpenTelemetry, testify, Testcontainers-go, golangci-lint |
-| Web | Next.js App Router, TypeScript strict, Tailwind CSS, shadcn/ui, Motion, TanStack Query, Zustand, Zod, openapi-typescript + openapi-fetch, MSW, next-intl, Recharts, React Flow, Vitest, Testing Library, Playwright, Storybook |
+| Web | Next.js 16.3 App Router, React 19.2, TypeScript strict, Tailwind CSS v4, shadcn/ui, Motion, TanStack Query, Zustand, Zod, openapi-typescript + openapi-fetch, MSW 2.15 + msw-auto-mock, next-intl 4.14, Recharts, React Flow, Vitest 5, Testing Library, Playwright, Storybook (nextjs-vite) |
 | Settlement | Java 25 (LTS), Spring Boot 3, Spring Kafka, Spring Data JDBC, Flyway, Testcontainers |
 | Platform | PostgreSQL 16 (`postgres:16-alpine`), Kafka KRaft (`apache/kafka:3.8.0`), Toxiproxy (`ghcr.io/shopify/toxiproxy:2.9.0`), OpenTelemetry Collector (`otel/opentelemetry-collector-contrib:0.108.0`), Prometheus (`prom/prometheus:v2.54.0`), Tempo (`grafana/tempo:2.5.0`), Grafana (`grafana/grafana:11.1.0`), Docker Compose, GitHub Actions |
 
