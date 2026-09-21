@@ -3,6 +3,7 @@ package isonet
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,8 +64,8 @@ func TestMux_countsLateResponse__MCN_203_AC3(t *testing.T) {
 	defer func() { _ = server.Close() }()
 
 	mux := NewMux(client)
-	var lateCount int
-	mux.OnLateResponse(func(string, map[int]string) { lateCount++ })
+	var lateCount atomic.Int32
+	mux.OnLateResponse(func(string, map[int]string) { lateCount.Add(1) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -75,5 +76,5 @@ func TestMux_countsLateResponse__MCN_203_AC3(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, WriteFrame(server, []byte(packed)))
 
-	require.Eventually(t, func() bool { return lateCount == 1 }, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return lateCount.Load() == 1 }, time.Second, 10*time.Millisecond)
 }
