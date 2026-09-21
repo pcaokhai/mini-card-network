@@ -14,5 +14,11 @@
     "stan": { "easy": "Số thứ tự giao dịch", "hint": "Số tăng dần để ghép câu trả lời với đúng câu hỏi." },
     "mti": { "easy": "Loại message", "hint": "Bốn chữ số cho biết message là yêu cầu, trả lời, hủy hay quản lý mạng." },
     "rc": { "easy": "Mã kết quả", "hint": "00 là đồng ý; các mã khác cho biết lý do từ chối." }
+  },
+  "lab": {
+    "de": "DE", "name": "Tên trường", "format": "Định dạng", "value": "Giá trị",
+    "selectHint": "Chọn một phần trong message, bitmap hoặc bảng trường để xem chi tiết.",
+    "mtiVersion": "Phiên bản", "mtiClass": "Nhóm message", "mtiFunction": "Chức năng", "mtiOrigin": "Nguồn gốc",
+    "pasteHint": "Dán một message ISO 8583 thô, hoặc chọn mẫu có sẵn", "primaryBitmap": "Bitmap chính", "secondaryBitmap": "Bitmap phụ"
   }
 }
