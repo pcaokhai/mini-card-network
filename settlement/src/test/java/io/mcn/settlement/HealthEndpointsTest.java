@@ -21,7 +21,11 @@ class HealthEndpointsTest {
   int managementPort;
 
   private String get(String path) {
-    return RestClient.create("http://127.0.0.1:" + managementPort).get().uri(path).retrieve().body(String.class);
+    return RestClient.create("http://127.0.0.1:" + managementPort)
+        .get()
+        .uri(path)
+        .retrieve()
+        .body(String.class);
   }
 
   @Test
