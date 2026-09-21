@@ -15,6 +15,7 @@ dependencies {
     implementation(libs.logstash.encoder)
     testImplementation(platform(libs.junit.bom))
     testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation("org.junit.jupiter:junit-jupiter-params")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation(libs.assertj)
     testImplementation(libs.archunit)
