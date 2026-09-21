@@ -89,7 +89,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ./scripts/check-contracts.sh
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install -r contracts/requirements.txt
+      - run: make contracts
+        env:
+          BASE_REF: origin/${{ github.base_ref || 'main' }}
+          API_BREAKING: ${{ contains(github.event.pull_request.labels.*.name, 'api-breaking') }}
 
   pr-title:
     if: github.event_name == 'pull_request'

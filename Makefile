@@ -56,8 +56,8 @@ fmt: ## Auto-format everything
 		echo "== fmt web-next =="; (cd web-next && npm run fmt); \
 	else echo "skip: web-next not scaffolded yet"; fi
 
-contracts: ## Lint OpenAPI, validate WS schema, run ISO golden vectors
-	@./scripts/check-contracts.sh
+contracts: ## Lint OpenAPI, validate WS schema, run ISO golden vectors, breaking-change check
+	@$(MAKE) --no-print-directory -C contracts check
 
 e2e: ## Playwright journeys against the running stack
 	@if [ -f web-next/package.json ]; then \
