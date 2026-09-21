@@ -8,10 +8,10 @@ This file is loaded into every session. Keep it short. Detailed rules live in `d
 ## 1. Repository map
 
 ```
-issuer-jpos/   Java 25 · jPOS Q2 · Gradle     Issuer host (ISO 8583 server) + Issuer Admin REST API     → issuer-jpos/CLAUDE.md
+issuer-jpos/   Java 21 · jPOS Q2 · Gradle     Issuer host (ISO 8583 server) + Issuer Admin REST API     → issuer-jpos/CLAUDE.md
 gateway-go/    Go                              Acquirer gateway: REST/WS API, codec, MUX, SAF, switch    → gateway-go/CLAUDE.md
 web-next/      Next.js App Router · TS strict  POS simulator + operations console (BFF)                  → web-next/CLAUDE.md
-settlement/    Java 25 · Spring Boot           Outbox consumer, reconciliation, clearing file            → settlement/CLAUDE.md
+settlement/    Java 21 · Spring Boot           Outbox consumer, reconciliation, clearing file            → settlement/CLAUDE.md
 contracts/     Source of truth for every interface: openapi.yaml, ws-events.schema.json, iso8583/
 infra/         docker-compose, Postgres, Kafka, Toxiproxy, OpenTelemetry, Prometheus, Grafana
 docs/          PRD, architecture, ISO spec, API, data model, stories, delivery plan, tests, risks, standards, ADRs

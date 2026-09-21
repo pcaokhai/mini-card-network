@@ -1,6 +1,8 @@
+@AGENTS.md
+
 # web-next — CLAUDE.md
 
-POS simulator and operations console. Next.js App Router acts as BFF: Route Handlers call the gateway and the Issuer Admin API; the browser talks only to Next.js (REST) and to the gateway WebSocket with a short-lived token.
+POS simulator and operations console. The first line imports AGENTS.md, which Next.js writes to warn that this Next.js version differs from model training data: read the docs it points to before using Next.js APIs. Next.js App Router acts as BFF: Route Handlers call the gateway and the Issuer Admin API; the browser talks only to Next.js (REST) and to the gateway WebSocket with a short-lived token.
 
 Lane: **WEB**. Owns: `web-next/**`. Design reference: the canvas linked in `docs/01-prd.md` §7.1. Motion system: `docs/02-software-architecture.md` §7.9.
 
