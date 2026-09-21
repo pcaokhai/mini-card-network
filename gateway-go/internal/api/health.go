@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 
 	"github.com/go-chi/chi/v5"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Health tracks readiness; it becomes not-ready when graceful shutdown starts.
@@ -18,9 +17,10 @@ func NewHealth() *Health { return &Health{} }
 // StartDraining makes /health/ready fail so traffic stops before the server shuts down.
 func (h *Health) StartDraining() { h.draining.Store(true) }
 
-// NewRouter builds the HTTP handler; every request gets a server span (W3C traceparent honored).
-func NewRouter(health *Health) http.Handler {
-	r := chi.NewRouter()
+// NewRouter registers the health routes on r; call MountLab(r) separately to add the Lab API.
+// Kept as a function taking chi.Router (not creating its own) so cmd/gateway can compose routers
+// under one otelhttp span wrapper.
+func NewRouter(r chi.Router, health *Health) {
 	r.Get("/health/live", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, `{"status":"UP"}`)
 	})
@@ -31,7 +31,6 @@ func NewRouter(health *Health) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, `{"status":"UP"}`)
 	})
-	return otelhttp.NewHandler(r, "gateway-http")
 }
 
 func writeJSON(w http.ResponseWriter, status int, body string) {
