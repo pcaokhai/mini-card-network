@@ -6,7 +6,7 @@
 
 **Architecture:** Plain jPOS Q2 application (`org.jpos.q2.Q2` main) with deploy descriptors in `src/dist/deploy`. Two QBeans: `HttpEndpoints` (Javalin, health) and `MetricsEndpoint` (Javalin, Micrometer Prometheus scrape). SLF4J + Logback + logstash-logback-encoder with a masking JSON generator decorator. Tracing through the OpenTelemetry Java agent (no tracing code).
 
-**Tech stack:** Java 21, Gradle (Kotlin DSL, wrapper obtained from Spring Initializr), jPOS, Javalin, Micrometer Prometheus registry, Logback, logstash-logback-encoder, JUnit 5, AssertJ, ArchUnit, Spotless. Library versions: `latest.release` in the version catalog, then **locked** with Gradle dependency locking.
+**Tech stack:** Java 25, Gradle (Kotlin DSL, wrapper obtained from Spring Initializr), jPOS, Javalin, Micrometer Prometheus registry, Logback, logstash-logback-encoder, JUnit 5, AssertJ, ArchUnit, Spotless. Library versions: `latest.release` in the version catalog, then **locked** with Gradle dependency locking.
 
 ## Understanding
 
