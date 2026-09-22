@@ -12,6 +12,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ErrNotFound is returned when a lookup by RRN finds no row.
+var ErrNotFound = errors.New("not found")
+
 // TranLogRow is one tran_log row (docs/05-data-model.md). RRN and MaskedPAN are never the real
 // PAN; the caller resolves cardToken->PAN only long enough to build DE 2 and never persists it.
 type TranLogRow struct {
@@ -117,6 +120,9 @@ func (r *TranLogRepository) Get(ctx context.Context, rrn string) (TranLogRow, er
 	err := r.pool.QueryRow(ctx,
 		`SELECT `+tranLogSelectColumns+` FROM tran_log t JOIN merchant m ON m.mid = t.mid WHERE t.rrn = $1`, rrn,
 	).Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TranLogRow{}, ErrNotFound
+	}
 	row.RRN = strings.TrimSpace(row.RRN)
 	return row, err
 }
