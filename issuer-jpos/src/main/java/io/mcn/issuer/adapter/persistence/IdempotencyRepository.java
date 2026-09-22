@@ -10,8 +10,8 @@ import org.postgresql.util.PGobject;
 
 /**
  * Backs {@code Idempotency-Key} replay/mismatch handling (docs/04 §2) on {@code
- * idempotency_record}, keyed by (key, route). {@link #store} takes the caller's {@link
- * Connection} so the record commits in the same transaction as the state change it replays.
+ * idempotency_record}, keyed by (key, route). {@link #store} takes the caller's {@link Connection}
+ * so the record commits in the same transaction as the state change it replays.
  */
 public class IdempotencyRepository {
   private final DataSource dataSource;

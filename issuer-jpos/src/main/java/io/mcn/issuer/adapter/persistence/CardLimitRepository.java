@@ -83,16 +83,21 @@ public class CardLimitRepository {
   }
 
   /**
-   * Replaces the {@code ALL} PER_TXN and DAILY {@code card_limit} rows in the caller's
-   * transaction, alongside the audit row the admin API writes for the same PUT (MCN-308).
+   * Replaces the {@code ALL} PER_TXN and DAILY {@code card_limit} rows in the caller's transaction,
+   * alongside the audit row the admin API writes for the same PUT (MCN-308).
    */
   public void upsertAllLimits(
-      Connection conn, long cardId, long perTransactionAmount, long dailyAmount, Integer dailyCount) {
+      Connection conn,
+      long cardId,
+      long perTransactionAmount,
+      long dailyAmount,
+      Integer dailyCount) {
     upsertOne(conn, cardId, "PER_TXN", perTransactionAmount, null);
     upsertOne(conn, cardId, "DAILY", dailyAmount, dailyCount);
   }
 
-  private void upsertOne(Connection conn, long cardId, String period, long maxAmount, Integer maxCount) {
+  private void upsertOne(
+      Connection conn, long cardId, String period, long maxAmount, Integer maxCount) {
     String sql =
         """
         INSERT INTO card_limit (card_id, tran_type, period, max_amount, max_count)

@@ -2,6 +2,8 @@ package io.mcn.issuer.adapter.persistence;
 
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import javax.sql.DataSource;
 
@@ -68,6 +70,19 @@ public class CardRepository {
       return Optional.of(toCard(rs));
     } catch (SQLException e) {
       throw new IllegalStateException("find card by card_ref failed", e);
+    }
+  }
+
+  public List<Card> findAll() {
+    String sql = "SELECT " + SELECT_COLUMNS + " FROM card ORDER BY id";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql);
+        var rs = stmt.executeQuery()) {
+      List<Card> cards = new ArrayList<>();
+      while (rs.next()) cards.add(toCard(rs));
+      return cards;
+    } catch (SQLException e) {
+      throw new IllegalStateException("find all cards failed", e);
     }
   }
 

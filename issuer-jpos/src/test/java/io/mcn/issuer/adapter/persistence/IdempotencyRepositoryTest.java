@@ -24,7 +24,8 @@ class IdempotencyRepositoryTest {
     var repo = new IdempotencyRepository(ds);
 
     try (var conn = ds.getConnection()) {
-      repo.store(conn, "key-1", "POST /v1/cards/crd_1/blocks", "hash-1", 200, "{\"status\":\"ok\"}");
+      repo.store(
+          conn, "key-1", "POST /v1/cards/crd_1/blocks", "hash-1", 200, "{\"status\":\"ok\"}");
     }
 
     var found = repo.find("key-1", "POST /v1/cards/crd_1/blocks");

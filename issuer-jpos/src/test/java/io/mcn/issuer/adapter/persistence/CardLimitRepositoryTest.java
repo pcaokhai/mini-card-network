@@ -24,7 +24,9 @@ class CardLimitRepositoryTest {
     var accounts = new AccountRepository(ds);
     var cards = new CardRepository(ds);
     long accountId = accounts.insert("ACC-LIMIT-1", "704", 1_000_000L);
-    long cardId = cards.insert(accountId, "enc".getBytes(), "hash1".getBytes(), "970436", "0001", "2811", "ACTIVE");
+    long cardId =
+        cards.insert(
+            accountId, "enc".getBytes(), "hash1".getBytes(), "970436", "0001", "2811", "ACTIVE");
     var repo = new CardLimitRepository(ds);
 
     try (var conn = ds.getConnection()) {
@@ -39,11 +41,12 @@ class CardLimitRepositoryTest {
     var updated = repo.findAllForCard(cardId);
     assertThat(updated).hasSize(2);
     assertThat(updated)
-        .anySatisfy(l -> {
-          if (l.period().equals("DAILY")) {
-            assertThat(l.maxAmount()).isEqualTo(2_500_000L);
-            assertThat(l.maxCount()).isEqualTo(5);
-          }
-        });
+        .anySatisfy(
+            l -> {
+              if (l.period().equals("DAILY")) {
+                assertThat(l.maxAmount()).isEqualTo(2_500_000L);
+                assertThat(l.maxCount()).isEqualTo(5);
+              }
+            });
   }
 }
