@@ -35,8 +35,10 @@ func (f *fakeTranLog) Insert(_ context.Context, row store.TranLogRow) (int64, er
 	f.rows = append(f.rows, row)
 	return int64(len(f.rows)), nil
 }
-func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status string) error {
+func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, responseCode, authCode string) error {
 	f.rows[id-1].Status = status
+	f.rows[id-1].ResponseCode = responseCode
+	f.rows[id-1].AuthCode = authCode
 	return nil
 }
 func (f *fakeTranLog) RecordStateTransition(context.Context, int64, string, string) error { return nil }

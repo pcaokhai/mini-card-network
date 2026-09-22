@@ -112,7 +112,7 @@ type LinkStatusPort interface {
 // TranLogPort persists tran_log and tran_state_history. *store.TranLogRepository satisfies it.
 type TranLogPort interface {
 	Insert(ctx context.Context, row store.TranLogRow) (int64, error)
-	UpdateStatus(ctx context.Context, id int64, status string) error
+	UpdateStatus(ctx context.Context, id int64, status, responseCode, authCode string) error
 	RecordStateTransition(ctx context.Context, id int64, fromStatus, toStatus string) error
 }
 
@@ -221,7 +221,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	if err != nil {
 		return Transaction{}, fmt.Errorf("insert tran_log: %w", err)
 	}
-	if err := s.tranLog.UpdateStatus(ctx, id, statusSent); err != nil {
+	if err := s.tranLog.UpdateStatus(ctx, id, statusSent, "", ""); err != nil {
 		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", statusSent, err)
 	}
 	if err := s.tranLog.RecordStateTransition(ctx, id, statusCreated, statusSent); err != nil {
@@ -250,7 +250,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 		}
 	}
 
-	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status); err != nil {
+	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
 		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
 	}
 	_ = s.tranLog.RecordStateTransition(ctx, id, statusSent, txn.Status)
