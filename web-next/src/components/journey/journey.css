@@ -19,6 +19,21 @@
   background-color: transparent;
 }
 
+.step-timeline li[data-kind="WARN"] {
+  border-color: var(--color-warn);
+  background-color: var(--color-warn-soft);
+}
+
+.step-timeline li[data-kind="REVERSAL"] {
+  border-color: var(--color-rev);
+  background-color: var(--color-rev-soft);
+}
+
+.step-timeline li[data-kind="BAD"] {
+  border-color: var(--color-bad);
+  background-color: var(--color-bad-soft);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .step-timeline li[data-state="current"] {
     animation: none;

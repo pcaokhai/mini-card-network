@@ -29,4 +29,16 @@ describe("StepTimeline", () => {
     await user.click(screen.getAllByRole("listitem")[2]);
     expect(onSelectStep).toHaveBeenCalledWith(2);
   });
+
+  it("marks a REVERSAL step distinctly from WARN/OK (MCN-406-AC1)", () => {
+    const failureSteps: JourneyStep[] = [
+      { seq: 0, actor: "POS", offsetMs: 0, title: "Sent", easyText: "", technicalText: "", kind: "INFO", message: null },
+      { seq: 1, actor: "ISSUER", offsetMs: 100, title: "Timed out", easyText: "", technicalText: "", kind: "WARN", message: null },
+      { seq: 2, actor: "SAF", offsetMs: 5000, title: "Reversed", easyText: "", technicalText: "", kind: "REVERSAL", message: null },
+    ];
+    renderWithIntl(<StepTimeline steps={failureSteps} currentStep={0} onSelectStep={vi.fn()} />);
+    const items = screen.getAllByRole("listitem");
+    expect(items[1]).toHaveAttribute("data-kind", "WARN");
+    expect(items[2]).toHaveAttribute("data-kind", "REVERSAL");
+  });
 });
