@@ -1,5 +1,6 @@
 package io.mcn.issuer.adapter.txn;
 
+import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRow;
 import java.io.Serializable;
@@ -9,16 +10,20 @@ import org.jpos.core.Configurable;
 import org.jpos.core.Configuration;
 import org.jpos.core.ConfigurationException;
 import org.jpos.iso.ISOMsg;
+import org.jpos.transaction.AbortParticipant;
 import org.jpos.transaction.Context;
-import org.jpos.transaction.TransactionParticipant;
+import org.jpos.util.Destroyable;
 
 /**
  * Writes the {@code tran_log} row for every attempt (docs/plans/MCN-302a.md Global Constraints) -
- * approved, declined, or the RC-96 placeholder. Runs in {@code commit()}, not {@code prepare()}:
- * the write only happens once the transaction is really finishing. A duplicate hit is not
- * re-logged (the row already exists; re-inserting would violate {@code uq_tran_dedupe}).
+ * approved, declined, or the RC-96 placeholder. Implements {@link AbortParticipant} and overrides
+ * {@code abort()} (not just {@code commit()}): a decline earlier in the chain makes the *whole*
+ * jPOS transaction abort, and TransactionManager calls {@code abort()}, not {@code commit()}, on
+ * every member when that happens - only {@code AbortParticipant}s stay "members" at all once a
+ * transaction is already known to be aborting (see jPOS's {@code prepareForAbort}). A duplicate hit
+ * is not re-logged (the row already exists; re-inserting would violate {@code uq_tran_dedupe}).
  */
-public class LogAndOutbox implements TransactionParticipant, Configurable {
+public class LogAndOutbox implements AbortParticipant, Configurable, Destroyable {
 
   private static final Map<String, String> TRAN_TYPE_BY_PROCESSING_CODE =
       Map.of(
@@ -28,6 +33,7 @@ public class LogAndOutbox implements TransactionParticipant, Configurable {
           "310000", "BALANCE");
 
   private TranLogRepository tranLogRepository;
+  private HikariDataSource dataSource;
 
   /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
   public LogAndOutbox() {}
@@ -38,7 +44,15 @@ public class LogAndOutbox implements TransactionParticipant, Configurable {
 
   @Override
   public void setConfiguration(Configuration cfg) throws ConfigurationException {
-    this.tranLogRepository = new TranLogRepository(TxnDataSource.fromConfig(cfg));
+    this.dataSource = TxnDataSource.fromConfig(cfg);
+    this.tranLogRepository = new TranLogRepository(dataSource);
+  }
+
+  @Override
+  public void destroy() {
+    if (dataSource != null) {
+      dataSource.close();
+    }
   }
 
   @Override
@@ -48,6 +62,15 @@ public class LogAndOutbox implements TransactionParticipant, Configurable {
 
   @Override
   public void commit(long id, Serializable context) {
+    write(context);
+  }
+
+  @Override
+  public void abort(long id, Serializable context) {
+    write(context);
+  }
+
+  private void write(Serializable context) {
     Context ctx = (Context) context;
     if (Boolean.TRUE.equals(ctx.<Boolean>get(TxnContextKeys.IS_DUPLICATE))) {
       return;

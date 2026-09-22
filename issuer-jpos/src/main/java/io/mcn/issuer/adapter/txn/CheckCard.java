@@ -1,5 +1,6 @@
 package io.mcn.issuer.adapter.txn;
 
+import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.crypto.CardCrypto;
 import io.mcn.issuer.adapter.persistence.Card;
 import io.mcn.issuer.adapter.persistence.CardRepository;
@@ -11,15 +12,17 @@ import org.jpos.core.Configuration;
 import org.jpos.core.ConfigurationException;
 import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
+import org.jpos.util.Destroyable;
 
 /**
- * Looks up the card by PAN hash and declines RC 14 (unknown), RC 62 (blocked/lost/stolen) or RC
- * 54 (expired card, DE 14 YYMM semantics: expired once the business date's YYMM exceeds it).
+ * Looks up the card by PAN hash and declines RC 14 (unknown), RC 62 (blocked/lost/stolen) or RC 54
+ * (expired card, DE 14 YYMM semantics: expired once the business date's YYMM exceeds it).
  */
-public class CheckCard implements TransactionParticipant, Configurable {
+public class CheckCard implements TransactionParticipant, Configurable, Destroyable {
 
   private CardRepository cardRepository;
   private CardCrypto cardCrypto;
+  private HikariDataSource dataSource;
 
   /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
   public CheckCard() {}
@@ -35,9 +38,21 @@ public class CheckCard implements TransactionParticipant, Configurable {
 
   @Override
   public void setConfiguration(Configuration cfg) throws ConfigurationException {
-    this.cardRepository = new CardRepository(TxnDataSource.fromConfig(cfg));
-    this.cardCrypto =
-        new CardCrypto(System.getenv("PAN_ENCRYPTION_KEY_HEX"), System.getenv("PAN_HMAC_KEY_HEX"));
+    this.dataSource = TxnDataSource.fromConfig(cfg);
+    this.cardRepository = new CardRepository(dataSource);
+    this.cardCrypto = new CardCrypto(env("PAN_ENCRYPTION_KEY_HEX"), env("PAN_HMAC_KEY_HEX"));
+  }
+
+  @Override
+  public void destroy() {
+    if (dataSource != null) {
+      dataSource.close();
+    }
+  }
+
+  private static String env(String name) {
+    String value = System.getenv(name);
+    return value != null ? value : System.getProperty(name);
   }
 
   @Override

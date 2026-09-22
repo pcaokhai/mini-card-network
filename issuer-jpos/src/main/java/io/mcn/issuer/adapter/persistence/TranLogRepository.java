@@ -52,7 +52,12 @@ public class TranLogRepository {
   }
 
   public Optional<TranLogRow> findByDedupeKey(
-      String acquirerId, String tid, String stan, String transmissionDtRaw, String mti, LocalDate businessDate) {
+      String acquirerId,
+      String tid,
+      String stan,
+      String transmissionDtRaw,
+      String mti,
+      LocalDate businessDate) {
     String sql =
         """
         SELECT business_date, mti, tran_type, processing_code, acquirer_id, tid, mid, stan,

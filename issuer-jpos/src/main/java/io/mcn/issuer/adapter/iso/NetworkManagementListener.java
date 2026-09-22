@@ -36,6 +36,7 @@ public final class NetworkManagementListener extends Log
     hikariConfig.setJdbcUrl(cfg.get("jdbc-url"));
     hikariConfig.setUsername(cfg.get("jdbc-user"));
     hikariConfig.setPassword(cfg.get("jdbc-password"));
+    hikariConfig.setMaximumPoolSize(2);
     HikariDataSource dataSource = new HikariDataSource(hikariConfig);
     Flyway.configure().dataSource(dataSource).load().migrate();
     this.links = new JdbcAcquirerLinkRepository(dataSource);

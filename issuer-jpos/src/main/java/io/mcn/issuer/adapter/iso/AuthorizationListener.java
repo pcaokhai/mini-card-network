@@ -20,10 +20,10 @@ import org.jpos.util.NameRegistrar;
 
 /**
  * {@code ISORequestListener} for financial (MTI class 01/02) requests, wired alongside {@link
- * NetworkManagementListener} in {@code 30_iso_server.xml}. Rejects a request on a link that
- * isn't signed on with RC 91 directly (docs/03 §7.1) rather than queueing it; otherwise hands the
- * message to the {@code TransactionManager} named by the {@code txn-mgr-name} property and
- * returns immediately - the response is sent later, from within the chain, by {@code Respond}.
+ * NetworkManagementListener} in {@code 30_iso_server.xml}. Rejects a request on a link that isn't
+ * signed on with RC 91 directly (docs/03 §7.1) rather than queueing it; otherwise hands the message
+ * to the {@code TransactionManager} named by the {@code txn-mgr-name} property and returns
+ * immediately - the response is sent later, from within the chain, by {@code Respond}.
  */
 public final class AuthorizationListener extends Log implements ISORequestListener, Configurable {
 
@@ -45,6 +45,7 @@ public final class AuthorizationListener extends Log implements ISORequestListen
     hikariConfig.setJdbcUrl(cfg.get("jdbc-url"));
     hikariConfig.setUsername(cfg.get("jdbc-user"));
     hikariConfig.setPassword(cfg.get("jdbc-password"));
+    hikariConfig.setMaximumPoolSize(2);
     HikariDataSource dataSource = new HikariDataSource(hikariConfig);
     Flyway.configure().dataSource(dataSource).load().migrate();
     this.links = new JdbcAcquirerLinkRepository(dataSource);
@@ -78,7 +79,7 @@ public final class AuthorizationListener extends Log implements ISORequestListen
   }
 
   private TransactionManager transactionManager() {
-    TransactionManager tm = NameRegistrar.getIfExists("txnmgr." + txnMgrName);
+    TransactionManager tm = NameRegistrar.getIfExists(txnMgrName);
     if (tm == null) {
       throw new IllegalStateException("TransactionManager '" + txnMgrName + "' is not registered");
     }

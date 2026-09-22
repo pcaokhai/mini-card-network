@@ -5,9 +5,9 @@ import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
 
 /**
- * Ruling (docs/plans/MCN-302a.md): a would-be approval (nothing upstream declined) sets RC 96
- * with an honest placeholder reason rather than fabricating RC 00 - real ledger posting is
- * MCN-302b. Never overwrites a decline an earlier participant already set.
+ * Ruling (docs/plans/MCN-302a.md): a would-be approval (nothing upstream declined) sets RC 96 with
+ * an honest placeholder reason rather than fabricating RC 00 - real ledger posting is MCN-302b.
+ * Never overwrites a decline an earlier participant already set.
  */
 public class Authorize implements TransactionParticipant {
 

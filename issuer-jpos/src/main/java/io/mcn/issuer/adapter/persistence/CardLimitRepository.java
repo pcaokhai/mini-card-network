@@ -7,9 +7,9 @@ import java.util.List;
 import javax.sql.DataSource;
 
 /**
- * Reads {@code card_limit} (ceilings) and {@code velocity_counter} (today's usage). MCN-301
- * didn't need these; added here rather than growing scope back into that story since CheckLimits
- * is this story's own scope.
+ * Reads {@code card_limit} (ceilings) and {@code velocity_counter} (today's usage). MCN-301 didn't
+ * need these; added here rather than growing scope back into that story since CheckLimits is this
+ * story's own scope.
  */
 public class CardLimitRepository {
   private final DataSource dataSource;
@@ -33,7 +33,8 @@ public class CardLimitRepository {
         Long maxAmount = rs.wasNull() ? null : rawMaxAmount;
         int rawMaxCount = rs.getInt("max_count");
         Integer maxCount = rs.wasNull() ? null : rawMaxCount;
-        limits.add(new CardLimit(rs.getString("tran_type"), rs.getString("period"), maxAmount, maxCount));
+        limits.add(
+            new CardLimit(rs.getString("tran_type"), rs.getString("period"), maxAmount, maxCount));
       }
       return limits;
     } catch (SQLException e) {

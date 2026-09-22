@@ -14,7 +14,8 @@ class AuthorizeTest {
 
     int result = new Authorize().prepare(1L, ctx);
 
-    assertThat(result & PREPARED).isEqualTo(PREPARED); // not aborted - flows to LogAndOutbox/Respond
+    assertThat(result & PREPARED)
+        .isEqualTo(PREPARED); // not aborted - flows to LogAndOutbox/Respond
     assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("96");
     assertThat(ctx.<String>get(TxnContextKeys.DECLINE_REASON))
         .isEqualTo("ledger posting not implemented until MCN-302b");

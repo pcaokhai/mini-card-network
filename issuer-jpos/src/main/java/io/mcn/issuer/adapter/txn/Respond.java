@@ -4,15 +4,17 @@ import java.io.Serializable;
 import org.jpos.iso.ISOException;
 import org.jpos.iso.ISOMsg;
 import org.jpos.iso.ISOSource;
+import org.jpos.transaction.AbortParticipant;
 import org.jpos.transaction.Context;
-import org.jpos.transaction.TransactionParticipant;
 
 /**
  * Builds the 0210 response and sends it via the {@link ISOSource} stored in the context. A
  * duplicate replays the stored response's DE 38/39/4/54 verbatim (docs/03 §7.5) instead of
- * rebuilding them.
+ * rebuilding them. Implements {@link AbortParticipant} and overrides {@code abort()} for the same
+ * reason as {@code LogAndOutbox}: a decline earlier in the chain makes the whole transaction abort,
+ * and every declined request still needs a response sent.
  */
-public class Respond implements TransactionParticipant {
+public class Respond implements AbortParticipant {
 
   @Override
   public int prepare(long id, Serializable context) {
@@ -21,6 +23,15 @@ public class Respond implements TransactionParticipant {
 
   @Override
   public void commit(long id, Serializable context) {
+    send(context);
+  }
+
+  @Override
+  public void abort(long id, Serializable context) {
+    send(context);
+  }
+
+  private void send(Serializable context) {
     Context ctx = (Context) context;
     ISOSource source = ctx.get(TxnContextKeys.SOURCE);
     if (source == null) {

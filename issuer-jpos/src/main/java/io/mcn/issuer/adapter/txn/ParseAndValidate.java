@@ -8,9 +8,9 @@ import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
 
 /**
- * Validates the parsed request against {@code docs/03} §6 (known processing codes) and DE 4
- * (amount must be positive). Declines RC 12 (unsupported processing code) or RC 13 (invalid
- * amount); otherwise extracts the fields every later participant needs into the {@link Context}.
+ * Validates the parsed request against {@code docs/03} §6 (known processing codes) and DE 4 (amount
+ * must be positive). Declines RC 12 (unsupported processing code) or RC 13 (invalid amount);
+ * otherwise extracts the fields every later participant needs into the {@link Context}.
  */
 public class ParseAndValidate implements TransactionParticipant {
 

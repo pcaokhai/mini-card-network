@@ -1,5 +1,6 @@
 package io.mcn.issuer.adapter.txn;
 
+import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRow;
 import java.io.Serializable;
@@ -10,15 +11,17 @@ import org.jpos.core.ConfigurationException;
 import org.jpos.iso.ISOMsg;
 import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
+import org.jpos.util.Destroyable;
 
 /**
  * Looks up {@code tran_log}'s dedupe key (docs/05 §6, {@code uq_tran_dedupe}). A hit is not an
  * abort: it flows through unchanged so {@code Respond} can replay the stored outcome verbatim
  * (docs/03 §7.5) instead of re-processing the request.
  */
-public class Deduplicate implements TransactionParticipant, Configurable {
+public class Deduplicate implements TransactionParticipant, Configurable, Destroyable {
 
   private TranLogRepository tranLogRepository;
+  private HikariDataSource dataSource;
 
   /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
   public Deduplicate() {}
@@ -29,7 +32,15 @@ public class Deduplicate implements TransactionParticipant, Configurable {
 
   @Override
   public void setConfiguration(Configuration cfg) throws ConfigurationException {
-    this.tranLogRepository = new TranLogRepository(TxnDataSource.fromConfig(cfg));
+    this.dataSource = TxnDataSource.fromConfig(cfg);
+    this.tranLogRepository = new TranLogRepository(dataSource);
+  }
+
+  @Override
+  public void destroy() {
+    if (dataSource != null) {
+      dataSource.close();
+    }
   }
 
   @Override
