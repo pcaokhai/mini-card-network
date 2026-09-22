@@ -1,6 +1,7 @@
 package io.mcn.issuer.adapter.txn;
 
 import java.io.Serializable;
+import java.time.LocalDate;
 import java.util.Set;
 import org.jpos.iso.ISOMsg;
 import org.jpos.transaction.Context;
@@ -36,8 +37,14 @@ public class ParseAndValidate implements TransactionParticipant {
 
       ctx.put(TxnContextKeys.PROCESSING_CODE, processingCode);
       ctx.put(TxnContextKeys.AMOUNT, amount);
+      // ponytail: no cutover/business-date service yet (separate epic) - wall-clock date is
+      // accurate for this story's scope (expiry check, dedupe key).
+      ctx.put(TxnContextKeys.BUSINESS_DATE, LocalDate.now());
       if (request.hasField(32)) {
         ctx.put(TxnContextKeys.ACQUIRER_ID, request.getString(32));
+      }
+      if (request.hasField(2)) {
+        ctx.put(TxnContextKeys.PAN, request.getString(2));
       }
       return PREPARED;
     } catch (Exception e) {

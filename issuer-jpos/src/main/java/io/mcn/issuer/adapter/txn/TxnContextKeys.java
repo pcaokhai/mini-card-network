@@ -14,6 +14,7 @@ public final class TxnContextKeys {
   public static final String RRN = "RRN";
   public static final String IS_DUPLICATE = "IS_DUPLICATE";
   public static final String STORED_RESPONSE = "STORED_RESPONSE";
+  public static final String PAN = "PAN";
   public static final String PAN_HASH = "PAN_HASH";
   public static final String BUSINESS_DATE = "BUSINESS_DATE";
   public static final String ACCOUNT_ID = "ACCOUNT_ID";

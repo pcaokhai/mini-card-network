@@ -45,6 +45,9 @@ public final class NetworkManagementListener extends Log
   public boolean process(ISOSource source, ISOMsg request) {
     try {
       ISOMsg response = new HandleNetworkManagement(links).handle(request);
+      if (response == null) {
+        return false; // not ours (e.g. a financial request) - let the next listener handle it
+      }
       source.send(response);
     } catch (Exception e) {
       warn("failed to handle request, responding RC 96", e);

@@ -1,10 +1,14 @@
 package io.mcn.issuer.adapter.txn;
 
+import io.mcn.issuer.adapter.crypto.CardCrypto;
 import io.mcn.issuer.adapter.persistence.Card;
 import io.mcn.issuer.adapter.persistence.CardRepository;
 import java.io.Serializable;
 import java.time.LocalDate;
 import java.time.YearMonth;
+import org.jpos.core.Configurable;
+import org.jpos.core.Configuration;
+import org.jpos.core.ConfigurationException;
 import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
 
@@ -12,18 +16,38 @@ import org.jpos.transaction.TransactionParticipant;
  * Looks up the card by PAN hash and declines RC 14 (unknown), RC 62 (blocked/lost/stolen) or RC
  * 54 (expired card, DE 14 YYMM semantics: expired once the business date's YYMM exceeds it).
  */
-public class CheckCard implements TransactionParticipant {
+public class CheckCard implements TransactionParticipant, Configurable {
 
-  private final CardRepository cardRepository;
+  private CardRepository cardRepository;
+  private CardCrypto cardCrypto;
+
+  /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
+  public CheckCard() {}
 
   public CheckCard(CardRepository cardRepository) {
     this.cardRepository = cardRepository;
+  }
+
+  public CheckCard(CardRepository cardRepository, CardCrypto cardCrypto) {
+    this.cardRepository = cardRepository;
+    this.cardCrypto = cardCrypto;
+  }
+
+  @Override
+  public void setConfiguration(Configuration cfg) throws ConfigurationException {
+    this.cardRepository = new CardRepository(TxnDataSource.fromConfig(cfg));
+    this.cardCrypto =
+        new CardCrypto(System.getenv("PAN_ENCRYPTION_KEY_HEX"), System.getenv("PAN_HMAC_KEY_HEX"));
   }
 
   @Override
   public int prepare(long id, Serializable context) {
     Context ctx = (Context) context;
     byte[] panHash = ctx.get(TxnContextKeys.PAN_HASH);
+    if (panHash == null) {
+      String pan = ctx.get(TxnContextKeys.PAN);
+      panHash = cardCrypto.hash(pan);
+    }
 
     var found = cardRepository.findByPanHash(panHash);
     if (found.isEmpty()) {

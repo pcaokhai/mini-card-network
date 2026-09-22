@@ -4,6 +4,9 @@ import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRow;
 import java.io.Serializable;
 import java.time.LocalDate;
+import org.jpos.core.Configurable;
+import org.jpos.core.Configuration;
+import org.jpos.core.ConfigurationException;
 import org.jpos.iso.ISOMsg;
 import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
@@ -13,12 +16,20 @@ import org.jpos.transaction.TransactionParticipant;
  * abort: it flows through unchanged so {@code Respond} can replay the stored outcome verbatim
  * (docs/03 §7.5) instead of re-processing the request.
  */
-public class Deduplicate implements TransactionParticipant {
+public class Deduplicate implements TransactionParticipant, Configurable {
 
-  private final TranLogRepository tranLogRepository;
+  private TranLogRepository tranLogRepository;
+
+  /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
+  public Deduplicate() {}
 
   public Deduplicate(TranLogRepository tranLogRepository) {
     this.tranLogRepository = tranLogRepository;
+  }
+
+  @Override
+  public void setConfiguration(Configuration cfg) throws ConfigurationException {
+    this.tranLogRepository = new TranLogRepository(TxnDataSource.fromConfig(cfg));
   }
 
   @Override

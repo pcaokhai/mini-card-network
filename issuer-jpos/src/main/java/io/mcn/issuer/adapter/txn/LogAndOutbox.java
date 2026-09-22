@@ -5,6 +5,9 @@ import io.mcn.issuer.adapter.persistence.TranLogRow;
 import java.io.Serializable;
 import java.time.LocalDate;
 import java.util.Map;
+import org.jpos.core.Configurable;
+import org.jpos.core.Configuration;
+import org.jpos.core.ConfigurationException;
 import org.jpos.iso.ISOMsg;
 import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
@@ -15,7 +18,7 @@ import org.jpos.transaction.TransactionParticipant;
  * the write only happens once the transaction is really finishing. A duplicate hit is not
  * re-logged (the row already exists; re-inserting would violate {@code uq_tran_dedupe}).
  */
-public class LogAndOutbox implements TransactionParticipant {
+public class LogAndOutbox implements TransactionParticipant, Configurable {
 
   private static final Map<String, String> TRAN_TYPE_BY_PROCESSING_CODE =
       Map.of(
@@ -24,10 +27,18 @@ public class LogAndOutbox implements TransactionParticipant {
           "200000", "REFUND",
           "310000", "BALANCE");
 
-  private final TranLogRepository tranLogRepository;
+  private TranLogRepository tranLogRepository;
+
+  /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
+  public LogAndOutbox() {}
 
   public LogAndOutbox(TranLogRepository tranLogRepository) {
     this.tranLogRepository = tranLogRepository;
+  }
+
+  @Override
+  public void setConfiguration(Configuration cfg) throws ConfigurationException {
+    this.tranLogRepository = new TranLogRepository(TxnDataSource.fromConfig(cfg));
   }
 
   @Override
