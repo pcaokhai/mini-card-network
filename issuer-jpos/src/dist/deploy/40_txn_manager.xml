@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Authorization TransactionManager (MCN-302a). Participants run in this exact order per
+  Authorization TransactionManager (MCN-302a/302b). Participants run in this exact order per
   docs/06-user-stories.md MCN-302 and issuer-jpos/CLAUDE.md: ParseAndValidate -> Deduplicate ->
-  CheckCard -> VerifySecurity (no-op until E5) -> CheckLimits -> Authorize (decline-only until
-  MCN-302b) -> LogAndOutbox -> Respond. AuthorizationListener looks this bean up by name
-  ("iso-txn-mgr") via NameRegistrar once it's registered in startService().
+  CheckCard -> LogAndOutbox -> VerifySecurity (no-op until E5) -> CheckLimits -> Authorize ->
+  Respond. LogAndOutbox moved before VerifySecurity/CheckLimits/Authorize in MCN-302b: its
+  prepare() now inserts the tran_log row up front (status RECEIVED) so Authorize has an
+  already-committed row to post its journal_entry against (journal_entry.tran_id has a real,
+  non-deferred FK to tran_log) - see LogAndOutbox's class javadoc. Its commit()/abort() still run
+  in the finalize phase regardless of this XML position and record the final outcome.
+  AuthorizationListener looks this bean up by name ("iso-txn-mgr") via NameRegistrar once it's
+  registered in startService().
 -->
 <txnmgr name="iso-txn-mgr" class="org.jpos.transaction.TransactionManager" logger="Q2">
   <property name="queue" value="iso-txn-mgr-queue" />
@@ -25,6 +30,12 @@
     <property name="jdbc-password" value="${DB_PASSWORD}" />
   </participant>
 
+  <participant class="io.mcn.issuer.adapter.txn.LogAndOutbox" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+  </participant>
+
   <participant class="io.mcn.issuer.adapter.txn.VerifySecurity" logger="Q2" />
 
   <participant class="io.mcn.issuer.adapter.txn.CheckLimits" logger="Q2">
@@ -33,9 +44,7 @@
     <property name="jdbc-password" value="${DB_PASSWORD}" />
   </participant>
 
-  <participant class="io.mcn.issuer.adapter.txn.Authorize" logger="Q2" />
-
-  <participant class="io.mcn.issuer.adapter.txn.LogAndOutbox" logger="Q2">
+  <participant class="io.mcn.issuer.adapter.txn.Authorize" logger="Q2">
     <property name="jdbc-url" value="${DATABASE_URL}" />
     <property name="jdbc-user" value="${DB_USER}" />
     <property name="jdbc-password" value="${DB_PASSWORD}" />

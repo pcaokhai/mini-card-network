@@ -15,6 +15,12 @@ public final class TestDataSources {
     cfg.setJdbcUrl(postgres.getJdbcUrl());
     cfg.setUsername(postgres.getUsername());
     cfg.setPassword(postgres.getPassword());
+    // Hikari's default pool (10) is smaller than ConcurrentPurchaseLoadTest's 50-thread client
+    // pool: every caller serializes on the account's row lock anyway, but with too few
+    // connections most threads also queue for a *connection* before they even reach that lock,
+    // stacking Hikari's connectionTimeout wait on top of real DB latency and blowing the test's
+    // p99 budget on busier hardware (e.g. CI) even though the ledger invariants stay correct.
+    cfg.setMaximumPoolSize(50);
     DataSource ds = new HikariDataSource(cfg);
     Flyway.configure().dataSource(ds).load().migrate();
     return ds;

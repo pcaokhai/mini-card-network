@@ -48,6 +48,7 @@ class DeduplicateTest {
             null,
             "APPROVED",
             "00",
+            "A1B2C3",
             null);
     when(repo.findByDedupeKey(any(), any(), any(), any(), any(), any()))
         .thenReturn(java.util.Optional.of(stored));

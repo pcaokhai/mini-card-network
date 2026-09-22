@@ -19,10 +19,10 @@ public class TranLogRepository {
         """
         INSERT INTO tran_log (business_date, mti, tran_type, processing_code, acquirer_id, tid,
                                mid, stan, transmission_dt_raw, transmission_at, rrn, amount,
-                               currency, card_id, status, response_code, decline_reason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""";
+                               currency, card_id, status, response_code, auth_code, decline_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""";
     try (var conn = dataSource.getConnection();
-        var stmt = conn.prepareStatement(sql)) {
+        var stmt = conn.prepareStatement(sql, java.sql.Statement.RETURN_GENERATED_KEYS)) {
       stmt.setObject(1, row.businessDate());
       stmt.setString(2, row.mti());
       stmt.setString(3, row.tranType());
@@ -43,11 +43,45 @@ public class TranLogRepository {
       }
       stmt.setString(15, row.status());
       stmt.setString(16, row.responseCode());
-      stmt.setString(17, row.declineReason());
+      stmt.setString(17, row.authCode());
+      stmt.setString(18, row.declineReason());
       stmt.executeUpdate();
-      return 0L;
+      var keys = stmt.getGeneratedKeys();
+      keys.next();
+      return keys.getLong(1);
     } catch (SQLException e) {
       throw new IllegalStateException("insert tran_log failed", e);
+    }
+  }
+
+  /**
+   * Finalizes a {@code tran_log} row {@link #insert} already created (status {@code RECEIVED}) once
+   * the outcome is known - used by {@code LogAndOutbox} when the chain reached far enough to have
+   * logged the attempt before the outcome was decided (e.g. by {@code Authorize}).
+   */
+  public void updateOutcome(
+      long tranId,
+      LocalDate businessDate,
+      String status,
+      String responseCode,
+      String authCode,
+      String declineReason) {
+    String sql =
+        """
+        UPDATE tran_log SET status = ?, response_code = ?, auth_code = ?, decline_reason = ?,
+                             updated_at = now()
+        WHERE id = ? AND business_date = ?""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, status);
+      stmt.setString(2, responseCode);
+      stmt.setString(3, authCode);
+      stmt.setString(4, declineReason);
+      stmt.setLong(5, tranId);
+      stmt.setObject(6, businessDate);
+      stmt.executeUpdate();
+    } catch (SQLException e) {
+      throw new IllegalStateException("update tran_log outcome failed", e);
     }
   }
 
@@ -62,7 +96,7 @@ public class TranLogRepository {
         """
         SELECT business_date, mti, tran_type, processing_code, acquirer_id, tid, mid, stan,
                transmission_dt_raw, rrn, amount, currency, card_id, status, response_code,
-               decline_reason
+               auth_code, decline_reason
         FROM tran_log
         WHERE acquirer_id = ? AND tid = ? AND stan = ? AND transmission_dt_raw = ?
           AND mti = ? AND business_date = ?""";
@@ -95,6 +129,7 @@ public class TranLogRepository {
               cardId,
               rs.getString("status"),
               rs.getString("response_code") == null ? null : rs.getString("response_code").trim(),
+              rs.getString("auth_code") == null ? null : rs.getString("auth_code").trim(),
               rs.getString("decline_reason")));
     } catch (SQLException e) {
       throw new IllegalStateException("find tran_log by dedupe key failed", e);
