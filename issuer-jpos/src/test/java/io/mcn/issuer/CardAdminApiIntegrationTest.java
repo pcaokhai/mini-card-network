@@ -3,6 +3,7 @@ package io.mcn.issuer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.crypto.CardCrypto;
 import io.mcn.issuer.adapter.http.CardAdminController;
 import io.mcn.issuer.adapter.http.HealthServer;
@@ -41,11 +42,12 @@ class CardAdminApiIntegrationTest {
 
   private final HttpClient client = HttpClient.newHttpClient();
   private HealthServer server;
+  private DataSource ds;
   private int port;
 
   @BeforeEach
   void start() throws Exception {
-    DataSource ds = TestDataSources.migrated(postgres);
+    ds = TestDataSources.migrated(postgres);
     var crypto =
         new CardCrypto(
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -68,6 +70,7 @@ class CardAdminApiIntegrationTest {
   @AfterEach
   void stop() {
     server.stop();
+    ((HikariDataSource) ds).close();
   }
 
   private HttpResponse<String> get(String path) throws Exception {
