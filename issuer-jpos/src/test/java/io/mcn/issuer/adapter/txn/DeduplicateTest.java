@@ -3,8 +3,10 @@ package io.mcn.issuer.adapter.txn;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.jpos.transaction.TransactionConstants.PREPARED;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
+import io.mcn.issuer.adapter.persistence.ReversalWithoutOriginalRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRow;
 import java.time.LocalDate;
@@ -61,6 +63,21 @@ class DeduplicateTest {
     assertThat(result & PREPARED).isEqualTo(PREPARED);
     assertThat(ctx.<Boolean>get(TxnContextKeys.IS_DUPLICATE)).isTrue();
     assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("00");
+  }
+
+  @Test
+  void prepare_laterOriginalForAKnownReversalWithoutOriginal_isDeclinedRC94_MCN_402_AC2() {
+    var tranLog = Mockito.mock(TranLogRepository.class);
+    var rwo = Mockito.mock(ReversalWithoutOriginalRepository.class);
+    when(rwo.findByKey(eq("0200"), eq("000001"), eq("0922120000"), eq("970499     ")))
+        .thenReturn(true);
+    Context ctx = freshContext();
+
+    int result = new Deduplicate(tranLog, rwo).prepare(1L, ctx);
+
+    assertThat(result & PREPARED).isEqualTo(PREPARED);
+    assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("94");
+    org.mockito.Mockito.verifyNoInteractions(tranLog);
   }
 
   private Context freshContext() {

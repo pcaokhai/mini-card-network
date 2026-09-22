@@ -142,13 +142,11 @@ public class TranLogRepository {
    * a business date (a reversal can arrive on a later business date than its original, per docs/03
    * §7.3, so filtering by the reversal's own business date would miss the original).
    */
-  public Optional<TranLogRow> findByReversalKey(
+  public Optional<OriginalTransactionRow> findByReversalKey(
       String originalMti, String originalStan, String originalDe7, String originalAcquirer) {
     String sql =
         """
-        SELECT business_date, mti, tran_type, processing_code, acquirer_id, tid, mid, stan,
-               transmission_dt_raw, rrn, amount, currency, card_id, status, response_code,
-               auth_code, decline_reason
+        SELECT id, business_date, card_id, amount, currency, status
         FROM tran_log
         WHERE acquirer_id = ? AND stan = ? AND transmission_dt_raw = ? AND mti = ?
         ORDER BY id DESC LIMIT 1""";
@@ -160,27 +158,14 @@ public class TranLogRepository {
       stmt.setString(4, originalMti);
       var rs = stmt.executeQuery();
       if (!rs.next()) return Optional.empty();
-      long rawCardId = rs.getLong("card_id");
-      Long cardId = rs.wasNull() ? null : rawCardId;
       return Optional.of(
-          new TranLogRow(
+          new OriginalTransactionRow(
+              rs.getLong("id"),
               rs.getObject("business_date", LocalDate.class),
-              rs.getString("mti").trim(),
-              rs.getString("tran_type"),
-              rs.getString("processing_code").trim(),
-              rs.getString("acquirer_id"),
-              rs.getString("tid").trim(),
-              rs.getString("mid"),
-              rs.getString("stan").trim(),
-              rs.getString("transmission_dt_raw").trim(),
-              rs.getString("rrn").trim(),
+              rs.getLong("card_id"),
               rs.getLong("amount"),
               rs.getString("currency").trim(),
-              cardId,
-              rs.getString("status"),
-              rs.getString("response_code") == null ? null : rs.getString("response_code").trim(),
-              rs.getString("auth_code") == null ? null : rs.getString("auth_code").trim(),
-              rs.getString("decline_reason")));
+              rs.getString("status")));
     } catch (SQLException e) {
       throw new IllegalStateException("find tran_log by reversal key failed", e);
     }
