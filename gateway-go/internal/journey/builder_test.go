@@ -71,7 +71,7 @@ func TestBuildJourney_reversalPendingIsWarnReversedIsReversalKind__MCN_401_AC1(t
 	require.Equal(t, "WARN", string(j.Steps[1].Kind))
 	require.Equal(t, "REVERSAL", string(j.Steps[2].Kind))
 	require.Equal(t, "SAF", string(j.Steps[2].Actor))
-	require.Len(t, j.Money, 2) // debit at TIMED_OUT step, refund at REVERSED step
+	require.Len(t, j.Money, 2)                       // debit at TIMED_OUT step, refund at REVERSED step
 	require.Equal(t, int64(10000), j.Money[1].Delta) // positive: money returned
 }
 

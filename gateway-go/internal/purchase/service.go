@@ -23,10 +23,10 @@ const (
 
 	tranTypePurchase = "PURCHASE"
 
-	statusCreated  = "CREATED"
-	statusSent     = "SENT"
-	statusApproved = "APPROVED"
-	statusDeclined = "DECLINED"
+	statusCreated         = "CREATED"
+	statusSent            = "SENT"
+	statusApproved        = "APPROVED"
+	statusDeclined        = "DECLINED"
 	statusTimedOut        = "TIMED_OUT"
 	statusReversalPending = "REVERSAL_PENDING"
 

@@ -6,6 +6,11 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
+const (
+	statusReversalPending = "REVERSAL_PENDING"
+	statusReversed        = "REVERSED"
+)
+
 // Actor mirrors contracts/openapi.yaml's Actor enum.
 type Actor string
 
@@ -76,7 +81,7 @@ func BuildJourney(txn store.TranLogRow, history []store.StateTransition) Journey
 		Delta:  -txn.Amount,
 		AtStep: last.Seq,
 	}}
-	if txn.Status == "REVERSED" {
+	if txn.Status == statusReversed {
 		money = append(money, MoneyRow{Label: "Refund", Delta: txn.Amount, AtStep: last.Seq})
 	}
 
@@ -109,14 +114,14 @@ func buildStep(seq int, st store.StateTransition, offsetMs int, txn store.TranLo
 			EasyText:      "Issuer did not respond in time",
 			TechnicalText: "0200 request timed out",
 		}
-	case "REVERSAL_PENDING":
+	case statusReversalPending:
 		return Step{
 			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
 			Title:         "Reversal queued",
 			EasyText:      "Reversal queued",
 			TechnicalText: "0420 enqueued in SAF",
 		}
-	case "REVERSED":
+	case statusReversed:
 		return Step{
 			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
 			Title:         "Money returned",
@@ -137,9 +142,9 @@ func buildStep(seq int, st store.StateTransition, offsetMs int, txn store.TranLo
 // acquirer sending the request, everything after SENT is the issuer's response.
 func actorFor(toStatus string) Actor {
 	switch toStatus {
-	case "SENT", "REVERSAL_PENDING":
+	case "SENT", statusReversalPending:
 		return ActorPOS
-	case "REVERSED":
+	case statusReversed:
 		return ActorSAF
 	default:
 		return ActorIssuer
@@ -152,9 +157,9 @@ func kindFor(toStatus string) StepKind {
 		return KindOK
 	case "DECLINED", "TIMED_OUT", "FAILED":
 		return KindBad
-	case "REVERSAL_PENDING":
+	case statusReversalPending:
 		return KindWarn
-	case "REVERSED":
+	case statusReversed:
 		return KindReversal
 	default:
 		return KindInfo
