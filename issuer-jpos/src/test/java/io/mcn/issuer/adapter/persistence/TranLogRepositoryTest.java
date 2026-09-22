@@ -39,6 +39,7 @@ class TranLogRepositoryTest {
             null,
             "RECEIVED",
             null,
+            null,
             null);
 
     repo.insert(row);

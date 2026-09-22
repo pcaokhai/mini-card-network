@@ -19,4 +19,6 @@ public final class TxnContextKeys {
   public static final String BUSINESS_DATE = "BUSINESS_DATE";
   public static final String ACCOUNT_ID = "ACCOUNT_ID";
   public static final String CARD_ID = "CARD_ID";
+  public static final String TRAN_ID = "TRAN_ID";
+  public static final String AUTH_CODE = "AUTH_CODE";
 }

@@ -2,7 +2,7 @@ package io.mcn.issuer.adapter.persistence;
 
 import java.time.LocalDate;
 
-/** The subset of {@code tran_log} columns MCN-302a writes; later stories extend inserts. */
+/** The subset of {@code tran_log} columns MCN-302a/302b write; later stories extend inserts. */
 public record TranLogRow(
     LocalDate businessDate,
     String mti,
@@ -19,4 +19,5 @@ public record TranLogRow(
     Long cardId,
     String status,
     String responseCode,
+    String authCode,
     String declineReason) {}

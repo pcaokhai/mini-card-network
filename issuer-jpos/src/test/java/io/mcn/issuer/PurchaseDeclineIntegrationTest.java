@@ -9,6 +9,7 @@ import io.mcn.issuer.adapter.seed.SeedLoader;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Path;
+import java.sql.ResultSet;
 import java.util.Map;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
@@ -47,6 +48,7 @@ class PurchaseDeclineIntegrationTest {
   private static Q2 q2;
   private static int port;
   private static GenericPackager packager;
+  private static DataSource dataSource;
 
   private static int freePort() throws Exception {
     try (ServerSocket s = new ServerSocket(0)) {
@@ -60,7 +62,7 @@ class PurchaseDeclineIntegrationTest {
     cfg.setJdbcUrl(postgres.getJdbcUrl());
     cfg.setUsername(postgres.getUsername());
     cfg.setPassword(postgres.getPassword());
-    DataSource dataSource = new HikariDataSource(cfg);
+    dataSource = new HikariDataSource(cfg);
     Flyway.configure().dataSource(dataSource).load().migrate();
     new SeedLoader()
         .load(
@@ -186,10 +188,72 @@ class PurchaseDeclineIntegrationTest {
 
   @Test
   @Order(5)
-  void wouldBeApprovalRespondsRc96WithLedgerNotImplementedReason() throws Exception {
+  void sufficientFundsIsReallyApprovedWithAuthCode() throws Exception {
+    // MCN-302b replaces the RC-96 placeholder with a real approval and a balanced double-entry
+    // journal (journal_entry + two ledger_posting rows), asserted directly against the DB here.
+    long accountId = accountIdByAccountNo("ACC-crd_normal0001");
+    long before = accountBalance(accountId);
+    long journalsBefore = balancedJournalCount(accountId);
+
     ISOMsg response = purchase(6, "9704360000004417", 10000L);
 
-    // per this story's Ruling, a would-be approval is RC 96, not RC 00 (302b implements approval)
-    assertThat(response.getString(39)).isEqualTo("96");
+    assertThat(response.getString(39)).isEqualTo("00");
+    assertThat(response.getString(38)).hasSize(6);
+    assertThat(accountBalance(accountId)).isEqualTo(before - 10000L);
+    assertThat(balancedJournalCount(accountId)).isEqualTo(journalsBefore + 1);
+  }
+
+  @Test
+  @Order(6)
+  void purchaseExceedingBalanceIsDeclinedRc51WithoutPostingLedger() throws Exception {
+    // tok_low (ACC-crd_lowbal0002) seeded at 80,000 minor units, already debited 10,000 by
+    // duplicateRequestReplaysStoredResponse (Order 4) - request well above what remains.
+    long accountId = accountIdByAccountNo("ACC-crd_lowbal0002");
+    long before = accountBalance(accountId);
+    long journalsBefore = balancedJournalCount(accountId);
+
+    ISOMsg response = purchase(7, "9704360000009021", 500000L);
+
+    assertThat(response.getString(39)).isEqualTo("51");
+    assertThat(accountBalance(accountId)).isEqualTo(before);
+    assertThat(balancedJournalCount(accountId)).isEqualTo(journalsBefore);
+  }
+
+  private static long accountIdByAccountNo(String accountNo) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement("SELECT id FROM account WHERE account_no = ?")) {
+      stmt.setString(1, accountNo);
+      try (ResultSet rs = stmt.executeQuery()) {
+        rs.next();
+        return rs.getLong(1);
+      }
+    }
+  }
+
+  private static long accountBalance(long accountId) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement("SELECT available_balance FROM account WHERE id = ?")) {
+      stmt.setLong(1, accountId);
+      try (ResultSet rs = stmt.executeQuery()) {
+        rs.next();
+        return rs.getLong(1);
+      }
+    }
+  }
+
+  private static long balancedJournalCount(long accountId) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt =
+            conn.prepareStatement(
+                """
+                SELECT count(DISTINCT lp.journal_id)
+                FROM ledger_posting lp
+                WHERE lp.account_id = ? AND lp.direction = 'D'""")) {
+      stmt.setLong(1, accountId);
+      try (ResultSet rs = stmt.executeQuery()) {
+        rs.next();
+        return rs.getLong(1);
+      }
+    }
   }
 }

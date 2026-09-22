@@ -61,6 +61,10 @@ public class Respond implements AbortParticipant {
     }
 
     response.set(39, ctx.<String>get(TxnContextKeys.RESPONSE_CODE));
+    String authCode = ctx.get(TxnContextKeys.AUTH_CODE);
+    if (authCode != null) {
+      response.set(38, authCode);
+    }
     return response;
   }
 
