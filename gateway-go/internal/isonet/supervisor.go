@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/mcn/gateway-go/internal/iso8583"
 	"github.com/mcn/gateway-go/internal/obs"
 )
 
@@ -32,7 +31,7 @@ const endpointName = "issuer" // v1 has exactly one link; the switch (Sprint 10)
 type Supervisor struct {
 	cfg   Config
 	store LinkStore
-	stan  int
+	mux   *Mux
 }
 
 // NewSupervisor builds a Supervisor that reports link state through store.
@@ -82,7 +81,15 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	defer func() { _ = conn.Close() }()
 	_ = s.store.SetStatus(ctx, endpointName, "CONNECTED")
 
-	if err := s.signOn(conn); err != nil {
+	mux := NewMux(conn)
+	mux.OnLateResponse(func(string, map[int]string) { obs.LateResponseTotal.Inc() })
+	serveCtx, cancelServe := context.WithCancel(ctx)
+	defer cancelServe()
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- mux.Serve(serveCtx) }()
+
+	s.mux = mux
+	if err := s.signOn(ctx); err != nil {
 		return err
 	}
 	obs.LinkUp.WithLabelValues(endpointName).Set(1)
@@ -95,10 +102,14 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = s.signOff(conn)
+			signOffCtx, cancel := context.WithTimeout(context.Background(), s.cfg.EchoTimeout)
+			_ = s.signOff(signOffCtx) //nolint:contextcheck // deliberately detached: ctx is already Done, sign-off still needs to send
+			cancel()
 			return nil
+		case err := <-serveErr:
+			return err
 		case <-ticker.C:
-			latency, err := s.echo(conn)
+			latency, err := s.echo(ctx)
 			if err != nil {
 				failures++
 				if failures >= s.cfg.EchoFailureLimit {
@@ -112,38 +123,8 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	}
 }
 
-func (s *Supervisor) nextStan() string {
-	s.stan++
-	return padSTAN(s.stan)
-}
-
-func padSTAN(n int) string {
-	digits := []byte("000000")
-	for i := len(digits) - 1; n > 0; i-- {
-		digits[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(digits)
-}
-
-func (s *Supervisor) sendReceive(conn net.Conn, mti string, fields map[int]string) (map[int]string, error) {
-	packed, err := iso8583.Pack(mti, fields)
-	if err != nil {
-		return nil, err
-	}
-	if err := WriteFrame(conn, []byte(packed)); err != nil {
-		return nil, err
-	}
-	resp, err := ReadFrame(conn)
-	if err != nil {
-		return nil, err
-	}
-	_, respFields, err := iso8583.Unpack(string(resp))
-	return respFields, err
-}
-
-func (s *Supervisor) signOn(conn net.Conn) error {
-	fields, err := s.sendReceive(conn, "0800", map[int]string{7: nowDE7(), 11: s.nextStan(), 70: "001"})
+func (s *Supervisor) signOn(ctx context.Context) error {
+	fields, err := s.mux.Send(ctx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "001"})
 	if err != nil {
 		return err
 	}
@@ -153,18 +134,16 @@ func (s *Supervisor) signOn(conn net.Conn) error {
 	return nil
 }
 
-func (s *Supervisor) signOff(conn net.Conn) error {
-	_, err := s.sendReceive(conn, "0800", map[int]string{7: nowDE7(), 11: s.nextStan(), 70: "002"})
+func (s *Supervisor) signOff(ctx context.Context) error {
+	_, err := s.mux.Send(ctx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "002"})
 	return err
 }
 
-func (s *Supervisor) echo(conn net.Conn) (time.Duration, error) {
+func (s *Supervisor) echo(ctx context.Context) (time.Duration, error) {
 	start := time.Now()
-	if err := conn.SetDeadline(start.Add(s.cfg.EchoTimeout)); err != nil {
-		return 0, err
-	}
-	defer func() { _ = conn.SetDeadline(time.Time{}) }()
-	fields, err := s.sendReceive(conn, "0800", map[int]string{7: nowDE7(), 11: s.nextStan(), 70: "301"})
+	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.EchoTimeout)
+	defer cancel()
+	fields, err := s.mux.Send(sendCtx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "301"})
 	if err != nil {
 		return 0, err
 	}
