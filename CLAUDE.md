@@ -58,10 +58,12 @@ Every story follows this sequence. Do not skip steps; do not reorder.
 4. **subagent-driven-development** (default) or **executing-plans** (small or tightly coupled stories).
 5. **test-driven-development** — RED → GREEN → REFACTOR for every behavior change. No production code without a failing test first.
 6. **verification-before-completion** — run the verification commands and paste real output before saying "done", "fixed" or "passing".
-7. **requesting-code-review** → **receiving-code-review** — review against §6, the story AC and the ISO spec.
+7. **Review, solo-project shape.** This is a solo-operated lab repo with no human reviewer and no PR-review branch protection — a human `requesting-code-review`/`receiving-code-review` cycle does not happen. What actually substitutes: the orchestrating session independently rebuilds and re-runs the real verification commands after every rebase, before merging, never trusting a subagent's self-report alone. For a security-sensitive change (auth, PAN handling, key material, the ledger), explicitly dispatch a **code-reviewer** agent against the diff before merge — don't skip that for those cases the way ordinary stories skip human review.
 8. **finishing-a-development-branch** — rebase on `main`, green CI, squash-merge with a Conventional Commit title.
 
 Bugs and failing tests: **systematic-debugging** first. Reproduce, find the root cause, add a regression test, then fix. Never guess-fix.
+
+This project does not require the global workflow's "Research & Reuse" step (GitHub/package-registry search before implementing) — across 20 stories in Sprints 0–4 it was never once performed and never once missed: this codebase's logic (ISO 8583 framing, the authorization chain, the ledger) is domain-specific enough that there's rarely an existing implementation to fork, and the one place genuine reuse matters — both ISO 8583 codecs generated from one shared `contracts/iso8583/packager-spec.yaml` — is already covered by ADR-003, not by a per-story search step. Go straight from the story's AC to `writing-plans`.
 
 ## 5. Parallel work rules
 
@@ -94,7 +96,7 @@ Non-negotiable. A violation blocks merge.
 11. **Config** through environment variables with typed validation at startup; no secrets in the repo; fail fast on invalid config.
 12. **Readable code.** Intention-revealing names from the glossary, functions under ~30 lines, no comments that restate code, comments explain *why*. Public APIs documented.
 13. **Tests.** Unit tests for domain logic, integration tests with Testcontainers for adapters, contract tests at every boundary, golden vectors for ISO. Coverage gates in `docs/08-test-strategy.md`. No `@Disabled` / `t.Skip` / `.skip` without an issue link.
-14. **PR hygiene.** One story per PR, under ~400 changed lines excluding generated code, Conventional Commits, PR template filled.
+14. **PR hygiene.** One story per PR, Conventional Commits, PR template filled. No hard line-count cap: every Sprint 3–4 PR ran 700–1700 changed lines (a subagent builds a whole story — schema, repositories, handlers, tests — in one pass) and none were split further without harm. Split a PR only when it genuinely crosses more than one lane/service, not to hit a line-count number.
 15. **Generated code** (OpenAPI clients/servers, sqlc, jOOQ if adopted) is never edited by hand. Change the source and regenerate.
 
 ## 7. Definition of Done (per story)
