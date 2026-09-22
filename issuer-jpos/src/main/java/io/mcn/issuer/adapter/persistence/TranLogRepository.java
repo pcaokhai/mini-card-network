@@ -135,4 +135,68 @@ public class TranLogRepository {
       throw new IllegalStateException("find tran_log by dedupe key failed", e);
     }
   }
+
+  /**
+   * Locates the original transaction a reversal's DE 90 refers to. Unlike {@link
+   * #findByDedupeKey}, this never filters on {@code tid} (DE 90 carries no TID, docs/03 §7.3) or on
+   * a business date (a reversal can arrive on a later business date than its original, per docs/03
+   * §7.3, so filtering by the reversal's own business date would miss the original).
+   */
+  public Optional<TranLogRow> findByReversalKey(
+      String originalMti, String originalStan, String originalDe7, String originalAcquirer) {
+    String sql =
+        """
+        SELECT business_date, mti, tran_type, processing_code, acquirer_id, tid, mid, stan,
+               transmission_dt_raw, rrn, amount, currency, card_id, status, response_code,
+               auth_code, decline_reason
+        FROM tran_log
+        WHERE acquirer_id = ? AND stan = ? AND transmission_dt_raw = ? AND mti = ?
+        ORDER BY id DESC LIMIT 1""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, originalAcquirer);
+      stmt.setString(2, originalStan);
+      stmt.setString(3, originalDe7);
+      stmt.setString(4, originalMti);
+      var rs = stmt.executeQuery();
+      if (!rs.next()) return Optional.empty();
+      long rawCardId = rs.getLong("card_id");
+      Long cardId = rs.wasNull() ? null : rawCardId;
+      return Optional.of(
+          new TranLogRow(
+              rs.getObject("business_date", LocalDate.class),
+              rs.getString("mti").trim(),
+              rs.getString("tran_type"),
+              rs.getString("processing_code").trim(),
+              rs.getString("acquirer_id"),
+              rs.getString("tid").trim(),
+              rs.getString("mid"),
+              rs.getString("stan").trim(),
+              rs.getString("transmission_dt_raw").trim(),
+              rs.getString("rrn").trim(),
+              rs.getLong("amount"),
+              rs.getString("currency").trim(),
+              cardId,
+              rs.getString("status"),
+              rs.getString("response_code") == null ? null : rs.getString("response_code").trim(),
+              rs.getString("auth_code") == null ? null : rs.getString("auth_code").trim(),
+              rs.getString("decline_reason")));
+    } catch (SQLException e) {
+      throw new IllegalStateException("find tran_log by reversal key failed", e);
+    }
+  }
+
+  /** Marks the original transaction's row {@code REVERSED} once its reversing journal is posted. */
+  public void markReversed(long tranId, LocalDate businessDate) {
+    String sql =
+        "UPDATE tran_log SET status = 'REVERSED', updated_at = now() WHERE id = ? AND business_date = ?";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, tranId);
+      stmt.setObject(2, businessDate);
+      stmt.executeUpdate();
+    } catch (SQLException e) {
+      throw new IllegalStateException("mark tran_log reversed failed", e);
+    }
+  }
 }
