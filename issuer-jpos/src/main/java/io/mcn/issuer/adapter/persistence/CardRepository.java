@@ -43,7 +43,8 @@ public class CardRepository {
   }
 
   public Optional<Card> findByPanHash(byte[] panHash) {
-    String sql = "SELECT id, account_id, bin, pan_last4, expiry_yymm, status FROM card WHERE pan_hash = ?";
+    String sql =
+        "SELECT id, account_id, bin, pan_last4, expiry_yymm, status FROM card WHERE pan_hash = ?";
     try (var conn = dataSource.getConnection();
         var stmt = conn.prepareStatement(sql)) {
       stmt.setBytes(1, panHash);

@@ -34,7 +34,12 @@ tasks.named("compileJava") { dependsOn(generatePackager) }
 tasks.named("test") { dependsOn(generatePackager) }
 
 application { mainClass = "org.jpos.q2.Q2" }
-tasks.named<JavaExec>("run") { workingDir = file("src/dist") }
+tasks.named<JavaExec>("run") {
+    workingDir = file("src/dist")
+    // `make seed` overrides mainClass to run SeedMain instead of the Q2 server (ponytail: a
+    // gradle run override, not a second Q2 deploy descriptor - seed never touches production).
+    project.findProperty("mainClass")?.let { mainClass.set(it as String) }
+}
 // The application plugin already merges src/dist into the distribution by convention;
 // declaring it again here made distTar/distZip see every file twice.
 tasks.test { useJUnitPlatform() }

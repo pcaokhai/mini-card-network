@@ -25,7 +25,8 @@ class CardRepositoryTest {
 
     long accountId = accounts.insert("ACC-0001", "704", 5_000_000L);
     byte[] panHash = "hash-bytes-not-real-crypto-here".getBytes();
-    long cardId = cards.insert(accountId, "enc".getBytes(), panHash, "970436", "4417", "2811", "ACTIVE");
+    long cardId =
+        cards.insert(accountId, "enc".getBytes(), panHash, "970436", "4417", "2811", "ACTIVE");
 
     var found = cards.findByPanHash(panHash);
     assertThat(found).isPresent();

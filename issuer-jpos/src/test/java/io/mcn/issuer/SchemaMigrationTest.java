@@ -38,7 +38,8 @@ class SchemaMigrationTest {
     try (Connection c = ds.getConnection();
         Statement st = c.createStatement()) {
       ResultSet rs =
-          st.executeQuery("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'");
+          st.executeQuery(
+              "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'");
       Set<String> tables = new HashSet<>();
       while (rs.next()) tables.add(rs.getString(1));
       assertThat(tables)

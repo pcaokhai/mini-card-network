@@ -35,7 +35,10 @@ public class CardCrypto {
       Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
       cipher.init(Cipher.ENCRYPT_MODE, encryptionKey, new GCMParameterSpec(GCM_TAG_BITS, nonce));
       byte[] ciphertext = cipher.doFinal(pan.getBytes(StandardCharsets.UTF_8));
-      return ByteBuffer.allocate(nonce.length + ciphertext.length).put(nonce).put(ciphertext).array();
+      return ByteBuffer.allocate(nonce.length + ciphertext.length)
+          .put(nonce)
+          .put(ciphertext)
+          .array();
     } catch (Exception e) {
       throw new IllegalStateException("PAN encryption failed", e);
     }
