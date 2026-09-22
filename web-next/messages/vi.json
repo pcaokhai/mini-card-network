@@ -187,6 +187,58 @@
       "staleCard": "Someone changed this card. Reload to continue."
     }
   },
+  "chaos": {
+    "heading": "Phòng thí nghiệm sự cố",
+    "activeCount": "{count} đang bật",
+    "runControl": {
+      "label": "Số giao dịch chạy",
+      "button": "Chạy giao dịch"
+    },
+    "money": {
+      "heading": "Đối soát tiền",
+      "opening": "Số dư đầu kỳ",
+      "closing": "Số dư cuối kỳ",
+      "discrepancy": "Chênh lệch",
+      "discrepancyRun": "Phát hiện chênh lệch trong lần chạy {runId}",
+      "empty": "Bắt đầu một lần chạy để đối soát tiền"
+    },
+    "reaction": {
+      "heading": "Hệ thống sẽ làm gì",
+      "empty": "Không có kịch bản sự cố nào đang bật"
+    },
+    "scenarios": {
+      "SLOW_NETWORK": {
+        "easyText": "Mạng chậm",
+        "technicalText": "Thêm 3000ms độ trễ cho mỗi lệnh gọi từ gateway đến issuer",
+        "reaction": "Giao dịch vẫn hoàn tất, chỉ chậm hơn — không rủi ro về tiền"
+      },
+      "CONNECTION_CUT": {
+        "easyText": "Đứt kết nối",
+        "technicalText": "Kết nối TCP tới issuer bị đóng giữa chừng khi đang xử lý",
+        "reaction": "Gateway không biết issuer đã nhận request hay chưa, nên xếp hàng một lệnh đảo (reversal) thay vì thử lại một cách mù quáng"
+      },
+      "DROP_RESPONSE": {
+        "easyText": "Mất phản hồi",
+        "technicalText": "Issuer xử lý xong nhưng phản hồi bị hủy trước khi tới gateway",
+        "reaction": "Gateway hết thời gian chờ, coi kết quả là chưa rõ, và gửi một lệnh đảo để đảm bảo an toàn"
+      },
+      "DUPLICATE_REQUEST": {
+        "easyText": "Yêu cầu trùng lặp",
+        "technicalText": "Cùng một request được gửi hai lần với cùng STAN/RRN",
+        "reaction": "Issuer nhận ra bản trùng lặp và trả lại kết quả gốc thay vì xử lý lại lần nữa"
+      },
+      "ISSUER_DOWN": {
+        "easyText": "Issuer ngừng hoạt động",
+        "technicalText": "Kết nối tới issuer bị reset và luôn không khả dụng",
+        "reaction": "Xử lý dự phòng (stand-in) tiếp quản, tự động duyệt các giao dịch nhỏ trong hạn mức đã đặt trước"
+      },
+      "LATE_RESPONSE": {
+        "easyText": "Phản hồi trễ",
+        "technicalText": "Issuer trả lời sau khi gateway đã hết thời gian chờ",
+        "reaction": "Gateway đã gửi lệnh đảo trước đó, nên phản hồi trễ này bị bỏ qua"
+      }
+    }
+  },
   "journey": {
     "title": "Hành trình giao dịch",
     "controls": {
