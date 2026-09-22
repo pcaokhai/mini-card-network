@@ -16,8 +16,8 @@ public final class JdbcAcquirerLinkRepository implements AcquirerLinkRepository 
     String sql =
         "INSERT INTO acquirer_link (acquirer_id, status, updated_at) VALUES (?, ?, now()) "
             + "ON CONFLICT (acquirer_id) DO UPDATE SET status = excluded.status, updated_at = now(), "
-            + "last_sign_on_at = CASE WHEN excluded.status = 'SIGNED_ON' THEN now() ELSE"
-            + " acquirer_link.last_sign_on_at END";
+            + "signed_on_at = CASE WHEN excluded.status = 'SIGNED_ON' THEN now() ELSE"
+            + " acquirer_link.signed_on_at END";
     try (var conn = dataSource.getConnection();
         var stmt = conn.prepareStatement(sql)) {
       stmt.setString(1, acquirerId);
