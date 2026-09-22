@@ -54,14 +54,18 @@ export function LiveFeed({ expertMode = false }: { expertMode?: boolean }) {
   return (
     <div>
       <h2 className="mb-2 text-lg font-semibold">{t("heading")}</h2>
-      <ul aria-label={t("heading")} className="space-y-1">
+      <ul aria-label={t("heading")} data-testid="live-feed-list" className="space-y-1">
         {rows.length === 0 && <li className="text-sm text-muted">{t("empty")}</li>}
         {rows.map((row, index) => (
           <li key={`${row.rrn}-${index}`} className="feed-row--flash flex items-center gap-3 text-sm">
             <span className="font-mono text-xs text-muted">{row.rrn}</span>
             <span>{row.merchantName}</span>
             <span>{row.status}</span>
-            {expertMode && row.responseCode && <span className="font-mono text-xs text-muted">{row.responseCode}</span>}
+            {expertMode && row.responseCode && (
+              <span data-expert-only className="font-mono text-xs text-muted">
+                {row.responseCode}
+              </span>
+            )}
           </li>
         ))}
       </ul>

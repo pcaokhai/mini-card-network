@@ -18,8 +18,11 @@ const MAX_BACKOFF_MS = 30_000;
  */
 export function useWsEvents(eventTypes: string[], onEvent: (event: WsEnvelope) => void): { connected: boolean } {
   const onEventRef = useRef(onEvent);
-  onEventRef.current = onEvent;
   const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    onEventRef.current = onEvent;
+  }, [onEvent]);
 
   useEffect(() => {
     let socket: WebSocket | null = null;
