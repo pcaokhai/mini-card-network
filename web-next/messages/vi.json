@@ -1,37 +1,129 @@
 {
-  "app": { "name": "Mini Card Network", "tagline": "Môi trường học tập" },
-  "nav": {
-    "groups": { "main": "Giao dịch", "lab": "Học và thử nghiệm", "manage": "Quản lý" },
-    "overview": "Tổng quan", "pos": "Máy POS", "transactions": "Hành trình giao dịch",
-    "messageLab": "Phòng lab message", "chaosLab": "Phòng lab sự cố",
-    "cards": "Thẻ và tài khoản", "security": "Bảo mật và khóa", "settlement": "Chốt ngày và đối soát", "network": "Vận hành mạng"
+  "app": {
+    "name": "Mini Card Network",
+    "tagline": "Môi trường học tập"
   },
-  "header": { "search": "Tìm mã tra soát, 4 số cuối thẻ, mã máy POS", "linkUnknown": "Đang kiểm tra kết nối" },
-  "modeToggle": { "label": "Chế độ hiển thị", "easy": "Dễ hiểu", "expert": "Chuyên sâu" },
-  "comingSoon": { "title": "Màn hình này sẽ có ở {release}", "body": "Khung ứng dụng đã sẵn sàng. Nội dung được xây trong các story của bản phát hành này." },
+  "nav": {
+    "groups": {
+      "main": "Giao dịch",
+      "lab": "Học và thử nghiệm",
+      "manage": "Quản lý"
+    },
+    "overview": "Tổng quan",
+    "pos": "Máy POS",
+    "transactions": "Hành trình giao dịch",
+    "messageLab": "Phòng lab message",
+    "chaosLab": "Phòng lab sự cố",
+    "cards": "Thẻ và tài khoản",
+    "security": "Bảo mật và khóa",
+    "settlement": "Chốt ngày và đối soát",
+    "network": "Vận hành mạng"
+  },
+  "header": {
+    "search": "Tìm mã tra soát, 4 số cuối thẻ, mã máy POS",
+    "linkUnknown": "Đang kiểm tra kết nối"
+  },
+  "modeToggle": {
+    "label": "Chế độ hiển thị",
+    "easy": "Dễ hiểu",
+    "expert": "Chuyên sâu"
+  },
+  "comingSoon": {
+    "title": "Màn hình này sẽ có ở {release}",
+    "body": "Khung ứng dụng đã sẵn sàng. Nội dung được xây trong các story của bản phát hành này."
+  },
   "glossary": {
-    "rrn": { "easy": "Mã tra soát", "hint": "Mã duy nhất để tra cứu một giao dịch khi khiếu nại hoặc đối soát." },
-    "stan": { "easy": "Số thứ tự giao dịch", "hint": "Số tăng dần để ghép câu trả lời với đúng câu hỏi." },
-    "mti": { "easy": "Loại message", "hint": "Bốn chữ số cho biết message là yêu cầu, trả lời, hủy hay quản lý mạng." },
-    "rc": { "easy": "Mã kết quả", "hint": "00 là đồng ý; các mã khác cho biết lý do từ chối." }
+    "rrn": {
+      "easy": "Mã tra soát",
+      "hint": "Mã duy nhất để tra cứu một giao dịch khi khiếu nại hoặc đối soát."
+    },
+    "stan": {
+      "easy": "Số thứ tự giao dịch",
+      "hint": "Số tăng dần để ghép câu trả lời với đúng câu hỏi."
+    },
+    "mti": {
+      "easy": "Loại message",
+      "hint": "Bốn chữ số cho biết message là yêu cầu, trả lời, hủy hay quản lý mạng."
+    },
+    "rc": {
+      "easy": "Mã kết quả",
+      "hint": "00 là đồng ý; các mã khác cho biết lý do từ chối."
+    }
   },
   "lab": {
-    "de": "DE", "name": "Tên trường", "format": "Định dạng", "value": "Giá trị",
+    "de": "DE",
+    "name": "Tên trường",
+    "format": "Định dạng",
+    "value": "Giá trị",
     "selectHint": "Chọn một phần trong message, bitmap hoặc bảng trường để xem chi tiết.",
-    "mtiVersion": "Phiên bản", "mtiClass": "Nhóm message", "mtiFunction": "Chức năng", "mtiOrigin": "Nguồn gốc",
-    "pasteHint": "Dán một message ISO 8583 thô, hoặc chọn mẫu có sẵn", "primaryBitmap": "Bitmap chính", "secondaryBitmap": "Bitmap phụ"
+    "mtiVersion": "Phiên bản",
+    "mtiClass": "Nhóm message",
+    "mtiFunction": "Chức năng",
+    "mtiOrigin": "Nguồn gốc",
+    "pasteHint": "Dán một message ISO 8583 thô, hoặc chọn mẫu có sẵn",
+    "primaryBitmap": "Bitmap chính",
+    "secondaryBitmap": "Bitmap phụ"
   },
   "network": {
     "title": "Vận hành mạng",
-    "statusPill": { "SIGNED_ON": "Đã đăng nhập", "CONNECTED": "Đã kết nối", "DOWN": "Mất kết nối", "DISCONNECTED": "Ngắt kết nối" },
-    "table": { "link": "Liên kết", "status": "Trạng thái", "lastEcho": "Echo gần nhất", "p99": "Độ trễ p99", "inFlight": "Đang xử lý" },
-    "actions": { "echo": "Echo ngay", "signOn": "Đăng nhập", "signOff": "Đăng xuất" },
-    "events": { "empty": "Chưa có sự kiện mạng nào", "heading": "Dòng thời gian sự kiện" }
+    "statusPill": {
+      "SIGNED_ON": "Đã đăng nhập",
+      "CONNECTED": "Đã kết nối",
+      "DOWN": "Mất kết nối",
+      "DISCONNECTED": "Ngắt kết nối"
+    },
+    "table": {
+      "link": "Liên kết",
+      "status": "Trạng thái",
+      "lastEcho": "Echo gần nhất",
+      "p99": "Độ trễ p99",
+      "inFlight": "Đang xử lý"
+    },
+    "actions": {
+      "echo": "Echo ngay",
+      "signOn": "Đăng nhập",
+      "signOff": "Đăng xuất"
+    },
+    "events": {
+      "empty": "Chưa có sự kiện mạng nào",
+      "heading": "Dòng thời gian sự kiện"
+    }
   },
   "pos": {
     "title": "Máy POS",
     "amount": "Số tiền",
     "pay": "Thanh toán",
     "processing": "Đang xử lý..."
+  },
+  "overview": {
+    "title": "Tổng quan",
+    "kpi": {
+      "transactionsToday": "Giao dịch hôm nay",
+      "approvalRate": "Tỷ lệ chấp thuận",
+      "p99Latency": "Độ trễ p99",
+      "ledgerMatches": "Sổ cái khớp",
+      "ledgerOk": "Khớp",
+      "ledgerMismatch": "Lệch"
+    },
+    "throughput": {
+      "heading": "Thông lượng (60 phút qua)"
+    },
+    "declineReasons": {
+      "heading": "Lý do từ chối"
+    },
+    "health": {
+      "heading": "Tình trạng hệ thống",
+      "ledger": "Sổ cái"
+    },
+    "cutover": {
+      "heading": "Cutover",
+      "label": "Cutover tiếp theo sau"
+    },
+    "liveFeed": {
+      "heading": "Luồng trực tiếp",
+      "empty": "Chưa có giao dịch",
+      "rrn": "RRN",
+      "rc": "RC"
+    }
   }
 }
