@@ -1,0 +1,18 @@
+/* Compositor-friendly only (rules/web/performance.md): transform/opacity. Global reduced-motion
+   media query in globals.css already zeroes animation-duration, so no extra guard is needed here. */
+@keyframes pos-shake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-4px); }
+  40%, 60% { transform: translateX(4px); }
+}
+@keyframes pos-pop {
+  0% { transform: scale(0.9); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.result-panel[data-outcome="DECLINED"] {
+  animation: pos-shake 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.result-panel[data-outcome="APPROVED"] {
+  animation: pos-pop 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
