@@ -125,5 +125,65 @@
       "rrn": "RRN",
       "rc": "RC"
     }
+  },
+  "cards": {
+    "title": "Cards and accounts",
+    "list": {
+      "empty": "No cards yet"
+    },
+    "status": {
+      "ACTIVE": "Active",
+      "BLOCKED": "Blocked",
+      "LOST": "Lost",
+      "STOLEN": "Stolen",
+      "EXPIRED": "Expired",
+      "PIN_BLOCKED": "PIN blocked"
+    },
+    "balance": {
+      "ledger": "Ledger balance",
+      "available": "Available balance",
+      "held": "Held"
+    },
+    "holds": {
+      "title": "Active holds",
+      "empty": "No active holds"
+    },
+    "limits": {
+      "daily": "Daily limit",
+      "perTransaction": "Per-transaction limit",
+      "save": "Save"
+    },
+    "ledger": {
+      "title": "Ledger",
+      "description": "Description",
+      "postings": "Postings"
+    },
+    "blockDialog": {
+      "block": "Block card",
+      "unblock": "Unblock card",
+      "blockPrompt": "Blocking this card stops new purchases immediately. Confirm to continue.",
+      "unblockPrompt": "Unblocking this card allows new purchases again. Confirm to continue.",
+      "reason": "Reason",
+      "reasons": {
+        "CUSTOMER_REQUEST": "Customer request",
+        "LOST": "Lost",
+        "STOLEN": "Stolen",
+        "FRAUD_SUSPECTED": "Fraud suspected"
+      },
+      "confirm": "Confirm",
+      "cancel": "Cancel"
+    },
+    "audit": {
+      "CARD_BLOCKED": "{actor} blocked this card on {at}",
+      "CARD_UNBLOCKED": "{actor} unblocked this card on {at}",
+      "LIMITS_UPDATED": "{actor} updated limits on {at}"
+    },
+    "actions": {
+      "block": "Block card",
+      "unblock": "Unblock card"
+    },
+    "errors": {
+      "staleCard": "Someone changed this card. Reload to continue."
+    }
   }
 }

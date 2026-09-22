@@ -125,5 +125,65 @@
       "rrn": "RRN",
       "rc": "RC"
     }
+  },
+  "cards": {
+    "title": "Thẻ và tài khoản",
+    "list": {
+      "empty": "Chưa có thẻ nào"
+    },
+    "status": {
+      "ACTIVE": "Đang hoạt động",
+      "BLOCKED": "Đã khóa",
+      "LOST": "Mất thẻ",
+      "STOLEN": "Bị đánh cắp",
+      "EXPIRED": "Hết hạn",
+      "PIN_BLOCKED": "Khóa PIN"
+    },
+    "balance": {
+      "ledger": "Số dư sổ cái",
+      "available": "Số dư khả dụng",
+      "held": "Đang giữ"
+    },
+    "holds": {
+      "title": "Khoản giữ đang hoạt động",
+      "empty": "Không có khoản giữ nào"
+    },
+    "limits": {
+      "daily": "Hạn mức ngày",
+      "perTransaction": "Hạn mức mỗi giao dịch",
+      "save": "Lưu"
+    },
+    "ledger": {
+      "title": "Sổ cái",
+      "description": "Mô tả",
+      "postings": "Bút toán"
+    },
+    "blockDialog": {
+      "block": "Khóa thẻ",
+      "unblock": "Mở khóa thẻ",
+      "blockPrompt": "Khóa thẻ sẽ dừng ngay các giao dịch mới. Xác nhận để tiếp tục.",
+      "unblockPrompt": "Mở khóa thẻ sẽ cho phép giao dịch mới trở lại. Xác nhận để tiếp tục.",
+      "reason": "Lý do",
+      "reasons": {
+        "CUSTOMER_REQUEST": "Yêu cầu của khách hàng",
+        "LOST": "Mất thẻ",
+        "STOLEN": "Bị đánh cắp",
+        "FRAUD_SUSPECTED": "Nghi ngờ gian lận"
+      },
+      "confirm": "Xác nhận",
+      "cancel": "Hủy"
+    },
+    "audit": {
+      "CARD_BLOCKED": "{actor} đã khóa thẻ này lúc {at}",
+      "CARD_UNBLOCKED": "{actor} đã mở khóa thẻ này lúc {at}",
+      "LIMITS_UPDATED": "{actor} đã cập nhật hạn mức lúc {at}"
+    },
+    "actions": {
+      "block": "Khóa thẻ",
+      "unblock": "Mở khóa thẻ"
+    },
+    "errors": {
+      "staleCard": "Someone changed this card. Reload to continue."
+    }
   }
 }
