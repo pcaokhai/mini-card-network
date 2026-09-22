@@ -20,7 +20,7 @@ export function PinPad({ onSubmit }: PinPadProps) {
 
   return (
     <div className="flex flex-col items-center gap-3">
-      <div aria-label="PIN" className="h-6 text-xl tracking-[0.3em] text-ink">
+      <div role="status" aria-label="PIN" className="h-6 text-xl tracking-[0.3em] text-ink">
         {"•".repeat(pin.length)}
       </div>
       <Keypad value={pin} onChange={setPin} maxLength={PIN_LENGTH} />

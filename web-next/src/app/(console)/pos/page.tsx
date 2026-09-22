@@ -1,6 +1,5 @@
-import { releaseFor } from "@/shared/navigation/nav-items";
-import { ComingSoon } from "@/shared/ui/ComingSoon";
+import { PosScreen } from "./PosScreen";
 
 export default function Page() {
-  return <ComingSoon release={releaseFor("/pos")} />;
+  return <PosScreen />;
 }

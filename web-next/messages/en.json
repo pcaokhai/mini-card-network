@@ -27,5 +27,11 @@
     "table": { "link": "Link", "status": "Status", "lastEcho": "Last echo", "p99": "p99 latency", "inFlight": "In-flight" },
     "actions": { "echo": "Echo now", "signOn": "Sign on", "signOff": "Sign off" },
     "events": { "empty": "No network events yet", "heading": "Event timeline" }
+  },
+  "pos": {
+    "title": "POS terminal",
+    "amount": "Amount",
+    "pay": "Pay",
+    "processing": "Processing..."
   }
 }

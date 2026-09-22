@@ -27,5 +27,11 @@
     "table": { "link": "Liên kết", "status": "Trạng thái", "lastEcho": "Echo gần nhất", "p99": "Độ trễ p99", "inFlight": "Đang xử lý" },
     "actions": { "echo": "Echo ngay", "signOn": "Đăng nhập", "signOff": "Đăng xuất" },
     "events": { "empty": "Chưa có sự kiện mạng nào", "heading": "Dòng thời gian sự kiện" }
+  },
+  "pos": {
+    "title": "Máy POS",
+    "amount": "Số tiền",
+    "pay": "Thanh toán",
+    "processing": "Đang xử lý..."
   }
 }
