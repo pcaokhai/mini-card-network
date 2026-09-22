@@ -125,6 +125,17 @@ class ConcurrentPurchaseLoadTest {
     // serializing, or an N+1 added to the hot path) easily visible while giving jitter headroom.
     var sorted = latencies.stream().sorted().toList();
     long p99 = sorted.get((int) (sorted.size() * 0.99));
+    System.out.println(
+        "DEBUG latencies min="
+            + sorted.get(0)
+            + " p50="
+            + sorted.get(100)
+            + " p90="
+            + sorted.get(180)
+            + " p99="
+            + p99
+            + " max="
+            + sorted.get(sorted.size() - 1));
     assertThat(p99).isLessThan(300L);
   }
 
