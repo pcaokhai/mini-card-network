@@ -1,37 +1,129 @@
 {
-  "app": { "name": "Mini Card Network", "tagline": "Learning environment" },
-  "nav": {
-    "groups": { "main": "Transactions", "lab": "Learn and experiment", "manage": "Manage" },
-    "overview": "Overview", "pos": "POS terminal", "transactions": "Transaction journey",
-    "messageLab": "Message lab", "chaosLab": "Chaos lab",
-    "cards": "Cards and accounts", "security": "Security and keys", "settlement": "Close of day", "network": "Network operations"
+  "app": {
+    "name": "Mini Card Network",
+    "tagline": "Learning environment"
   },
-  "header": { "search": "Search RRN, last 4 digits, terminal ID", "linkUnknown": "Checking connection" },
-  "modeToggle": { "label": "Display mode", "easy": "Easy", "expert": "Expert" },
-  "comingSoon": { "title": "This screen arrives in {release}", "body": "The shell is ready. Content is built in this release's stories." },
+  "nav": {
+    "groups": {
+      "main": "Transactions",
+      "lab": "Learn and experiment",
+      "manage": "Manage"
+    },
+    "overview": "Overview",
+    "pos": "POS terminal",
+    "transactions": "Transaction journey",
+    "messageLab": "Message lab",
+    "chaosLab": "Chaos lab",
+    "cards": "Cards and accounts",
+    "security": "Security and keys",
+    "settlement": "Close of day",
+    "network": "Network operations"
+  },
+  "header": {
+    "search": "Search RRN, last 4 digits, terminal ID",
+    "linkUnknown": "Checking connection"
+  },
+  "modeToggle": {
+    "label": "Display mode",
+    "easy": "Easy",
+    "expert": "Expert"
+  },
+  "comingSoon": {
+    "title": "This screen arrives in {release}",
+    "body": "The shell is ready. Content is built in this release's stories."
+  },
   "glossary": {
-    "rrn": { "easy": "Reference number", "hint": "Unique number used to look up a transaction for disputes and reconciliation." },
-    "stan": { "easy": "Sequence number", "hint": "Increasing number that pairs each answer with its question." },
-    "mti": { "easy": "Message type", "hint": "Four digits saying whether a message is a request, answer, reversal or network message." },
-    "rc": { "easy": "Result code", "hint": "00 means approved; other codes explain the decline." }
+    "rrn": {
+      "easy": "Reference number",
+      "hint": "Unique number used to look up a transaction for disputes and reconciliation."
+    },
+    "stan": {
+      "easy": "Sequence number",
+      "hint": "Increasing number that pairs each answer with its question."
+    },
+    "mti": {
+      "easy": "Message type",
+      "hint": "Four digits saying whether a message is a request, answer, reversal or network message."
+    },
+    "rc": {
+      "easy": "Result code",
+      "hint": "00 means approved; other codes explain the decline."
+    }
   },
   "lab": {
-    "de": "DE", "name": "Field", "format": "Format", "value": "Value",
+    "de": "DE",
+    "name": "Field",
+    "format": "Format",
+    "value": "Value",
     "selectHint": "Select an element in the message, bitmap or field table to see details.",
-    "mtiVersion": "Version", "mtiClass": "Message class", "mtiFunction": "Function", "mtiOrigin": "Origin",
-    "pasteHint": "Paste a raw ISO 8583 message, or pick a sample", "primaryBitmap": "Primary bitmap", "secondaryBitmap": "Secondary bitmap"
+    "mtiVersion": "Version",
+    "mtiClass": "Message class",
+    "mtiFunction": "Function",
+    "mtiOrigin": "Origin",
+    "pasteHint": "Paste a raw ISO 8583 message, or pick a sample",
+    "primaryBitmap": "Primary bitmap",
+    "secondaryBitmap": "Secondary bitmap"
   },
   "network": {
     "title": "Network operations",
-    "statusPill": { "SIGNED_ON": "Signed on", "CONNECTED": "Connected", "DOWN": "Down", "DISCONNECTED": "Disconnected" },
-    "table": { "link": "Link", "status": "Status", "lastEcho": "Last echo", "p99": "p99 latency", "inFlight": "In-flight" },
-    "actions": { "echo": "Echo now", "signOn": "Sign on", "signOff": "Sign off" },
-    "events": { "empty": "No network events yet", "heading": "Event timeline" }
+    "statusPill": {
+      "SIGNED_ON": "Signed on",
+      "CONNECTED": "Connected",
+      "DOWN": "Down",
+      "DISCONNECTED": "Disconnected"
+    },
+    "table": {
+      "link": "Link",
+      "status": "Status",
+      "lastEcho": "Last echo",
+      "p99": "p99 latency",
+      "inFlight": "In-flight"
+    },
+    "actions": {
+      "echo": "Echo now",
+      "signOn": "Sign on",
+      "signOff": "Sign off"
+    },
+    "events": {
+      "empty": "No network events yet",
+      "heading": "Event timeline"
+    }
   },
   "pos": {
     "title": "POS terminal",
     "amount": "Amount",
     "pay": "Pay",
     "processing": "Processing..."
+  },
+  "overview": {
+    "title": "Overview",
+    "kpi": {
+      "transactionsToday": "Transactions today",
+      "approvalRate": "Approval rate",
+      "p99Latency": "p99 latency",
+      "ledgerMatches": "Ledger matches",
+      "ledgerOk": "Matched",
+      "ledgerMismatch": "Mismatch"
+    },
+    "throughput": {
+      "heading": "Throughput (last 60 min)"
+    },
+    "declineReasons": {
+      "heading": "Decline reasons"
+    },
+    "health": {
+      "heading": "System health",
+      "ledger": "Ledger"
+    },
+    "cutover": {
+      "heading": "Cutover",
+      "label": "Next cutover in"
+    },
+    "liveFeed": {
+      "heading": "Live feed",
+      "empty": "No transactions yet",
+      "rrn": "RRN",
+      "rc": "RC"
+    }
   }
 }
