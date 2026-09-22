@@ -13,6 +13,13 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
+const (
+	testMaskedPAN    = "970436******4417"
+	statusApproved   = "APPROVED"
+	testMerchantName = "Ca phe Goc Pho"
+	tranTypePurchase = "PURCHASE"
+)
+
 type fakeTranLogReader struct {
 	page       []store.TranLogRow
 	nextCursor string
@@ -39,7 +46,7 @@ func (f *fakeTranLogReader) ListStateHistory(context.Context, int64) ([]store.St
 func TestGetTransactions_returnsPaginatedList__MCN_304_AC1(t *testing.T) {
 	r := chi.NewRouter()
 	reader := &fakeTranLogReader{
-		page:       []store.TranLogRow{{RRN: "a", Type: "PURCHASE", Status: "APPROVED", Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantName: "Ca phe Goc Pho", CreatedAt: time.Now()}},
+		page:       []store.TranLogRow{{RRN: "a", Type: tranTypePurchase, Status: statusApproved, Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: time.Now()}},
 		nextCursor: "abc",
 	}
 	MountTransactionsQuery(r, reader)
@@ -67,7 +74,7 @@ func TestGetTransaction_returns404ForUnknownRrn__MCN_304_AC1(t *testing.T) {
 func TestGetTransaction_returnsTransaction__MCN_304_AC1(t *testing.T) {
 	r := chi.NewRouter()
 	reader := &fakeTranLogReader{byRRN: map[string]store.TranLogRow{
-		"x": {RRN: "x", Type: "PURCHASE", Status: "APPROVED", ResponseCode: "00", AuthCode: "123456", Amount: 5000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantName: "Ca phe Goc Pho", CreatedAt: time.Now()},
+		"x": {RRN: "x", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", AuthCode: "123456", Amount: 5000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: time.Now()},
 	}}
 	MountTransactionsQuery(r, reader)
 
@@ -84,11 +91,11 @@ func TestGetTransactionJourney_returnsStepsAndMoney__MCN_304_AC2(t *testing.T) {
 	r := chi.NewRouter()
 	reader := &fakeTranLogReader{
 		byRRN: map[string]store.TranLogRow{
-			"x": {ID: 1, RRN: "x", Type: "PURCHASE", Status: "APPROVED", ResponseCode: "00", Amount: 10000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantName: "Ca phe Goc Pho", CreatedAt: now},
+			"x": {ID: 1, RRN: "x", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", Amount: 10000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: now},
 		},
 		history: []store.StateTransition{
 			{FromStatus: "CREATED", ToStatus: "SENT", At: now},
-			{FromStatus: "SENT", ToStatus: "APPROVED", At: now.Add(50 * time.Millisecond)},
+			{FromStatus: "SENT", ToStatus: statusApproved, At: now.Add(50 * time.Millisecond)},
 		},
 	}
 	MountTransactionsQuery(r, reader)

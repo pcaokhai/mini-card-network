@@ -35,7 +35,7 @@ func TestPostPurchase_requiresIdempotencyKey__MCN_303_AC1(t *testing.T) {
 
 func TestPostPurchase_returns201WithTransaction__MCN_303_AC2(t *testing.T) {
 	r := chi.NewRouter()
-	svc := &fakePurchaseService{result: purchase.Transaction{RRN: "x", Status: "APPROVED"}}
+	svc := &fakePurchaseService{result: purchase.Transaction{RRN: "x", Status: statusApproved}}
 	MountPurchases(r, svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/purchases", bytes.NewBufferString(`{"terminalId":"00000042","cardToken":"tok_normal","entryMode":"CHIP_PIN","amount":{"amount":10000,"currency":"704"}}`))

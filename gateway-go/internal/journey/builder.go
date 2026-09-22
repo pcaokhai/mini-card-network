@@ -9,6 +9,7 @@ import (
 // Actor mirrors contracts/openapi.yaml's Actor enum.
 type Actor string
 
+// Actor values.
 const (
 	ActorPOS    Actor = "POS"
 	ActorIssuer Actor = "ISSUER"
@@ -17,6 +18,7 @@ const (
 // StepKind mirrors contracts/openapi.yaml's StepKind enum.
 type StepKind string
 
+// StepKind values.
 const (
 	KindOK   StepKind = "OK"
 	KindBad  StepKind = "BAD"
@@ -24,10 +26,10 @@ const (
 	KindInfo StepKind = "INFO"
 )
 
-// JourneyStep mirrors contracts/openapi.yaml's JourneyStep schema. Message is left nil: v1 does
+// Step mirrors contracts/openapi.yaml's JourneyStep schema. Message is left nil: v1 does
 // not persist the raw ISO request/response bytes in tran_log (only the summary fields below), so
 // there is nothing to embed - a future story that adds message storage would populate it here.
-type JourneyStep struct {
+type Step struct {
 	Seq           int
 	Actor         Actor
 	OffsetMs      int
@@ -48,7 +50,7 @@ type MoneyRow struct {
 // Journey mirrors contracts/openapi.yaml's Journey schema (the Transaction half is built by the
 // caller from the same store.TranLogRow; this package only builds Steps and Money).
 type Journey struct {
-	Steps []JourneyStep
+	Steps []Step
 	Money []MoneyRow
 }
 
@@ -61,7 +63,7 @@ func BuildJourney(txn store.TranLogRow, history []store.StateTransition) Journey
 	}
 
 	start := history[0].At
-	steps := make([]JourneyStep, 0, len(history))
+	steps := make([]Step, 0, len(history))
 	for i, st := range history {
 		steps = append(steps, buildStep(i+1, st, int(st.At.Sub(start).Milliseconds()), txn))
 	}
@@ -76,34 +78,34 @@ func BuildJourney(txn store.TranLogRow, history []store.StateTransition) Journey
 	return Journey{Steps: steps, Money: money}
 }
 
-func buildStep(seq int, st store.StateTransition, offsetMs int, txn store.TranLogRow) JourneyStep {
+func buildStep(seq int, st store.StateTransition, offsetMs int, txn store.TranLogRow) Step {
 	actor := actorFor(st.ToStatus)
 	kind := kindFor(st.ToStatus)
 
 	switch st.ToStatus {
 	case "SENT":
-		return JourneyStep{
+		return Step{
 			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
 			Title:         "Sent to issuer",
 			EasyText:      "Purchase request sent",
 			TechnicalText: fmt.Sprintf("0200 sent, RRN %s, amount %d %s", txn.RRN, txn.Amount, txn.Currency),
 		}
 	case "APPROVED", "DECLINED":
-		return JourneyStep{
+		return Step{
 			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
 			Title:         "Issuer response",
 			EasyText:      EasyTextForRC(txn.ResponseCode),
 			TechnicalText: fmt.Sprintf("0210 received, RC %s", txn.ResponseCode),
 		}
 	case "TIMED_OUT":
-		return JourneyStep{
+		return Step{
 			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
 			Title:         "No response from issuer",
 			EasyText:      "Issuer did not respond in time",
 			TechnicalText: "0200 request timed out",
 		}
 	default:
-		return JourneyStep{
+		return Step{
 			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
 			Title:         st.ToStatus,
 			EasyText:      st.ToStatus,

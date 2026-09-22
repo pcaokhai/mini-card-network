@@ -136,6 +136,33 @@ func (r *TranLogRepository) List(ctx context.Context, filter TransactionFilter) 
 		limit = defaultTransactionsLimit
 	}
 
+	query, args, err := buildListQuery(filter, limit)
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	page, err := scanTranLogRows(rows)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var nextCursor string
+	if len(page) > limit {
+		last := page[limit-1]
+		nextCursor = encodeCursor(last.CreatedAt, last.ID)
+		page = page[:limit]
+	}
+	return page, nextCursor, nil
+}
+
+// buildListQuery builds the filtered, cursor-paginated SELECT for List. It fetches limit+1 rows
+// so List can tell whether a next page exists.
+func buildListQuery(filter TransactionFilter, limit int) (string, []any, error) {
 	query := `SELECT ` + tranLogSelectColumns + ` FROM tran_log t JOIN merchant m ON m.mid = t.mid WHERE 1=1`
 	var args []any
 	arg := func(v any) string {
@@ -161,37 +188,25 @@ func (r *TranLogRepository) List(ctx context.Context, filter TransactionFilter) 
 	if filter.Cursor != "" {
 		cursorAt, cursorID, err := decodeCursor(filter.Cursor)
 		if err != nil {
-			return nil, "", fmt.Errorf("decode cursor: %w", err)
+			return "", nil, fmt.Errorf("decode cursor: %w", err)
 		}
 		query += ` AND (t.created_at, t.id) < (` + arg(cursorAt) + `, ` + arg(cursorID) + `)`
 	}
 	query += ` ORDER BY t.created_at DESC, t.id DESC LIMIT ` + arg(limit+1)
+	return query, args, nil
+}
 
-	rows, err := r.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, "", err
-	}
-	defer rows.Close()
+func scanTranLogRows(rows pgx.Rows) ([]TranLogRow, error) {
 	var page []TranLogRow
 	for rows.Next() {
 		var row TranLogRow
 		if err := rows.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt); err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		row.RRN = strings.TrimSpace(row.RRN)
 		page = append(page, row)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, "", err
-	}
-
-	var nextCursor string
-	if len(page) > limit {
-		last := page[limit-1]
-		nextCursor = encodeCursor(last.CreatedAt, last.ID)
-		page = page[:limit]
-	}
-	return page, nextCursor, nil
+	return page, rows.Err()
 }
 
 // encodeCursor builds an opaque base64 keyset cursor from (created_at, id).

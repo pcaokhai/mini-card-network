@@ -9,11 +9,17 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
+const (
+	statusApproved   = "APPROVED"
+	statusSent       = "SENT"
+	tranTypePurchase = "PURCHASE"
+)
+
 func TestBuildJourney_approvedPurchaseHasPosAcquirerIssuerSteps__MCN_304_AC2(t *testing.T) {
-	txn := store.TranLogRow{RRN: "x", Type: "PURCHASE", Status: "APPROVED", ResponseCode: "00", Amount: 10000, Currency: "704", CreatedAt: time.Now()}
+	txn := store.TranLogRow{RRN: "x", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", Amount: 10000, Currency: "704", CreatedAt: time.Now()}
 	history := []store.StateTransition{
-		{FromStatus: "CREATED", ToStatus: "SENT", At: txn.CreatedAt},
-		{FromStatus: "SENT", ToStatus: "APPROVED", At: txn.CreatedAt.Add(50 * time.Millisecond)},
+		{FromStatus: "CREATED", ToStatus: statusSent, At: txn.CreatedAt},
+		{FromStatus: statusSent, ToStatus: statusApproved, At: txn.CreatedAt.Add(50 * time.Millisecond)},
 	}
 
 	j := BuildJourney(txn, history)
@@ -29,8 +35,8 @@ func TestBuildJourney_approvedPurchaseHasPosAcquirerIssuerSteps__MCN_304_AC2(t *
 }
 
 func TestBuildJourney_declinedBlockedCardHasEasyText__MCN_304_AC2(t *testing.T) {
-	txn := store.TranLogRow{RRN: "y", Type: "PURCHASE", Status: "DECLINED", ResponseCode: "62", Amount: 5000, Currency: "704", CreatedAt: time.Now()}
-	history := []store.StateTransition{{FromStatus: "SENT", ToStatus: "DECLINED", At: txn.CreatedAt}}
+	txn := store.TranLogRow{RRN: "y", Type: tranTypePurchase, Status: "DECLINED", ResponseCode: "62", Amount: 5000, Currency: "704", CreatedAt: time.Now()}
+	history := []store.StateTransition{{FromStatus: statusSent, ToStatus: "DECLINED", At: txn.CreatedAt}}
 
 	j := BuildJourney(txn, history)
 
@@ -40,10 +46,10 @@ func TestBuildJourney_declinedBlockedCardHasEasyText__MCN_304_AC2(t *testing.T) 
 
 func TestBuildJourney_offsetMsIsRelativeToFirstStep__MCN_304_AC2(t *testing.T) {
 	base := time.Now()
-	txn := store.TranLogRow{RRN: "z", Type: "PURCHASE", Status: "APPROVED", ResponseCode: "00", Amount: 100, Currency: "704", CreatedAt: base}
+	txn := store.TranLogRow{RRN: "z", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", Amount: 100, Currency: "704", CreatedAt: base}
 	history := []store.StateTransition{
-		{FromStatus: "CREATED", ToStatus: "SENT", At: base},
-		{FromStatus: "SENT", ToStatus: "APPROVED", At: base.Add(120 * time.Millisecond)},
+		{FromStatus: "CREATED", ToStatus: statusSent, At: base},
+		{FromStatus: statusSent, ToStatus: statusApproved, At: base.Add(120 * time.Millisecond)},
 	}
 
 	j := BuildJourney(txn, history)
