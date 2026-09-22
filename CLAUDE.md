@@ -54,7 +54,7 @@ Every story follows this sequence. Do not skip steps; do not reorder.
 
 1. **brainstorming** — only when the story leaves a design decision open. If the docs already decide it, write a one-paragraph understanding that cites the doc sections and move on.
 2. **using-git-worktrees** — one worktree and branch per story: `feat/MCN-<id>-<slug>` (or `fix/`, `chore/`). Worktrees live in `../mcn-worktrees/`.
-3. **writing-plans** — save to `docs/plans/MCN-<id>.md`. Tasks are 2–5 minutes, name exact files, include the failing test first and the verification command.
+3. **writing-plans** — save to `docs/plans/MCN-<id>.md`. Tasks are 2–5 minutes, name exact files, include the failing test first and the verification command. Keep plans lean: interfaces (function/type names and signatures), test names and their expected assertions in prose, Rulings, and the AC table — not full illustrative implementation code. Sprint 3–4 found that hand-written code drafts in plans were consistently rewritten from scratch by the implementer after reading the real merged codebase anyway (interfaces drift as stories merge in parallel); writing them cost real planning-time tokens without improving the result.
 4. **subagent-driven-development** (default) or **executing-plans** (small or tightly coupled stories).
 5. **test-driven-development** — RED → GREEN → REFACTOR for every behavior change. No production code without a failing test first.
 6. **verification-before-completion** — run the verification commands and paste real output before saying "done", "fixed" or "passing".
@@ -71,6 +71,11 @@ Bugs and failing tests: **systematic-debugging** first. Reproduce, find the root
 - **Frontend never waits for backend.** WEB builds against MSW mocks generated from `contracts/openapi.yaml` and fixtures in `contracts/fixtures/`. Switching to the real backend is a config flag, not a code change.
 - **Migrations** are owned by one service each. Reserve the next migration number in the plan before writing it.
 - **Integration checkpoint** at the end of each slice: `make up && make e2e` on `main` with the flag on.
+- **Cap parallel dispatch at 2–3 subagents per wave.** Sprint 4 dispatched 3–4 at once and all hit the session usage limit simultaneously, losing the whole wave to a reset wait. Stagger dispatch or keep the wave smaller instead.
+- **Dispatch prompts never ask a subagent to run `gh pr merge`.** It is always denied by the auto-mode permission classifier ("Merge Without Review") — confirmed across every PR in Sprints 2–4, no exceptions. Instruct subagents to stop once CI is confirmed green and report back; the orchestrating session merges.
+- **Verify CI with `gh run list --branch <branch>` alongside `gh pr checks`, every time.** Twice in Sprint 4 a PR showed only `GitGuardian` passing (no real GitHub Actions run at all) while `gh pr checks`'s summary still looked plausible — the real cause was a stale branch needing a rebase. Don't trust the checks summary alone.
+- **Cleanup order: `git worktree remove` before `gh pr merge --delete-branch`.** The reverse order fails every time ("cannot delete branch ... used by worktree") and costs an extra round trip.
+- **Poll CI in the background**, not with a blocking shell loop — frees the turn to prep the next wave's worktrees while waiting.
 
 ## 6. Engineering rules (summary — full text in `docs/10-engineering-standards.md`)
 
