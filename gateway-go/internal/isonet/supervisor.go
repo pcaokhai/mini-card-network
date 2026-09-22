@@ -36,7 +36,9 @@ type Config struct {
 
 const endpointName = "issuer" // v1 has exactly one link; the switch (Sprint 10) adds more.
 
-var errNotSignedOn = errors.New("link is not signed on")
+// ErrNotSignedOn is returned by Send, TriggerSignOn and TriggerSignOff when no connection is
+// currently live.
+var ErrNotSignedOn = errors.New("link is not signed on")
 
 // EchoResult is the outcome of a manual echo trigger. A down link reports OK=false;
 // it never surfaces as an error (MCN-204-AC3).
@@ -97,7 +99,7 @@ func (s *Supervisor) TriggerSignOn(ctx context.Context) error {
 	s.triggerMu.Lock()
 	defer s.triggerMu.Unlock()
 	if s.mux == nil {
-		return errNotSignedOn
+		return ErrNotSignedOn
 	}
 	return s.signOn(ctx)
 }
@@ -107,9 +109,48 @@ func (s *Supervisor) TriggerSignOff(ctx context.Context) error {
 	s.triggerMu.Lock()
 	defer s.triggerMu.Unlock()
 	if s.mux == nil {
-		return errNotSignedOn
+		return ErrNotSignedOn
 	}
 	return s.signOff(ctx)
+}
+
+// IsSignedOn reports whether a connection is currently live. Callers outside the supervision
+// loop (e.g. purchase.Service) use this to short-circuit before attempting Send.
+func (s *Supervisor) IsSignedOn() bool {
+	s.triggerMu.Lock()
+	defer s.triggerMu.Unlock()
+	return s.mux != nil
+}
+
+// NextSTAN allocates the next STAN on the live connection, for callers outside the supervision
+// loop. Returns ok=false if no connection is currently live.
+func (s *Supervisor) NextSTAN() (stan string, ok bool) {
+	s.triggerMu.Lock()
+	defer s.triggerMu.Unlock()
+	if s.mux == nil {
+		return "", false
+	}
+	return s.mux.NextSTAN(), true
+}
+
+// Send sends a request on the live connection's Mux, for callers outside the supervision loop
+// (e.g. purchase.Service) that need to share the one connection rather than open a second one.
+// Unlike TriggerEcho/TriggerSignOn, this only takes triggerMu long enough to snapshot the current
+// mux, not for the whole (up to 30s, docs/03 §9) response wait — holding it that long would stall
+// the automatic echo ticker and every other manual trigger.
+//
+// ponytail: NextSTAN and Send are two separate lock acquisitions, so a reconnect landing between
+// them could send on a fresh Mux with a STAN from the old one - benign here (a connection's STANs
+// only need to be unique among its own in-flight requests), but combine them under one lock if
+// that guarantee ever needs tightening.
+func (s *Supervisor) Send(ctx context.Context, mti string, fields map[int]string) (map[int]string, error) {
+	s.triggerMu.Lock()
+	mux := s.mux
+	s.triggerMu.Unlock()
+	if mux == nil {
+		return nil, ErrNotSignedOn
+	}
+	return mux.Send(ctx, mti, fields)
 }
 
 // setStatus updates the store and, if a Hub is wired, broadcasts the new link state.

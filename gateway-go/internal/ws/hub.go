@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
+	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
@@ -78,6 +79,12 @@ func (h *Hub) BroadcastLinkStatus(link store.Link) { h.broadcastEvent("link.stat
 
 // BroadcastNetworkEvent sends a network.event event carrying evt.
 func (h *Hub) BroadcastNetworkEvent(evt store.NetworkEvent) { h.broadcastEvent("network.event", evt) }
+
+// BroadcastTransaction sends a transaction event (eventType, e.g. "transaction.created")
+// carrying txn.
+func (h *Hub) BroadcastTransaction(eventType string, txn purchase.Transaction) {
+	h.broadcastEvent(eventType, txn)
+}
 
 func (h *Hub) broadcastEvent(eventType string, data any) {
 	msg, err := json.Marshal(Event{ID: uuid.NewString(), Type: eventType, OccurredAt: time.Now().UTC(), Data: data})
