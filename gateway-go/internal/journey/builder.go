@@ -13,6 +13,7 @@ type Actor string
 const (
 	ActorPOS    Actor = "POS"
 	ActorIssuer Actor = "ISSUER"
+	ActorSAF    Actor = "SAF"
 )
 
 // StepKind mirrors contracts/openapi.yaml's StepKind enum.
@@ -20,10 +21,11 @@ type StepKind string
 
 // StepKind values.
 const (
-	KindOK   StepKind = "OK"
-	KindBad  StepKind = "BAD"
-	KindWarn StepKind = "WARN"
-	KindInfo StepKind = "INFO"
+	KindOK       StepKind = "OK"
+	KindBad      StepKind = "BAD"
+	KindWarn     StepKind = "WARN"
+	KindInfo     StepKind = "INFO"
+	KindReversal StepKind = "REVERSAL"
 )
 
 // Step mirrors contracts/openapi.yaml's JourneyStep schema. Message is left nil: v1 does
@@ -74,6 +76,9 @@ func BuildJourney(txn store.TranLogRow, history []store.StateTransition) Journey
 		Delta:  -txn.Amount,
 		AtStep: last.Seq,
 	}}
+	if txn.Status == "REVERSED" {
+		money = append(money, MoneyRow{Label: "Refund", Delta: txn.Amount, AtStep: last.Seq})
+	}
 
 	return Journey{Steps: steps, Money: money}
 }
@@ -104,6 +109,20 @@ func buildStep(seq int, st store.StateTransition, offsetMs int, txn store.TranLo
 			EasyText:      "Issuer did not respond in time",
 			TechnicalText: "0200 request timed out",
 		}
+	case "REVERSAL_PENDING":
+		return Step{
+			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
+			Title:         "Reversal queued",
+			EasyText:      "Reversal queued",
+			TechnicalText: "0420 enqueued in SAF",
+		}
+	case "REVERSED":
+		return Step{
+			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
+			Title:         "Money returned",
+			EasyText:      "Money returned",
+			TechnicalText: "0420 delivered, issuer ACKed with 0430",
+		}
 	default:
 		return Step{
 			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
@@ -117,10 +136,14 @@ func buildStep(seq int, st store.StateTransition, offsetMs int, txn store.TranLo
 // actorFor infers who drove a transition per docs/03's message flow: CREATED->SENT is the
 // acquirer sending the request, everything after SENT is the issuer's response.
 func actorFor(toStatus string) Actor {
-	if toStatus == "SENT" {
+	switch toStatus {
+	case "SENT", "REVERSAL_PENDING":
 		return ActorPOS
+	case "REVERSED":
+		return ActorSAF
+	default:
+		return ActorIssuer
 	}
-	return ActorIssuer
 }
 
 func kindFor(toStatus string) StepKind {
@@ -129,6 +152,10 @@ func kindFor(toStatus string) StepKind {
 		return KindOK
 	case "DECLINED", "TIMED_OUT", "FAILED":
 		return KindBad
+	case "REVERSAL_PENDING":
+		return KindWarn
+	case "REVERSED":
+		return KindReversal
 	default:
 		return KindInfo
 	}

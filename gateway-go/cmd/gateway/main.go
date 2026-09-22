@@ -23,6 +23,7 @@ import (
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/purchase"
+	"github.com/mcn/gateway-go/internal/saf"
 	"github.com/mcn/gateway-go/internal/store"
 	"github.com/mcn/gateway-go/internal/ws"
 )
@@ -62,7 +63,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	hub := ws.NewHub()
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
-	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub)
+	safRepo := store.NewSafRepository(pool)
+	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer)
+	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 	health := api.NewHealth()
 	r := chi.NewRouter()
 	api.NewRouter(r, health)
@@ -95,6 +99,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	g.Go(func() error { return serve(apiServer, apiLn) })
 	g.Go(func() error { return serve(metricsServer, metricsLn) })
 	g.Go(func() error { return supervisor.Run(gctx) })
+	g.Go(func() error { return safWorker.Run(gctx) })
 	g.Go(func() error {
 		<-gctx.Done()
 		logger.Info("draining", "timeout", cfg.ShutdownTimeout.String())

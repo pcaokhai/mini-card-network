@@ -58,6 +58,23 @@ func TestBuildJourney_offsetMsIsRelativeToFirstStep__MCN_304_AC2(t *testing.T) {
 	require.Equal(t, 120, j.Steps[1].OffsetMs)
 }
 
+func TestBuildJourney_reversalPendingIsWarnReversedIsReversalKind__MCN_401_AC1(t *testing.T) {
+	txn := store.TranLogRow{RRN: "z", Type: tranTypePurchase, Status: "REVERSED", ResponseCode: "68", Amount: 10000, Currency: "704", CreatedAt: time.Now()}
+	history := []store.StateTransition{
+		{FromStatus: "SENT", ToStatus: "TIMED_OUT", At: txn.CreatedAt},
+		{FromStatus: "TIMED_OUT", ToStatus: "REVERSAL_PENDING", At: txn.CreatedAt.Add(10 * time.Millisecond)},
+		{FromStatus: "REVERSAL_PENDING", ToStatus: "REVERSED", At: txn.CreatedAt.Add(500 * time.Millisecond)},
+	}
+
+	j := BuildJourney(txn, history)
+
+	require.Equal(t, "WARN", string(j.Steps[1].Kind))
+	require.Equal(t, "REVERSAL", string(j.Steps[2].Kind))
+	require.Equal(t, "SAF", string(j.Steps[2].Actor))
+	require.Len(t, j.Money, 2) // debit at TIMED_OUT step, refund at REVERSED step
+	require.Equal(t, int64(10000), j.Money[1].Delta) // positive: money returned
+}
+
 func TestEasyTextForRC_coversEveryDocumentedCode(t *testing.T) {
 	for _, rc := range []string{"00", "05", "06", "10", "12", "13", "14", "17", "30", "51", "54", "55", "57", "61", "62", "65", "68", "75", "91", "94", "95", "96"} {
 		require.NotEmpty(t, EasyTextForRC(rc), "missing easy text for RC %s", rc)
