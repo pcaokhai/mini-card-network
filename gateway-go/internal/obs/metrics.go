@@ -12,6 +12,12 @@ var LateResponseTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Responses that arrived after the caller's request already timed out",
 })
 
+// SafDeadTotal counts SAF advice items that exhausted max_attempts without an ACK (MCN-401-AC3).
+var SafDeadTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "mcn_saf_dead_total",
+	Help: "SAF advice items that reached max_attempts without an ACK",
+})
+
 func init() {
-	prometheus.MustRegister(LinkUp, LateResponseTotal)
+	prometheus.MustRegister(LinkUp, LateResponseTotal, SafDeadTotal)
 }
