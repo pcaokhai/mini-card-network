@@ -2,11 +2,14 @@ package isonet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/mcn/gateway-go/internal/obs"
+	"github.com/mcn/gateway-go/internal/store"
 )
 
 // LinkStore is the persistence port the supervisor needs; internal/store implements it.
@@ -14,6 +17,12 @@ type LinkStore interface {
 	SetStatus(ctx context.Context, endpoint, status string) error
 	RecordEcho(ctx context.Context, endpoint string, latencyMs int) error
 	RecordEvent(ctx context.Context, severity, easyText, technicalText string) error
+}
+
+// Hub is the broadcast port; internal/ws.Hub satisfies it.
+type Hub interface {
+	BroadcastLinkStatus(link store.Link)
+	BroadcastNetworkEvent(evt store.NetworkEvent)
 }
 
 // Config configures one Supervisor. Zero EchoTimeout means EchoInterval is used as the timeout.
@@ -27,11 +36,26 @@ type Config struct {
 
 const endpointName = "issuer" // v1 has exactly one link; the switch (Sprint 10) adds more.
 
+var errNotSignedOn = errors.New("link is not signed on")
+
+// EchoResult is the outcome of a manual echo trigger. A down link reports OK=false;
+// it never surfaces as an error (MCN-204-AC3).
+type EchoResult struct {
+	OK           bool
+	LatencyMs    *int
+	ResponseCode *string
+}
+
 // Supervisor keeps one link healthy: connect, sign on, echo, detect failure, reconnect.
 type Supervisor struct {
 	cfg   Config
 	store LinkStore
-	mux   *Mux
+	hub   Hub
+
+	// triggerMu guards mux so a manual trigger (TriggerEcho/TriggerSignOn/TriggerSignOff)
+	// and the automatic echo ticker never send on the same Mux concurrently.
+	triggerMu sync.Mutex
+	mux       *Mux
 }
 
 // NewSupervisor builds a Supervisor that reports link state through store.
@@ -43,6 +67,65 @@ func NewSupervisor(cfg Config, store LinkStore) *Supervisor {
 		cfg.Backoff = Backoff{Base: time.Second, Cap: 30 * time.Second}
 	}
 	return &Supervisor{cfg: cfg, store: store}
+}
+
+// SetHub wires a Hub so every status/event transition is also broadcast over WebSocket.
+func (s *Supervisor) SetHub(hub Hub) { s.hub = hub }
+
+// TriggerEcho sends an out-of-band echo now, using the live connection's Mux.
+// If the link is not currently signed on, it reports OK=false rather than an error.
+func (s *Supervisor) TriggerEcho(ctx context.Context) (EchoResult, error) {
+	s.triggerMu.Lock()
+	defer s.triggerMu.Unlock()
+	if s.mux == nil {
+		return EchoResult{OK: false}, nil
+	}
+	start := time.Now()
+	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.EchoTimeout)
+	defer cancel()
+	fields, err := s.mux.Send(sendCtx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "301"})
+	if err != nil {
+		return EchoResult{OK: false}, nil
+	}
+	rc := fields[39]
+	latencyMs := int(time.Since(start).Milliseconds())
+	return EchoResult{OK: rc == "00", LatencyMs: &latencyMs, ResponseCode: &rc}, nil
+}
+
+// TriggerSignOn sends an out-of-band sign-on now, using the live connection's Mux.
+func (s *Supervisor) TriggerSignOn(ctx context.Context) error {
+	s.triggerMu.Lock()
+	defer s.triggerMu.Unlock()
+	if s.mux == nil {
+		return errNotSignedOn
+	}
+	return s.signOn(ctx)
+}
+
+// TriggerSignOff sends an out-of-band sign-off now, using the live connection's Mux.
+func (s *Supervisor) TriggerSignOff(ctx context.Context) error {
+	s.triggerMu.Lock()
+	defer s.triggerMu.Unlock()
+	if s.mux == nil {
+		return errNotSignedOn
+	}
+	return s.signOff(ctx)
+}
+
+// setStatus updates the store and, if a Hub is wired, broadcasts the new link state.
+func (s *Supervisor) setStatus(ctx context.Context, status string) {
+	_ = s.store.SetStatus(ctx, endpointName, status)
+	if s.hub != nil {
+		s.hub.BroadcastLinkStatus(store.Link{Endpoint: endpointName, Status: status})
+	}
+}
+
+// recordEvent inserts a network_event row and, if a Hub is wired, broadcasts it.
+func (s *Supervisor) recordEvent(ctx context.Context, severity, easyText, technicalText string) {
+	_ = s.store.RecordEvent(ctx, severity, easyText, technicalText)
+	if s.hub != nil {
+		s.hub.BroadcastNetworkEvent(store.NetworkEvent{Severity: severity, EasyText: easyText, TechnicalText: technicalText})
+	}
 }
 
 // Run supervises the link until ctx is cancelled.
@@ -60,8 +143,8 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 		_ = err // connection lifecycle errors are expected (reconnect loop); logging is the caller's job via obs
 		obs.LinkUp.WithLabelValues(endpointName).Set(0)
-		_ = s.store.SetStatus(ctx, endpointName, "DOWN")
-		_ = s.store.RecordEvent(ctx, "WARN", "Link to issuer is down", "reconnecting with backoff")
+		s.setStatus(ctx, "DOWN")
+		s.recordEvent(ctx, "WARN", "Link to issuer is down", "reconnecting with backoff")
 		delay := s.cfg.Backoff.Delay(attempt)
 		attempt++
 		select {
@@ -79,7 +162,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	_ = s.store.SetStatus(ctx, endpointName, "CONNECTED")
+	s.setStatus(ctx, "CONNECTED")
 
 	mux := NewMux(conn)
 	mux.OnLateResponse(func(string, map[int]string) { obs.LateResponseTotal.Inc() })
@@ -88,13 +171,21 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- mux.Serve(serveCtx) }()
 
+	s.triggerMu.Lock()
 	s.mux = mux
+	s.triggerMu.Unlock()
+	defer func() {
+		s.triggerMu.Lock()
+		s.mux = nil
+		s.triggerMu.Unlock()
+	}()
+
 	if err := s.signOn(ctx); err != nil {
 		return err
 	}
 	obs.LinkUp.WithLabelValues(endpointName).Set(1)
-	_ = s.store.SetStatus(ctx, endpointName, "SIGNED_ON")
-	_ = s.store.RecordEvent(ctx, "INFO", "Link to issuer is up", "signed on")
+	s.setStatus(ctx, "SIGNED_ON")
+	s.recordEvent(ctx, "INFO", "Link to issuer is up", "signed on")
 
 	failures := 0
 	ticker := time.NewTicker(s.cfg.EchoInterval)
@@ -109,7 +200,9 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		case err := <-serveErr:
 			return err
 		case <-ticker.C:
+			s.triggerMu.Lock()
 			latency, err := s.echo(ctx)
+			s.triggerMu.Unlock()
 			if err != nil {
 				failures++
 				if failures >= s.cfg.EchoFailureLimit {
