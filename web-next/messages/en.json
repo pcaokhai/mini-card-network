@@ -187,6 +187,58 @@
       "staleCard": "Someone changed this card. Reload to continue."
     }
   },
+  "chaos": {
+    "heading": "Chaos lab",
+    "activeCount": "{count} active",
+    "runControl": {
+      "label": "Transactions to run",
+      "button": "Run transactions"
+    },
+    "money": {
+      "heading": "Money verification",
+      "opening": "Opening balance",
+      "closing": "Closing balance",
+      "discrepancy": "Discrepancy",
+      "discrepancyRun": "Discrepancy found in run {runId}",
+      "empty": "Start a run to verify money movement"
+    },
+    "reaction": {
+      "heading": "What the system does",
+      "empty": "No failure scenarios are active"
+    },
+    "scenarios": {
+      "SLOW_NETWORK": {
+        "easyText": "Slow network",
+        "technicalText": "3000ms added latency on every gateway-to-issuer call",
+        "reaction": "Requests still complete, just slower — no money is at risk"
+      },
+      "CONNECTION_CUT": {
+        "easyText": "Connection cut",
+        "technicalText": "TCP connection to the issuer is closed mid-request",
+        "reaction": "The gateway can't tell if the issuer got the request, so it queues a reversal instead of retrying blindly"
+      },
+      "DROP_RESPONSE": {
+        "easyText": "Dropped response",
+        "technicalText": "Issuer processes the request but its response is discarded before reaching the gateway",
+        "reaction": "The gateway times out, treats the outcome as unknown, and sends a reversal for safety"
+      },
+      "DUPLICATE_REQUEST": {
+        "easyText": "Duplicate request",
+        "technicalText": "The same request is sent twice with the same STAN/RRN",
+        "reaction": "The issuer recognizes the duplicate and returns the original result instead of processing it twice"
+      },
+      "ISSUER_DOWN": {
+        "easyText": "Issuer down",
+        "technicalText": "The issuer connection resets and stays unavailable",
+        "reaction": "Stand-in processing takes over, approving small transactions within pre-set limits"
+      },
+      "LATE_RESPONSE": {
+        "easyText": "Late response",
+        "technicalText": "The issuer responds after the gateway's timeout window has passed",
+        "reaction": "The gateway has already reversed the request, so the late response is discarded"
+      }
+    }
+  },
   "journey": {
     "title": "Transaction journey",
     "controls": {

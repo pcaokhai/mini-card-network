@@ -1,6 +1,5 @@
-import { releaseFor } from "@/shared/navigation/nav-items";
-import { ComingSoon } from "@/shared/ui/ComingSoon";
+import { ChaosLabScreen } from "./ChaosLabScreen";
 
 export default function Page() {
-  return <ComingSoon release={releaseFor("/lab/chaos")} />;
+  return <ChaosLabScreen />;
 }
