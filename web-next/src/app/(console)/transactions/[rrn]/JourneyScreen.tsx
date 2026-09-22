@@ -7,6 +7,9 @@ import { StepTimeline } from "@/components/journey/StepTimeline";
 import { StepDetail } from "@/components/journey/StepDetail";
 import { MoneyPanel } from "@/components/journey/MoneyPanel";
 import { PlaybackControls } from "@/components/journey/PlaybackControls";
+import { CountdownRing } from "@/components/journey/CountdownRing";
+
+const TIMED_OUT_TITLE = "No response from issuer";
 
 /** MCN-307 ruling: 2s/step autoplay pace — matches an "explain what happened" pacing. */
 const AUTOPLAY_INTERVAL_MS = 2000;
@@ -60,6 +63,9 @@ export function JourneyScreen({ rrn }: { rrn: string }) {
         </div>
         <aside className="space-y-4">
           <StepDetail step={journey.steps[currentStep]} />
+          {journey.steps[currentStep]?.title === TIMED_OUT_TITLE && (
+            <CountdownRing durationMs={AUTOPLAY_INTERVAL_MS} isPlaying={isPlaying} />
+          )}
           <MoneyPanel money={journey.money} currency={journey.transaction.amount.currency} />
         </aside>
       </div>

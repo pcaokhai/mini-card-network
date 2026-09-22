@@ -35,9 +35,25 @@ const FIXED_JOURNEY: Journey = {
   money: [{ label: "Purchase", delta: -10000, balanceAfter: null, atStep: 1 }],
 };
 
-function renderScreen(rrn: string) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  client.setQueryData(["transactions", rrn, "journey"], FIXED_JOURNEY);
+const REVERSED_JOURNEY: Journey = {
+  transaction: { ...FIXED_JOURNEY.transaction, rrn: "reversed-rrn", status: "REVERSED" },
+  steps: [
+    { seq: 0, actor: "POS", offsetMs: 0, title: "Purchase requested", easyText: "", technicalText: "", kind: "INFO", message: null },
+    { seq: 1, actor: "ISSUER", offsetMs: 30000, title: "No response from issuer", easyText: "", technicalText: "", kind: "WARN", message: null },
+    { seq: 2, actor: "POS", offsetMs: 30100, title: "Reversal queued", easyText: "", technicalText: "", kind: "WARN", message: null },
+    { seq: 3, actor: "SAF", offsetMs: 35000, title: "Money returned", easyText: "", technicalText: "", kind: "REVERSAL", message: null },
+  ] as Journey["steps"],
+  money: [
+    { label: "Purchase", delta: -10000, balanceAfter: null, atStep: 0 },
+    { label: "Refund", delta: 10000, balanceAfter: null, atStep: 3 },
+  ],
+};
+
+function renderScreen(rrn: string, journey: Journey = FIXED_JOURNEY) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } },
+  });
+  client.setQueryData(["transactions", rrn, "journey"], journey);
   return render(
     <QueryClientProvider client={client}>
       <NextIntlClientProvider locale="en" messages={en}>
@@ -68,6 +84,21 @@ describe("JourneyScreen", () => {
 
     const advancedIndex = items().findIndex((el) => el.getAttribute("data-state") === "current");
     expect(advancedIndex).toBeGreaterThan(initialIndex);
+    vi.useRealTimers();
+  });
+
+  it("shows the countdown ring only for a TIMED_OUT step while autoplaying (MCN-406-AC2)", async () => {
+    renderScreen("reversed-rrn", REVERSED_JOURNEY);
+    await screen.findByRole("list", { name: /step timeline/i });
+    expect(screen.queryByTestId("countdown-ring")).not.toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByTestId("journey-toggle-play"));
+    act(() => {
+      vi.advanceTimersByTime(2100);
+    });
+
+    expect(screen.getByTestId("countdown-ring")).toBeInTheDocument();
     vi.useRealTimers();
   });
 });
