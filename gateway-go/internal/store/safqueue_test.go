@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func insertTestTran(t *testing.T, ctx context.Context, tranLog *TranLogRepository, rrn, stan string) int64 {
+func insertTestTran(ctx context.Context, t *testing.T, tranLog *TranLogRepository, rrn, stan string) int64 {
 	t.Helper()
 	id, err := tranLog.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "SENT", Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: stan})
 	require.NoError(t, err)
@@ -21,7 +21,7 @@ func TestSafRepository_enqueueClaimAndAck__MCN_401_AC2(t *testing.T) {
 	saf := NewSafRepository(pool)
 	ctx := context.Background()
 
-	tranID := insertTestTran(t, ctx, tranLog, "626514000123", "000123")
+	tranID := insertTestTran(ctx, t, tranLog, "626514000123", "000123")
 
 	id, err := saf.Enqueue(ctx, tranID, "0420", []byte("encrypted-0420-payload"))
 	require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestSafRepository_claimDueSkipsLockedRows__MCN_401_AC2(t *testing.T) {
 	saf := NewSafRepository(pool)
 	ctx := context.Background()
 
-	tranID := insertTestTran(t, ctx, tranLog, "626514000456", "000456")
+	tranID := insertTestTran(ctx, t, tranLog, "626514000456", "000456")
 	id, err := saf.Enqueue(ctx, tranID, "0420", []byte("payload"))
 	require.NoError(t, err)
 
@@ -67,7 +67,7 @@ func TestSafRepository_markDeadIncrementsDeadCount__MCN_401_AC3(t *testing.T) {
 	saf := NewSafRepository(pool)
 	ctx := context.Background()
 
-	tranID := insertTestTran(t, ctx, tranLog, "626514000789", "000789")
+	tranID := insertTestTran(ctx, t, tranLog, "626514000789", "000789")
 	id, err := saf.Enqueue(ctx, tranID, "0420", []byte("payload"))
 	require.NoError(t, err)
 

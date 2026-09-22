@@ -38,7 +38,10 @@ func (f *fakeSaf) MarkInFlight(_ context.Context, _ int64, attempts int, _ time.
 	f.inFlights = append(f.inFlights, attempts)
 	return nil
 }
-func (f *fakeSaf) MarkAcked(_ context.Context, id int64) error { f.acked = append(f.acked, id); return nil }
+func (f *fakeSaf) MarkAcked(_ context.Context, id int64) error {
+	f.acked = append(f.acked, id)
+	return nil
+}
 func (f *fakeSaf) MarkDead(_ context.Context, id int64, _ string) error {
 	f.dead = append(f.dead, id)
 	return nil

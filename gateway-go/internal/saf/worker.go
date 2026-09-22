@@ -20,8 +20,8 @@ type MuxSender interface {
 	Send(ctx context.Context, mti string, fields map[int]string) (map[int]string, error)
 }
 
-// SafPort is the saf_queue access Worker needs. *store.SafRepository satisfies it.
-type SafPort interface {
+// Port is the saf_queue access Worker needs. *store.SafRepository satisfies it.
+type Port interface {
 	ClaimDue(ctx context.Context, limit int) ([]store.SafRow, error)
 	MarkInFlight(ctx context.Context, id int64, attempts int, nextRetryAt time.Time) error
 	MarkAcked(ctx context.Context, id int64) error
@@ -32,7 +32,7 @@ type SafPort interface {
 // full-jitter backing off between attempts, and dead-lettering after max_attempts.
 type Worker struct {
 	mux          MuxSender
-	saf          SafPort
+	saf          Port
 	encKey       []byte
 	backoff      isonet.Backoff
 	pollInterval time.Duration
@@ -40,7 +40,7 @@ type Worker struct {
 
 // NewWorker builds a Worker. encKey decrypts saf_queue.payload_enc (nil is fine when every
 // claimed row carries an empty payload, e.g. in tests).
-func NewWorker(mux MuxSender, saf SafPort, encKey []byte, backoff isonet.Backoff, pollInterval time.Duration) *Worker {
+func NewWorker(mux MuxSender, saf Port, encKey []byte, backoff isonet.Backoff, pollInterval time.Duration) *Worker {
 	return &Worker{mux: mux, saf: saf, encKey: encKey, backoff: backoff, pollInterval: pollInterval}
 }
 

@@ -11,6 +11,12 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
+const (
+	testMerchantID   = "GOCPHO000000001"
+	tranTypePurchase = "PURCHASE"
+	statusSent       = "SENT"
+)
+
 func newTestPool(t *testing.T) *store.Pool {
 	t.Helper()
 	ctx := context.Background()
@@ -32,12 +38,12 @@ func TestReversalQueuer_queuesTimeoutAsReasonSixtyEightAtomically__MCN_401_AC1(t
 	safRepo := store.NewSafRepository(pool)
 	ctx := context.Background()
 
-	id, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000123", Type: "PURCHASE", Status: "SENT", Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: "GOCPHO000000001", NetworkSTAN: "000123"})
+	id, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000123", Type: tranTypePurchase, Status: statusSent, Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000123"})
 	require.NoError(t, err)
 	require.NoError(t, tranLog.UpdateStatus(ctx, id, "TIMED_OUT", "", ""))
 
 	q := NewReversalQueuer(pool, nil)
-	txn := store.TranLogRow{ID: id, RRN: "626514000123", Type: "PURCHASE", Status: "TIMED_OUT", NetworkSTAN: "000123", Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: "GOCPHO000000001", CreatedAt: time.Now()}
+	txn := store.TranLogRow{ID: id, RRN: "626514000123", Type: tranTypePurchase, Status: "TIMED_OUT", NetworkSTAN: "000123", Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, CreatedAt: time.Now()}
 	require.NoError(t, q.Queue(ctx, txn, "68"))
 
 	got, err := tranLog.Get(ctx, "626514000123")
@@ -60,11 +66,11 @@ func TestReversalQueuer_queuesCancellationAsReasonSeventeen__MCN_401_AC5(t *test
 	safRepo := store.NewSafRepository(pool)
 	ctx := context.Background()
 
-	id, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000456", Type: "PURCHASE", Status: "SENT", Amount: 5000, Currency: "704", TerminalID: "00000042", MerchantID: "GOCPHO000000001", NetworkSTAN: "000456"})
+	id, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000456", Type: tranTypePurchase, Status: statusSent, Amount: 5000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000456"})
 	require.NoError(t, err)
 
 	q := NewReversalQueuer(pool, nil)
-	txn := store.TranLogRow{ID: id, RRN: "626514000456", Type: "PURCHASE", Status: "SENT", NetworkSTAN: "000456", Amount: 5000, Currency: "704", TerminalID: "00000042", MerchantID: "GOCPHO000000001", CreatedAt: time.Now()}
+	txn := store.TranLogRow{ID: id, RRN: "626514000456", Type: tranTypePurchase, Status: statusSent, NetworkSTAN: "000456", Amount: 5000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, CreatedAt: time.Now()}
 	require.NoError(t, q.Queue(ctx, txn, "17"))
 
 	pending, _, err := safRepo.ListPending(ctx)
