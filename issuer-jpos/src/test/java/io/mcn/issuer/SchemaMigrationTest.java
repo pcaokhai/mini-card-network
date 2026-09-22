@@ -33,7 +33,7 @@ class SchemaMigrationTest {
     DataSource ds = new com.zaxxer.hikari.HikariDataSource(cfg);
     Flyway flyway = Flyway.configure().dataSource(ds).load();
     int applied = flyway.migrate().migrationsExecuted;
-    assertThat(applied).isGreaterThanOrEqualTo(3); // V1 (MCN-201) + V2 + V3
+    assertThat(applied).isGreaterThanOrEqualTo(4); // V1 (MCN-201) + V2 + V3 + V4 (MCN-308)
 
     try (Connection c = ds.getConnection();
         Statement st = c.createStatement()) {
@@ -60,7 +60,15 @@ class SchemaMigrationTest {
               "response_code",
               "system_state",
               "cutover_log",
-              "acquirer_link");
+              "acquirer_link",
+              "idempotency_record");
+
+      ResultSet cols =
+          st.executeQuery(
+              "SELECT column_name FROM information_schema.columns WHERE table_name = 'card'");
+      Set<String> cardColumns = new HashSet<>();
+      while (cols.next()) cardColumns.add(cols.getString(1));
+      assertThat(cardColumns).contains("card_ref", "holder_name");
     }
   }
 }
