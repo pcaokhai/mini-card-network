@@ -24,6 +24,8 @@ dependencies {
     testImplementation(libs.archunit)
     testImplementation(libs.testcontainers.postgresql)
     testImplementation(libs.testcontainers.junit)
+    testImplementation(libs.mockito.core)
+    testImplementation(libs.mockito.junit.jupiter)
 }
 
 val generatePackager = tasks.register<GeneratePackagerTask>("generatePackager") {

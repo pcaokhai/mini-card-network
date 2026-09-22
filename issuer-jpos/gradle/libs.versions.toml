@@ -13,3 +13,5 @@ hikaricp = { module = "com.zaxxer:HikariCP", version = "latest.release" }
 flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version = "latest.release" }
 testcontainers-postgresql = { module = "org.testcontainers:postgresql", version = "latest.release" }
 testcontainers-junit = { module = "org.testcontainers:junit-jupiter", version = "latest.release" }
+mockito-core = { module = "org.mockito:mockito-core", version = "latest.release" }
+mockito-junit-jupiter = { module = "org.mockito:mockito-junit-jupiter", version = "latest.release" }
