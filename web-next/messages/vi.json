@@ -123,7 +123,8 @@
       "heading": "Luồng trực tiếp",
       "empty": "Chưa có giao dịch",
       "rrn": "RRN",
-      "rc": "RC"
+      "rc": "RC",
+      "viewJourney": "Xem hành trình"
     }
   },
   "cards": {
@@ -185,5 +186,25 @@
     "errors": {
       "staleCard": "Someone changed this card. Reload to continue."
     }
+  },
+  "journey": {
+    "title": "Hành trình giao dịch",
+    "controls": {
+      "restart": "Bắt đầu lại",
+      "back": "Lùi",
+      "play": "Phát",
+      "pause": "Tạm dừng",
+      "next": "Tiếp"
+    },
+    "money": {
+      "heading": "Biến động tiền"
+    },
+    "detail": {
+      "empty": "Bước này không có message ISO.",
+      "de": "DE",
+      "name": "Trường",
+      "value": "Giá trị"
+    },
+    "viewJourney": "Xem hành trình"
   }
 }

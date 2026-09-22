@@ -123,7 +123,8 @@
       "heading": "Live feed",
       "empty": "No transactions yet",
       "rrn": "RRN",
-      "rc": "RC"
+      "rc": "RC",
+      "viewJourney": "View journey"
     }
   },
   "cards": {
@@ -185,5 +186,25 @@
     "errors": {
       "staleCard": "Someone changed this card. Reload to continue."
     }
+  },
+  "journey": {
+    "title": "Transaction journey",
+    "controls": {
+      "restart": "Restart",
+      "back": "Back",
+      "play": "Play",
+      "pause": "Pause",
+      "next": "Next"
+    },
+    "money": {
+      "heading": "Money movement"
+    },
+    "detail": {
+      "empty": "This step carries no ISO message.",
+      "de": "DE",
+      "name": "Field",
+      "value": "Value"
+    },
+    "viewJourney": "View journey"
   }
 }

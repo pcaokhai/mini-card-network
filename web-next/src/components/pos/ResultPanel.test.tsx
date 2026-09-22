@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { renderWithIntl } from "@/test/render";
 import type { components } from "@/shared/api/generated/schema";
 import { ResultPanel } from "./ResultPanel";
 
@@ -29,18 +30,18 @@ const declined: Transaction = {
 
 describe("ResultPanel", () => {
   it("shows a plain outcome in easy mode with no MTI/STAN/RC line", () => {
-    render(<ResultPanel transaction={approved} expertMode={false} />);
+    renderWithIntl(<ResultPanel transaction={approved} expertMode={false} />);
     expect(screen.getByText(/approved/i)).toBeInTheDocument();
     expect(screen.queryByText(/RC /i)).not.toBeInTheDocument();
   });
 
   it("shows the MTI/STAN/RC line in expert mode", () => {
-    render(<ResultPanel transaction={declined} expertMode={true} />);
+    renderWithIntl(<ResultPanel transaction={declined} expertMode={true} />);
     expect(screen.getByText(/RC 62/)).toBeInTheDocument();
   });
 
   it("applies the decline animation class for a DECLINED status", () => {
-    const { container } = render(<ResultPanel transaction={declined} expertMode={false} />);
+    const { container } = renderWithIntl(<ResultPanel transaction={declined} expertMode={false} />);
     expect(container.querySelector('[data-outcome="DECLINED"]')).toBeInTheDocument();
   });
 });

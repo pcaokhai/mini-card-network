@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { useTranslations } from "next-intl";
 import type { components } from "@/shared/api/generated/schema";
 import "./pos.css";
 
@@ -9,6 +11,7 @@ interface ResultPanelProps {
 }
 
 export function ResultPanel({ transaction, expertMode }: ResultPanelProps) {
+  const t = useTranslations("journey");
   if (!transaction) return null;
   const isApproved = transaction.status === "APPROVED";
 
@@ -25,6 +28,11 @@ export function ResultPanel({ transaction, expertMode }: ResultPanelProps) {
         <div className="mt-2 font-mono text-xs text-muted">
           STAN {transaction.stan ?? "—"} · RC {transaction.responseCode ?? "—"}
         </div>
+      )}
+      {transaction.rrn && (
+        <Link href={`/transactions/${transaction.rrn}`} className="mt-2 block text-sm underline">
+          {t("viewJourney")}
+        </Link>
       )}
     </div>
   );
