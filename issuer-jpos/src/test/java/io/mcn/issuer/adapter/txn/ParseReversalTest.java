@@ -23,7 +23,7 @@ class ParseReversalTest {
     assertThat(ctx.<String>get(TxnContextKeys.ORIGINAL_MTI)).isEqualTo("0200");
     assertThat(ctx.<String>get(TxnContextKeys.ORIGINAL_STAN)).isEqualTo("000123");
     assertThat(ctx.<String>get(TxnContextKeys.ORIGINAL_DE7)).isEqualTo("0922140000");
-    assertThat(ctx.<String>get(TxnContextKeys.ORIGINAL_ACQUIRER)).isEqualTo("970499     ");
+    assertThat(ctx.<String>get(TxnContextKeys.ORIGINAL_ACQUIRER)).isEqualTo("970499");
     assertThat(ctx.<String>get(TxnContextKeys.REVERSAL_REASON)).isEqualTo("68");
   }
 }

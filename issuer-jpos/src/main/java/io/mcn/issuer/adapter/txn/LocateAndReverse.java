@@ -119,8 +119,13 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
     }
 
     OriginalTransactionRow original = found.get();
-    if ("REVERSED".equals(original.status())) {
-      return PREPARED; // idempotent repeat: no second journal entry
+    if (!"APPROVED".equals(original.status())) {
+      // Already REVERSED: idempotent repeat, no second journal entry. Anything else (DECLINED,
+      // RECEIVED) never moved money in the first place - most commonly a later original that
+      // Deduplicate's RC-94 short-circuit already declined because this same reversal recorded
+      // reversal_without_original first; reversing it would fabricate a credit with no matching
+      // debit, breaking the double-entry invariant (docs/10 §5).
+      return PREPARED;
     }
 
     long accountId =
