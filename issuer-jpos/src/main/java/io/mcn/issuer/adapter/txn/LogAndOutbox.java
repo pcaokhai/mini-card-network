@@ -1,0 +1,88 @@
+package io.mcn.issuer.adapter.txn;
+
+import io.mcn.issuer.adapter.persistence.TranLogRepository;
+import io.mcn.issuer.adapter.persistence.TranLogRow;
+import java.io.Serializable;
+import java.time.LocalDate;
+import java.util.Map;
+import org.jpos.iso.ISOMsg;
+import org.jpos.transaction.Context;
+import org.jpos.transaction.TransactionParticipant;
+
+/**
+ * Writes the {@code tran_log} row for every attempt (docs/plans/MCN-302a.md Global Constraints) -
+ * approved, declined, or the RC-96 placeholder. Runs in {@code commit()}, not {@code prepare()}:
+ * the write only happens once the transaction is really finishing. A duplicate hit is not
+ * re-logged (the row already exists; re-inserting would violate {@code uq_tran_dedupe}).
+ */
+public class LogAndOutbox implements TransactionParticipant {
+
+  private static final Map<String, String> TRAN_TYPE_BY_PROCESSING_CODE =
+      Map.of(
+          "000000", "PURCHASE",
+          "010000", "CASH",
+          "200000", "REFUND",
+          "310000", "BALANCE");
+
+  private final TranLogRepository tranLogRepository;
+
+  public LogAndOutbox(TranLogRepository tranLogRepository) {
+    this.tranLogRepository = tranLogRepository;
+  }
+
+  @Override
+  public int prepare(long id, Serializable context) {
+    return PREPARED;
+  }
+
+  @Override
+  public void commit(long id, Serializable context) {
+    Context ctx = (Context) context;
+    if (Boolean.TRUE.equals(ctx.<Boolean>get(TxnContextKeys.IS_DUPLICATE))) {
+      return;
+    }
+
+    ISOMsg request = ctx.get(TxnContextKeys.REQUEST);
+    String responseCode = ctx.get(TxnContextKeys.RESPONSE_CODE);
+    String declineReason = ctx.get(TxnContextKeys.DECLINE_REASON);
+    Long amount = ctx.get(TxnContextKeys.AMOUNT);
+    Long cardId = ctx.get(TxnContextKeys.CARD_ID);
+    String processingCode = field(request, 3);
+
+    TranLogRow row =
+        new TranLogRow(
+            LocalDate.now(),
+            mti(request),
+            TRAN_TYPE_BY_PROCESSING_CODE.getOrDefault(processingCode, "PURCHASE"),
+            processingCode == null ? "000000" : processingCode,
+            ctx.<String>get(TxnContextKeys.ACQUIRER_ID),
+            field(request, 41),
+            field(request, 42),
+            field(request, 11),
+            field(request, 7),
+            field(request, 37),
+            amount == null ? 0L : amount,
+            "704",
+            cardId,
+            "00".equals(responseCode) ? "APPROVED" : "DECLINED",
+            responseCode,
+            declineReason);
+    tranLogRepository.insert(row);
+  }
+
+  private static String field(ISOMsg msg, int number) {
+    try {
+      return msg.hasField(number) ? msg.getString(number) : null;
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  private static String mti(ISOMsg msg) {
+    try {
+      return msg.getMTI();
+    } catch (Exception e) {
+      throw new IllegalStateException("request has no MTI", e);
+    }
+  }
+}
