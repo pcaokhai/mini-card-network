@@ -78,6 +78,9 @@ This project does not require the global workflow's "Research & Reuse" step (Git
 - **Verify CI with `gh run list --branch <branch>` alongside `gh pr checks`, every time.** Twice in Sprint 4 a PR showed only `GitGuardian` passing (no real GitHub Actions run at all) while `gh pr checks`'s summary still looked plausible — the real cause was a stale branch needing a rebase. Don't trust the checks summary alone.
 - **Cleanup order: `git worktree remove` before `gh pr merge --delete-branch`.** The reverse order fails every time ("cannot delete branch ... used by worktree") and costs an extra round trip.
 - **Poll CI in the background**, not with a blocking shell loop — frees the turn to prep the next wave's worktrees while waiting.
+- **Prefer `gh-axi` over raw `gh` for interactive PR/run inspection** (`gh-axi pr view`, `gh-axi run list`, `gh-axi pr checks`) — it truncates PR bodies and formats compactly by design, unlike `gh`'s full JSON. This project's own `~/.claude` config says to prefer it and Sprints 2–4 never did. Scripts are the one exception: `scripts/land-pr.sh` uses plain `gh --json` internally because its control flow needs exact machine-parseable fields, not a human-readable summary.
+- **Landing a PR is one command, not eight.** `scripts/land-pr.sh <pr-number> <worktree-path> <test-command>` rebases only if actually behind, re-verifies only what a rebase could have changed, confirms a real CI run happened (not just a third-party check), merges, and cleans up the worktree in the right order.
+- **Fix it yourself when you already know the root cause from the CI log — don't dispatch a subagent to go re-discover what you just read.** Re-dispatching to "investigate and fix" a bug you've already root-caused from the failure output costs a full round trip for no new information. Reserve a fresh dispatch for cases where the cause is genuinely unclear.
 
 ## 6. Engineering rules (summary — full text in `docs/10-engineering-standards.md`)
 
