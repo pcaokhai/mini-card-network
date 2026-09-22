@@ -49,3 +49,36 @@
     outline-offset: 2px;
   }
 }
+
+@keyframes countdown-ring {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 113;
+  }
+}
+
+.countdown-ring-track {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 3;
+}
+
+.countdown-ring-progress {
+  fill: none;
+  stroke: var(--color-warn);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  animation-name: countdown-ring;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .countdown-ring-progress {
+    animation: none;
+  }
+}

@@ -257,6 +257,9 @@
       "name": "Field",
       "value": "Value"
     },
+    "countdown": {
+      "ariaLabel": "Waiting for issuer response"
+    },
     "viewJourney": "View journey"
   }
 }
