@@ -19,6 +19,16 @@ const (
 	acquirerID     = "970499" // docs/03 §3: Lab acquirer institution ID (DE 32)
 	purchaseRoute  = "purchases"
 	requestTimeout = 30 * time.Second // docs/03 §9
+
+	tranTypePurchase = "PURCHASE"
+
+	statusCreated  = "CREATED"
+	statusSent     = "SENT"
+	statusApproved = "APPROVED"
+	statusDeclined = "DECLINED"
+	statusTimedOut = "TIMED_OUT"
+
+	rcLinkDown = "91" // docs/03 §8: Issuer or switch inoperative
 )
 
 // ponytail: v1 seeds exactly one terminal/merchant (contracts/fixtures/cards.json's terminals
@@ -58,6 +68,8 @@ type Money struct {
 }
 
 // PurchaseRequest mirrors contracts/openapi.yaml's PurchaseRequest schema.
+//
+//nolint:revive // named PurchaseRequest, not Request, to match the OpenAPI schema name exactly.
 type PurchaseRequest struct {
 	TerminalID        string `json:"terminalId"`
 	CardToken         string `json:"cardToken"`
@@ -157,24 +169,28 @@ func (s *Service) CreatePurchase(ctx context.Context, req PurchaseRequest, idemp
 	}
 	maskedPAN := obs.MaskPAN(card.PAN)
 
-	if !s.linkStatus.IsSignedOn() {
-		txn := s.declinedTransaction(req, maskedPAN, "91")
-		if err := s.persistAndBroadcast(ctx, txn, req, idempotencyKey, requestHash); err != nil {
-			return Transaction{}, err
-		}
-		return txn, nil
-	}
-
 	stan, ok := s.mux.NextSTAN()
-	if !ok {
-		// Link went down between the check above and now; same outcome as the check failing.
-		txn := s.declinedTransaction(req, maskedPAN, "91")
+	if !s.linkStatus.IsSignedOn() || !ok {
+		txn := s.declinedTransaction(req, maskedPAN, rcLinkDown)
 		if err := s.persistAndBroadcast(ctx, txn, req, idempotencyKey, requestHash); err != nil {
 			return Transaction{}, err
 		}
 		return txn, nil
 	}
 
+	txn, err := s.sendPurchase(ctx, req, card, maskedPAN, stan)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if err := s.persistAndBroadcast(ctx, txn, req, idempotencyKey, requestHash); err != nil {
+		return Transaction{}, err
+	}
+	return txn, nil
+}
+
+// sendPurchase builds the 0200, sends it, and maps the outcome to a Transaction, recording every
+// tran_log state transition along the way.
+func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card CardFixture, maskedPAN, stan string) (Transaction, error) {
 	now := time.Now().UTC()
 	local := now.In(terminalLocation)
 	rrn := BuildRRN(now, stan)
@@ -198,63 +214,53 @@ func (s *Service) CreatePurchase(ctx context.Context, req PurchaseRequest, idemp
 	}
 
 	row := store.TranLogRow{
-		RRN: rrn, Type: "PURCHASE", Status: "CREATED", Amount: req.Amount.Amount, Currency: req.Amount.Currency,
+		RRN: rrn, Type: tranTypePurchase, Status: statusCreated, Amount: req.Amount.Amount, Currency: req.Amount.Currency,
 		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: fixedMerchantID, NetworkSTAN: stan,
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {
 		return Transaction{}, fmt.Errorf("insert tran_log: %w", err)
 	}
-	if err := s.tranLog.UpdateStatus(ctx, id, "SENT"); err != nil {
-		return Transaction{}, fmt.Errorf("update tran_log to SENT: %w", err)
+	if err := s.tranLog.UpdateStatus(ctx, id, statusSent); err != nil {
+		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", statusSent, err)
 	}
-	if err := s.tranLog.RecordStateTransition(ctx, id, "CREATED", "SENT"); err != nil {
-		return Transaction{}, fmt.Errorf("record CREATED->SENT: %w", err)
+	if err := s.tranLog.RecordStateTransition(ctx, id, statusCreated, statusSent); err != nil {
+		return Transaction{}, fmt.Errorf("record %s->%s: %w", statusCreated, statusSent, err)
 	}
 
 	sendCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	resp, err := s.mux.Send(sendCtx, "0200", fields)
 
-	var txn Transaction
+	txn := s.baseTransaction(req, rrn, stan, maskedPAN)
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		// Known follow-up for MCN-401 (reversal/SAF): no reversal is queued here yet (YAGNI -
 		// that mechanism doesn't exist until MCN-401).
-		txn = s.baseTransaction(req, rrn, stan, maskedPAN)
-		txn.Status = "TIMED_OUT"
-		if uErr := s.tranLog.UpdateStatus(ctx, id, "TIMED_OUT"); uErr != nil {
-			return Transaction{}, fmt.Errorf("update tran_log to TIMED_OUT: %w", uErr)
-		}
-		_ = s.tranLog.RecordStateTransition(ctx, id, "SENT", "TIMED_OUT")
+		txn.Status = statusTimedOut
 	case err != nil:
 		return Transaction{}, fmt.Errorf("send purchase: %w", err)
 	default:
-		rc := resp[39]
-		txn = s.baseTransaction(req, rrn, stan, maskedPAN)
-		txn.ResponseCode = rc
+		txn.ResponseCode = resp[39]
 		txn.AuthCode = resp[38]
-		if rc == "00" {
-			txn.Status = "APPROVED"
+		if txn.ResponseCode == "00" {
+			txn.Status = statusApproved
 		} else {
-			txn.Status = "DECLINED"
+			txn.Status = statusDeclined
 		}
-		if uErr := s.tranLog.UpdateStatus(ctx, id, txn.Status); uErr != nil {
-			return Transaction{}, fmt.Errorf("update tran_log to %s: %w", txn.Status, uErr)
-		}
-		_ = s.tranLog.RecordStateTransition(ctx, id, "SENT", txn.Status)
 	}
 
-	if err := s.persistAndBroadcast(ctx, txn, req, idempotencyKey, requestHash); err != nil {
-		return Transaction{}, err
+	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status); err != nil {
+		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
 	}
+	_ = s.tranLog.RecordStateTransition(ctx, id, statusSent, txn.Status)
 	return txn, nil
 }
 
 func (s *Service) baseTransaction(req PurchaseRequest, rrn, stan, maskedPAN string) Transaction {
 	now := time.Now().UTC()
 	return Transaction{
-		RRN: rrn, STAN: stan, Type: "PURCHASE", Amount: req.Amount, MaskedPAN: maskedPAN,
+		RRN: rrn, STAN: stan, Type: tranTypePurchase, Amount: req.Amount, MaskedPAN: maskedPAN,
 		TerminalID: req.TerminalID, MerchantName: fixedMerchantName, CreatedAt: now,
 		BusinessDate: now.Format("2006-01-02"),
 	}
@@ -266,9 +272,10 @@ func (s *Service) baseTransaction(req PurchaseRequest, rrn, stan, maskedPAN stri
 // same UTC second, acceptable for this lab; a real deployment would reserve a STAN even for
 // link-down declines.
 func (s *Service) declinedTransaction(req PurchaseRequest, maskedPAN, responseCode string) Transaction {
-	rrn := BuildRRN(time.Now().UTC(), "000000")
-	txn := s.baseTransaction(req, rrn, "000000", maskedPAN)
-	txn.Status = "DECLINED"
+	const noStan = "000000"
+	rrn := BuildRRN(time.Now().UTC(), noStan)
+	txn := s.baseTransaction(req, rrn, noStan, maskedPAN)
+	txn.Status = statusDeclined
 	txn.ResponseCode = responseCode
 	return txn
 }
@@ -276,11 +283,11 @@ func (s *Service) declinedTransaction(req PurchaseRequest, maskedPAN, responseCo
 // persistAndBroadcast records a link-down decline in tran_log, broadcasts the transaction, and
 // stores the idempotent response so a replay never resends.
 func (s *Service) persistAndBroadcast(ctx context.Context, txn Transaction, req PurchaseRequest, idempotencyKey, requestHash string) error {
-	if txn.Status == "DECLINED" && txn.ResponseCode == "91" {
+	if txn.Status == statusDeclined && txn.ResponseCode == rcLinkDown {
 		// Link-down decline: mux.Send was never called, so this row wasn't logged earlier in
 		// CreatePurchase; log it now so it's still visible in tran_log.
 		row := store.TranLogRow{
-			RRN: txn.RRN, Type: "PURCHASE", Status: "DECLINED",
+			RRN: txn.RRN, Type: tranTypePurchase, Status: statusDeclined,
 			Amount: req.Amount.Amount, Currency: req.Amount.Currency, MaskedPAN: txn.MaskedPAN,
 			TerminalID: req.TerminalID, MerchantID: fixedMerchantID, ResponseCode: txn.ResponseCode,
 		}

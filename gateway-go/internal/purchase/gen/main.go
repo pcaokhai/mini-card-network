@@ -46,7 +46,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile("cards_gen.go", formatted, 0o644); err != nil {
+	if err := os.WriteFile("cards_gen.go", formatted, 0o600); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -41,7 +41,9 @@ func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status string) e
 }
 func (f *fakeTranLog) RecordStateTransition(context.Context, int64, string, string) error { return nil }
 
-type fakeIdempotency struct{ stored map[string]store.StoredResponse }
+type fakeIdempotency struct {
+	stored map[string]store.StoredResponse
+}
 
 func (f *fakeIdempotency) Find(_ context.Context, key, route string) (*store.StoredResponse, error) {
 	stored, ok := f.stored[key+route]
