@@ -44,8 +44,5 @@ tasks.named<JavaExec>("run") {
 }
 // The application plugin already merges src/dist into the distribution by convention;
 // declaring it again here made distTar/distZip see every file twice.
-tasks.test {
-    useJUnitPlatform()
-    testLogging { showStandardStreams = true }
-}
+tasks.test { useJUnitPlatform() }
 spotless { java { googleJavaFormat(); target("src/**/*.java") } }
