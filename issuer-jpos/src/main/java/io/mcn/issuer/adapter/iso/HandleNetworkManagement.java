@@ -5,8 +5,10 @@ import org.jpos.iso.ISOException;
 import org.jpos.iso.ISOMsg;
 
 /**
- * Sign-on/sign-off/echo per docs/03 §7.1. Financial (01xx/02xx) requests get RC 91 unconditionally
- * this sprint: no authorization participant exists yet (MCN-302 replaces this).
+ * Sign-on/sign-off/echo per docs/03 §7.1. Financial (01xx/02xx) requests are not this listener's
+ * concern as of MCN-302a: {@link #handle} returns {@code null} for them so {@code
+ * NetworkManagementListener} declines to consume the message, leaving it for {@code
+ * AuthorizationListener} (registered after it in {@code 30_iso_server.xml}).
  */
 public final class HandleNetworkManagement {
   private static final String LAB_ACQUIRER_ID = "970499"; // docs/03 §3
@@ -19,16 +21,17 @@ public final class HandleNetworkManagement {
 
   public ISOMsg handle(ISOMsg request) throws ISOException {
     String mtiClass = request.getMTI().substring(0, 2);
-    ISOMsg response = (ISOMsg) request.clone();
-    response.setResponseMTI();
 
     if ("08".equals(mtiClass)) {
+      ISOMsg response = (ISOMsg) request.clone();
+      response.setResponseMTI();
       return handleNetworkManagement(request, response);
     }
     if ("01".equals(mtiClass) || "02".equals(mtiClass)) {
-      response.set(39, "91");
-      return response;
+      return null;
     }
+    ISOMsg response = (ISOMsg) request.clone();
+    response.setResponseMTI();
     response.set(39, "30");
     return response;
   }

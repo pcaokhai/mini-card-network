@@ -9,12 +9,26 @@
   <attr name="maxSessions" type="int">100</attr>
 
   <channel class="org.jpos.iso.channel.NACChannel" packager="org.jpos.iso.packager.GenericPackager">
-    <property name="packager-config" value="cfg/iso87ascii.xml" />
+    <!-- overridable so an embedded-Q2 test (cwd != src/dist) can point at an absolute path -->
+    <property name="packager-config" value="${ISO_PACKAGER_CFG:cfg/iso87ascii.xml}" />
   </channel>
 
   <request-listener class="io.mcn.issuer.adapter.iso.NetworkManagementListener" logger="Q2">
     <property name="jdbc-url" value="${DATABASE_URL}" />
     <property name="jdbc-user" value="${DB_USER}" />
     <property name="jdbc-password" value="${DB_PASSWORD}" />
+  </request-listener>
+
+  <!--
+    Owns every financial (MTI class 01/02) request (MCN-302a). QServer dispatches to listeners in
+    document order and stops at the first one whose process() returns true
+    (org.jpos.iso.ISOServer#run); NetworkManagementListener now returns false for 01/02 so this
+    one gets them.
+  -->
+  <request-listener class="io.mcn.issuer.adapter.iso.AuthorizationListener" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+    <property name="txn-mgr-name" value="iso-txn-mgr" />
   </request-listener>
 </iso-server>

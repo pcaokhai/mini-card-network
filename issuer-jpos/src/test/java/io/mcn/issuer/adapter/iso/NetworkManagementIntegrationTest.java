@@ -64,6 +64,9 @@ class NetworkManagementIntegrationTest {
     server = new ISOServer(port, channel, 10);
     server.setConfiguration(new SimpleConfiguration());
     server.addISORequestListener(new NetworkManagementListener(links));
+    // Mirrors 30_iso_server.xml: AuthorizationListener owns every financial (01/02) request as of
+    // MCN-302a, including the unsigned-link RC 91 case this test class still exercises.
+    server.addISORequestListener(new AuthorizationListener(links, "unused-in-this-test"));
     new Thread(server, "test-iso-server").start();
     Thread.sleep(200); // let the accept loop bind before the test connects
   }
@@ -141,6 +144,8 @@ class NetworkManagementIntegrationTest {
 
   @Test
   void should_reject_financial_request_with_rc91__MCN_201_AC3() throws Exception {
+    // explicit, not relying on default fixture state or other tests' execution order
+    links.upsertStatus("970499", "DISCONNECTED");
     ISOMsg request =
         buildIso(
             "0200",
