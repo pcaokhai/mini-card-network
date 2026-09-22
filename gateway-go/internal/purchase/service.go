@@ -18,6 +18,7 @@ import (
 const (
 	acquirerID     = "970499" // docs/03 §3: Lab acquirer institution ID (DE 32)
 	purchaseRoute  = "purchases"
+	cancelRoute    = "cancellations"
 	requestTimeout = 30 * time.Second // docs/03 §9
 
 	tranTypePurchase = "PURCHASE"
@@ -26,9 +27,13 @@ const (
 	statusSent     = "SENT"
 	statusApproved = "APPROVED"
 	statusDeclined = "DECLINED"
-	statusTimedOut = "TIMED_OUT"
+	statusTimedOut        = "TIMED_OUT"
+	statusReversalPending = "REVERSAL_PENDING"
 
 	rcLinkDown = "91" // docs/03 §8: Issuer or switch inoperative
+
+	reasonTimeout      = "68" // docs/03 §7.3 DE 39: response arrived too late / timeout
+	reasonCancellation = "17" // docs/03 §7.3 DE 39: cancelled by customer
 )
 
 // ponytail: v1 seeds exactly one terminal/merchant (contracts/fixtures/cards.json's terminals
@@ -128,23 +133,42 @@ type HubPort interface {
 	BroadcastTransaction(eventType string, txn Transaction)
 }
 
+// ReversalQueuer atomically moves a transaction to REVERSAL_PENDING and enqueues its 0420
+// advice. *saf.ReversalQueuer satisfies it. reasonCode is DE 39 on the 0420 (docs/03 §7.3):
+// "68" timeout, "17" POS cancellation.
+type ReversalQueuer interface {
+	Queue(ctx context.Context, txn store.TranLogRow, reasonCode string) error
+}
+
+// TranLogGetter looks up a transaction by RRN. *store.TranLogRepository satisfies it (it already
+// implements TranLogPort too).
+type TranLogGetter interface {
+	Get(ctx context.Context, rrn string) (store.TranLogRow, error)
+}
+
 // Service builds and sends purchase transactions.
 type Service struct {
 	mux         MuxSender
 	linkStatus  LinkStatusPort
 	cardTokens  *CardTokenRegistry
 	tranLog     TranLogPort
+	tranLogGet  TranLogGetter
 	idempotency IdempotencyPort
 	hub         HubPort
+	reversal    ReversalQueuer
 }
 
 // NewService builds a Service. mux also serves as the LinkStatusPort (e.g. *isonet.Supervisor
+// implements both). tranLog also serves as the TranLogGetter (*store.TranLogRepository
 // implements both).
 func NewService(mux interface {
 	MuxSender
 	LinkStatusPort
-}, cardTokens *CardTokenRegistry, tranLog TranLogPort, idempotency IdempotencyPort, hub HubPort) *Service {
-	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, tranLog: tranLog, idempotency: idempotency, hub: hub}
+}, cardTokens *CardTokenRegistry, tranLog interface {
+	TranLogPort
+	TranLogGetter
+}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer) *Service {
+	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal}
 }
 
 // CreatePurchase builds a 0200, sends it through the live issuer connection, persists every
@@ -235,8 +259,6 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	txn := s.baseTransaction(req, rrn, stan, maskedPAN)
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		// Known follow-up for MCN-401 (reversal/SAF): no reversal is queued here yet (YAGNI -
-		// that mechanism doesn't exist until MCN-401).
 		txn.Status = statusTimedOut
 	case err != nil:
 		return Transaction{}, fmt.Errorf("send purchase: %w", err)
@@ -254,6 +276,20 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
 	}
 	_ = s.tranLog.RecordStateTransition(ctx, id, statusSent, txn.Status)
+
+	if txn.Status == statusTimedOut {
+		// Unknown outcome -> reversal (root CLAUDE.md §6.4): never resend the 0200, queue a 0420
+		// in SAF instead. The reversal->REVERSAL_PENDING transition happens inside Queue, so
+		// txn.Status here stays TIMED_OUT for this response (the caller sees the queue-time
+		// state, not the tran_log row after Queue).
+		reversalRow := row
+		reversalRow.ID = id
+		reversalRow.Status = statusTimedOut
+		reversalRow.CreatedAt = now
+		if err := s.reversal.Queue(ctx, reversalRow, reasonTimeout); err != nil {
+			return Transaction{}, fmt.Errorf("queue reversal for timeout: %w", err)
+		}
+	}
 	return txn, nil
 }
 
@@ -308,8 +344,51 @@ func (s *Service) persistAndBroadcast(ctx context.Context, txn Transaction, req 
 	return nil
 }
 
+// CancelPurchase queues a POS-initiated reversal (DE 39 = "17") for the transaction identified
+// by rrn, through the same atomic path CreatePurchase's timeout branch uses.
+func (s *Service) CancelPurchase(ctx context.Context, rrn string, idempotencyKey string) (Transaction, error) {
+	if stored, err := s.idempotency.Find(ctx, idempotencyKey, cancelRoute); err != nil {
+		return Transaction{}, fmt.Errorf("check idempotency: %w", err)
+	} else if stored != nil {
+		var txn Transaction
+		if err := json.Unmarshal(stored.Body, &txn); err != nil {
+			return Transaction{}, fmt.Errorf("decode stored transaction: %w", err)
+		}
+		return txn, nil
+	}
+
+	row, err := s.tranLogGet.Get(ctx, rrn)
+	if err != nil {
+		return Transaction{}, fmt.Errorf("look up transaction %s: %w", rrn, err)
+	}
+	if err := s.reversal.Queue(ctx, row, reasonCancellation); err != nil {
+		return Transaction{}, fmt.Errorf("queue reversal for cancellation: %w", err)
+	}
+
+	txn := Transaction{
+		RRN: row.RRN, Type: row.Type, Status: statusReversalPending,
+		Amount: Money{Amount: row.Amount, Currency: row.Currency}, MaskedPAN: row.MaskedPAN,
+		TerminalID: row.TerminalID, MerchantName: row.MerchantName, CreatedAt: time.Now().UTC(),
+		BusinessDate: time.Now().UTC().Format("2006-01-02"),
+	}
+
+	body, err := json.Marshal(txn)
+	if err != nil {
+		return Transaction{}, fmt.Errorf("encode transaction for idempotency store: %w", err)
+	}
+	requestHash := sha256Hex(rrn)
+	if err := s.idempotency.Store(ctx, idempotencyKey, cancelRoute, requestHash, 202, body); err != nil {
+		return Transaction{}, fmt.Errorf("store idempotent response: %w", err)
+	}
+	return txn, nil
+}
+
 func hashRequest(req PurchaseRequest) string {
 	body, _ := json.Marshal(req)
-	sum := sha256.Sum256(body)
+	return sha256Hex(string(body))
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
