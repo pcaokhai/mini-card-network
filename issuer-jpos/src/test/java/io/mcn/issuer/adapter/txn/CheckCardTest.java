@@ -31,7 +31,7 @@ class CheckCardTest {
   void blockedCardAbortsWithRc62() {
     var repo = Mockito.mock(CardRepository.class);
     when(repo.findByPanHash(any()))
-        .thenReturn(java.util.Optional.of(new Card(1L, 1L, "970436", "3310", "2707", "BLOCKED")));
+        .thenReturn(java.util.Optional.of(new Card(1L, 1L, "970436", "3310", "2707", "BLOCKED", "crd_test0001", "Test Holder")));
     Context ctx = new Context();
     ctx.put(TxnContextKeys.PAN_HASH, new byte[] {1, 2, 3});
     ctx.put(TxnContextKeys.BUSINESS_DATE, java.time.LocalDate.of(2026, 9, 22));
@@ -46,7 +46,7 @@ class CheckCardTest {
   void expiredCardAbortsWithRc54() {
     var repo = Mockito.mock(CardRepository.class);
     when(repo.findByPanHash(any()))
-        .thenReturn(java.util.Optional.of(new Card(1L, 1L, "970436", "7765", "2001", "ACTIVE")));
+        .thenReturn(java.util.Optional.of(new Card(1L, 1L, "970436", "7765", "2001", "ACTIVE", "crd_test0002", "Test Holder")));
     Context ctx = new Context();
     ctx.put(TxnContextKeys.PAN_HASH, new byte[] {1, 2, 3});
     ctx.put(TxnContextKeys.BUSINESS_DATE, java.time.LocalDate.of(2026, 9, 22));
@@ -61,7 +61,7 @@ class CheckCardTest {
   void activeUnexpiredCardIsPrepared() {
     var repo = Mockito.mock(CardRepository.class);
     when(repo.findByPanHash(any()))
-        .thenReturn(java.util.Optional.of(new Card(1L, 1L, "970436", "4417", "2811", "ACTIVE")));
+        .thenReturn(java.util.Optional.of(new Card(1L, 1L, "970436", "4417", "2811", "ACTIVE", "crd_test0003", "Test Holder")));
     Context ctx = new Context();
     ctx.put(TxnContextKeys.PAN_HASH, new byte[] {1, 2, 3});
     ctx.put(TxnContextKeys.BUSINESS_DATE, java.time.LocalDate.of(2026, 9, 22));

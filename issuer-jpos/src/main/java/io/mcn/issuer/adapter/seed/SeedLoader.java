@@ -52,10 +52,12 @@ public class SeedLoader {
       String panLast4 = pan.substring(pan.length() - 4);
       String expiryYymm = card.get("expiry").asText();
       String status = card.get("status").asText();
+      String cardRef = card.get("cardRef").asText();
+      String holderName = card.get("holderName").asText();
       try (PreparedStatement insertCard =
           conn.prepareStatement(
               "INSERT INTO card (account_id, pan_enc, pan_hash, bin, pan_last4, expiry_yymm,"
-                  + " status) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                  + " status, card_ref, holder_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
         insertCard.setLong(1, accountId);
         insertCard.setBytes(2, panEnc);
         insertCard.setBytes(3, panHash);
@@ -63,6 +65,8 @@ public class SeedLoader {
         insertCard.setString(5, panLast4);
         insertCard.setString(6, expiryYymm);
         insertCard.setString(7, status);
+        insertCard.setString(8, cardRef);
+        insertCard.setString(9, holderName);
         insertCard.executeUpdate();
       }
     }
