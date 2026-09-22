@@ -10,7 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/mcn/gateway-go/internal/iso8583"
+	"github.com/mcn/gateway-go/internal/store"
 )
+
+const signedOn = "SIGNED_ON"
 
 // fakeLinkStore is written by the Supervisor's own goroutine and polled by require.Eventually
 // from the test goroutine, so every access goes through mu.
@@ -104,11 +107,94 @@ func TestSupervisor_connectsSignsOnAndEchoes__MCN_202_AC1(t *testing.T) {
 	go func() { done <- sup.Run(ctx) }()
 
 	require.Eventually(t, func() bool {
-		return store.lastStatus() == "SIGNED_ON"
+		return store.lastStatus() == signedOn
 	}, time.Second, 10*time.Millisecond)
 
 	cancel()
 	require.NoError(t, <-done)
+}
+
+func TestSupervisor_triggerEchoSendsImmediately__MCN_204_AC3(t *testing.T) {
+	addr, closeFn := fakeIssuer(t)
+	defer closeFn()
+
+	store := &fakeLinkStore{}
+	sup := NewSupervisor(Config{Addr: addr, EchoInterval: time.Hour, EchoFailureLimit: 3}, store) // long interval: prove the trigger, not the ticker
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = sup.Run(ctx) }()
+
+	require.Eventually(t, func() bool { return store.lastStatus() == signedOn }, time.Second, 10*time.Millisecond)
+
+	result, err := sup.TriggerEcho(context.Background())
+	require.NoError(t, err)
+	require.True(t, result.OK)
+	require.NotNil(t, result.LatencyMs)
+	require.Equal(t, "00", *result.ResponseCode)
+}
+
+func TestSupervisor_triggerEchoReturnsNotOkWhenNotSignedOn__MCN_204_AC3(t *testing.T) {
+	store := &fakeLinkStore{}
+	sup := NewSupervisor(Config{Addr: "127.0.0.1:1", EchoInterval: time.Hour, EchoFailureLimit: 3}, store) // unreachable addr: never signs on
+
+	result, err := sup.TriggerEcho(context.Background())
+	require.NoError(t, err)
+	require.False(t, result.OK)
+}
+
+func TestSupervisor_triggerSignOnFailsWhenNotConnected__MCN_204_AC3(t *testing.T) {
+	store := &fakeLinkStore{}
+	sup := NewSupervisor(Config{Addr: "127.0.0.1:1", EchoInterval: time.Hour, EchoFailureLimit: 3}, store)
+
+	require.Error(t, sup.TriggerSignOn(context.Background()))
+	require.Error(t, sup.TriggerSignOff(context.Background()))
+}
+
+type fakeHub struct {
+	mu       sync.Mutex
+	statuses []store.Link
+	events   []store.NetworkEvent
+}
+
+func (h *fakeHub) BroadcastLinkStatus(l store.Link) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.statuses = append(h.statuses, l)
+}
+
+func (h *fakeHub) BroadcastNetworkEvent(e store.NetworkEvent) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.events = append(h.events, e)
+}
+
+func (h *fakeHub) lastStatus() (store.Link, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.statuses) == 0 {
+		return store.Link{}, false
+	}
+	return h.statuses[len(h.statuses)-1], true
+}
+
+func TestSupervisor_broadcastsLinkStatusOverHub__MCN_204_AC4(t *testing.T) {
+	addr, closeFn := fakeIssuer(t)
+	defer closeFn()
+
+	store := &fakeLinkStore{}
+	sup := NewSupervisor(Config{Addr: addr, EchoInterval: time.Hour, EchoFailureLimit: 3}, store)
+	hub := &fakeHub{}
+	sup.SetHub(hub)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = sup.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		l, ok := hub.lastStatus()
+		return ok && l.Status == signedOn
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestSupervisor_marksDownAfterThreeFailedEchoes__MCN_202_AC2(t *testing.T) {

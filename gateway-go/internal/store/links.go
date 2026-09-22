@@ -2,10 +2,13 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"time"
 )
 
-// Link is one row of link_state.
+// Link is one row of link_state. JSON shape matches contracts/openapi.yaml's Link schema
+// (linkId/from/to/lastEchoOk are derived, not stored, since v1 has exactly one link).
 type Link struct {
 	Endpoint          string
 	Status            string
@@ -15,13 +18,46 @@ type Link struct {
 	InFlight          int
 }
 
-// NetworkEvent is one row of network_event.
+const gatewayEndpoint = "gateway"
+
+// MarshalJSON emits the contracts/openapi.yaml Link shape.
+func (l Link) MarshalJSON() ([]byte, error) {
+	var lastEchoOk *bool
+	if l.LastEchoAt != nil {
+		ok := true
+		lastEchoOk = &ok
+	}
+	return json.Marshal(struct {
+		LinkID       string     `json:"linkId"`
+		From         string     `json:"from"`
+		To           string     `json:"to"`
+		Status       string     `json:"status"`
+		LastEchoAt   *time.Time `json:"lastEchoAt"`
+		LastEchoOk   *bool      `json:"lastEchoOk"`
+		P99LatencyMs *int       `json:"p99LatencyMs"`
+		InFlight     int        `json:"inFlight"`
+	}{l.Endpoint, gatewayEndpoint, l.Endpoint, l.Status, l.LastEchoAt, lastEchoOk, l.P99LatencyMs, l.InFlight})
+}
+
+// NetworkEvent is one row of network_event. JSON shape matches contracts/openapi.yaml's
+// NetworkEvent schema (id is a string on the wire).
 type NetworkEvent struct {
 	ID            int64
 	OccurredAt    time.Time
 	Severity      string
 	EasyText      string
 	TechnicalText string
+}
+
+// MarshalJSON emits the contracts/openapi.yaml NetworkEvent shape.
+func (e NetworkEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ID            string    `json:"id"`
+		OccurredAt    time.Time `json:"occurredAt"`
+		Severity      string    `json:"severity"`
+		EasyText      string    `json:"easyText"`
+		TechnicalText string    `json:"technicalText"`
+	}{strconv.FormatInt(e.ID, 10), e.OccurredAt, e.Severity, e.EasyText, e.TechnicalText})
 }
 
 // LinkRepository persists link_state and network_event.

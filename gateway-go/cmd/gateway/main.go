@@ -23,6 +23,7 @@ import (
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/store"
+	"github.com/mcn/gateway-go/internal/ws"
 )
 
 func main() {
@@ -57,10 +58,14 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	defer pool.Close()
 	linkRepo := store.NewLinkRepository(pool)
 	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoFailureLimit: 3}, linkRepo)
+	hub := ws.NewHub()
+	supervisor.SetHub(hub)
 	health := api.NewHealth()
 	r := chi.NewRouter()
 	api.NewRouter(r, health)
 	api.MountLab(r)
+	api.MountNetwork(r, linkRepo, supervisor)
+	r.Handle("/v1/stream", hub)
 	apiServer := &http.Server{
 		Handler:      otelhttp.NewHandler(r, "gateway-http"),
 		ReadTimeout:  5 * time.Second,
