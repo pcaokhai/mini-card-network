@@ -36,7 +36,9 @@ type Config struct {
 
 const endpointName = "issuer" // v1 has exactly one link; the switch (Sprint 10) adds more.
 
-var errNotSignedOn = errors.New("link is not signed on")
+// ErrNotSignedOn is returned by Send, TriggerSignOn and TriggerSignOff when no connection is
+// currently live.
+var ErrNotSignedOn = errors.New("link is not signed on")
 
 // EchoResult is the outcome of a manual echo trigger. A down link reports OK=false;
 // it never surfaces as an error (MCN-204-AC3).
@@ -97,7 +99,7 @@ func (s *Supervisor) TriggerSignOn(ctx context.Context) error {
 	s.triggerMu.Lock()
 	defer s.triggerMu.Unlock()
 	if s.mux == nil {
-		return errNotSignedOn
+		return ErrNotSignedOn
 	}
 	return s.signOn(ctx)
 }
@@ -107,9 +109,32 @@ func (s *Supervisor) TriggerSignOff(ctx context.Context) error {
 	s.triggerMu.Lock()
 	defer s.triggerMu.Unlock()
 	if s.mux == nil {
-		return errNotSignedOn
+		return ErrNotSignedOn
 	}
 	return s.signOff(ctx)
+}
+
+// IsSignedOn reports whether a connection is currently live. Callers outside the supervision
+// loop (e.g. purchase.Service) use this to short-circuit before attempting Send.
+func (s *Supervisor) IsSignedOn() bool {
+	s.triggerMu.Lock()
+	defer s.triggerMu.Unlock()
+	return s.mux != nil
+}
+
+// Send allocates the next STAN on the live connection and sends a request built from it, for
+// callers outside the supervision loop (e.g. purchase.Service) that need to share the one
+// connection's Mux rather than open a second one. STAN allocation and send happen under the same
+// lock as every other trigger so they can never race a reconnect. Returns ErrNotSignedOn if no
+// connection is currently live.
+func (s *Supervisor) Send(ctx context.Context, mti string, buildFields func(stan string) map[int]string) (map[int]string, error) {
+	s.triggerMu.Lock()
+	defer s.triggerMu.Unlock()
+	if s.mux == nil {
+		return nil, ErrNotSignedOn
+	}
+	stan := s.mux.NextSTAN()
+	return s.mux.Send(ctx, mti, buildFields(stan))
 }
 
 // setStatus updates the store and, if a Hub is wired, broadcasts the new link state.
