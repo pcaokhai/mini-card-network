@@ -22,6 +22,7 @@ import (
 	"github.com/mcn/gateway-go/internal/config"
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
+	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
 	"github.com/mcn/gateway-go/internal/ws"
 )
@@ -60,11 +61,13 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoFailureLimit: 3}, linkRepo)
 	hub := ws.NewHub()
 	supervisor.SetHub(hub)
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), store.NewTranLogRepository(pool), store.NewIdempotencyRepository(pool), hub)
 	health := api.NewHealth()
 	r := chi.NewRouter()
 	api.NewRouter(r, health)
 	api.MountLab(r)
 	api.MountNetwork(r, linkRepo, supervisor)
+	api.MountPurchases(r, purchaseService)
 	r.Handle("/v1/stream", hub)
 	apiServer := &http.Server{
 		Handler:      otelhttp.NewHandler(r, "gateway-http"),
