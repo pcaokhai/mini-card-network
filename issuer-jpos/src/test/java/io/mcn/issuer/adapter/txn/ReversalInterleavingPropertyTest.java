@@ -85,8 +85,8 @@ class ReversalInterleavingPropertyTest {
 
       for (Event event : order) {
         switch (event) {
-          case ORIGINAL -> runOriginal(
-              tranLog, deduplicate, authorize, businessDate, accountId, cardId, stan);
+          case ORIGINAL ->
+              runOriginal(tranLog, deduplicate, authorize, businessDate, accountId, cardId, stan);
           case DUPLICATE_ORIGINAL -> runDuplicateOriginal(deduplicate, businessDate, stan);
           case REVERSAL, REPEAT_REVERSAL -> runReversal(locateAndReverse, businessDate, stan);
         }

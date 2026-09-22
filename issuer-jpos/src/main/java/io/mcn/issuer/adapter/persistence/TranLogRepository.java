@@ -137,10 +137,10 @@ public class TranLogRepository {
   }
 
   /**
-   * Locates the original transaction a reversal's DE 90 refers to. Unlike {@link
-   * #findByDedupeKey}, this never filters on {@code tid} (DE 90 carries no TID, docs/03 §7.3) or on
-   * a business date (a reversal can arrive on a later business date than its original, per docs/03
-   * §7.3, so filtering by the reversal's own business date would miss the original).
+   * Locates the original transaction a reversal's DE 90 refers to. Unlike {@link #findByDedupeKey},
+   * this never filters on {@code tid} (DE 90 carries no TID, docs/03 §7.3) or on a business date (a
+   * reversal can arrive on a later business date than its original, per docs/03 §7.3, so filtering
+   * by the reversal's own business date would miss the original).
    */
   public Optional<OriginalTransactionRow> findByReversalKey(
       String originalMti, String originalStan, String originalDe7, String originalAcquirer) {

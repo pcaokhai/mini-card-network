@@ -64,8 +64,7 @@ public class LedgerRepository {
   }
 
   private long insertJournalEntry(
-      Connection conn, long tranId, LocalDate businessDate, String entryType)
-      throws SQLException {
+      Connection conn, long tranId, LocalDate businessDate, String entryType) throws SQLException {
     String sql =
         """
         INSERT INTO journal_entry (tran_id, tran_business_date, entry_type)
