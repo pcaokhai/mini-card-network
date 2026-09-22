@@ -1,7 +1,10 @@
 import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { renderWithIntl } from "@/test/render";
+import type { components } from "@/shared/api/generated/schema";
 import { StepDetail } from "./StepDetail";
+
+type JourneyStep = components["schemas"]["JourneyStep"];
 
 const step = {
   seq: 0,
@@ -18,7 +21,7 @@ const step = {
       { de: "3", easyName: "Processing code", technicalName: "Processing code", format: "n6", value: "000000" },
     ],
   },
-} as any;
+} as JourneyStep;
 
 describe("StepDetail", () => {
   it("renders the step's ISO message fields", () => {

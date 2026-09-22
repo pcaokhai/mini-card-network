@@ -15,7 +15,8 @@
 }
 
 .step-timeline li[data-state="future"] {
-  opacity: 0.4;
+  border-style: dashed;
+  background-color: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

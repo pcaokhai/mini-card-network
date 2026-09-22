@@ -11,7 +11,7 @@ interface StepTimelineProps {
 
 export function StepTimeline({ steps, currentStep, onSelectStep }: StepTimelineProps) {
   return (
-    <ol className="step-timeline flex flex-col gap-3">
+    <ol aria-label="Step timeline" className="step-timeline flex flex-col gap-3">
       {steps.map((step, index) => {
         const state = index < currentStep ? "past" : index === currentStep ? "current" : "future";
         return (

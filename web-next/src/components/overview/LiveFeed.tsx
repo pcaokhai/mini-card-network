@@ -1,4 +1,5 @@
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 import { useRef, useState } from "react";
 import { useWsEvents, type WsEnvelope } from "@/shared/ws/useWsEvents";
 import type { components } from "@/shared/api/generated/schema";
@@ -58,7 +59,9 @@ export function LiveFeed({ expertMode = false }: { expertMode?: boolean }) {
         {rows.length === 0 && <li className="text-sm text-muted">{t("empty")}</li>}
         {rows.map((row, index) => (
           <li key={`${row.rrn}-${index}`} className="feed-row--flash flex items-center gap-3 text-sm">
-            <span className="font-mono text-xs text-muted">{row.rrn}</span>
+            <Link href={`/transactions/${row.rrn}`} className="font-mono text-xs text-muted underline">
+              {row.rrn}
+            </Link>
             <span>{row.merchantName}</span>
             <span>{row.status}</span>
             {expertMode && row.responseCode && (

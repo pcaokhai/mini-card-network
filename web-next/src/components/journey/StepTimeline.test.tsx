@@ -2,13 +2,16 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithIntl } from "@/test/render";
+import type { components } from "@/shared/api/generated/schema";
 import { StepTimeline } from "./StepTimeline";
 
-const steps = [
-  { seq: 0, actor: "POS", offsetMs: 0, title: "Purchase requested", easyText: "", technicalText: "", kind: "INFO" },
-  { seq: 1, actor: "ISSUER", offsetMs: 50, title: "Approved", easyText: "", technicalText: "", kind: "OK" },
-  { seq: 2, actor: "ACQUIRER", offsetMs: 60, title: "Response returned", easyText: "", technicalText: "", kind: "INFO" },
-] as any;
+type JourneyStep = components["schemas"]["JourneyStep"];
+
+const steps: JourneyStep[] = [
+  { seq: 0, actor: "POS", offsetMs: 0, title: "Purchase requested", easyText: "", technicalText: "", kind: "INFO", message: null },
+  { seq: 1, actor: "ISSUER", offsetMs: 50, title: "Approved", easyText: "", technicalText: "", kind: "OK", message: null },
+  { seq: 2, actor: "ACQUIRER", offsetMs: 60, title: "Response returned", easyText: "", technicalText: "", kind: "INFO", message: null },
+];
 
 describe("StepTimeline", () => {
   it("marks the current step and dims future steps", () => {
