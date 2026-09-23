@@ -137,6 +137,20 @@ jobs:
           BASE_REF: origin/${{ github.base_ref || 'main' }}
           API_BREAKING: ${{ contains(github.event.pull_request.labels.*.name, 'api-breaking') }}
 
+  pci-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway-go/go.mod
+      - name: PCI scan (PAN / PIN block / track data)
+        run: make pci-scan
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   chaos:
     if: github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'chaos')
     runs-on: ubuntu-latest
