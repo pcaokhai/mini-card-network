@@ -10,6 +10,7 @@ import io.mcn.issuer.adapter.persistence.ReversalWithoutOriginalRepository;
 import io.mcn.issuer.adapter.persistence.TestDataSources;
 import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRow;
+import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.time.LocalDate;
@@ -64,7 +65,11 @@ class ReversalInterleavingPropertyTest {
     var deduplicate = new Deduplicate(tranLog, rwo);
     var authorize =
         new io.mcn.issuer.adapter.txn.Authorize(
-            new AccountLockRepository(ds), ledger, new AuthCodeGenerator(), ds);
+            new AccountLockRepository(ds),
+            ledger,
+            new VelocityCounterRepository(ds),
+            new AuthCodeGenerator(),
+            ds);
     var locateAndReverse = new LocateAndReverse(tranLog, ledger, rwo, cards, ds);
     LocalDate businessDate = LocalDate.now();
 

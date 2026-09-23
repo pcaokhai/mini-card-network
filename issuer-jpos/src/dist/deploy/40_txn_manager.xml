@@ -53,6 +53,11 @@
     <property name="jdbc-url" value="${DATABASE_URL}" />
     <property name="jdbc-user" value="${DB_USER}" />
     <property name="jdbc-password" value="${DB_PASSWORD}" />
+    <!-- MCN-803-AC2: config-driven velocity rules, in the original decline-priority order. -->
+    <property name="rules" value="
+      io.mcn.issuer.adapter.txn.velocity.PerTransactionAmountRule,
+      io.mcn.issuer.adapter.txn.velocity.DailyCountRule,
+      io.mcn.issuer.adapter.txn.velocity.DailyAmountRule" />
   </participant>
 
   <participant class="io.mcn.issuer.adapter.txn.Authorize" logger="Q2">

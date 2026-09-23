@@ -8,6 +8,7 @@ import io.mcn.issuer.adapter.persistence.LedgerRepository;
 import io.mcn.issuer.adapter.persistence.TestDataSources;
 import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRow;
+import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import io.mcn.issuer.adapter.txn.AuthCodeGenerator;
 import io.mcn.issuer.adapter.txn.Authorize;
 import io.mcn.issuer.adapter.txn.TxnContextKeys;
@@ -60,7 +61,9 @@ class ConcurrentPurchaseLoadTest {
     var lockRepo = new AccountLockRepository(ds);
     var ledgerRepo = new LedgerRepository();
     var tranLogRepo = new TranLogRepository(ds);
-    var authorize = new Authorize(lockRepo, ledgerRepo, new AuthCodeGenerator(), ds);
+    var velocityCounterRepo = new VelocityCounterRepository(ds);
+    var authorize =
+        new Authorize(lockRepo, ledgerRepo, velocityCounterRepo, new AuthCodeGenerator(), ds);
     var businessDate = LocalDate.now();
 
     ExecutorService pool = Executors.newFixedThreadPool(50);
