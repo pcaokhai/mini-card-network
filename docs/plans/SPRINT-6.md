@@ -1,0 +1,49 @@
+# Sprint 6 — Execution Overview
+
+> **For Claude:** This file orchestrates Sprint 6. Each story has its own plan (`MCN-40x.md`/`MCN-50x.md`). Execute each plan with superpowers:subagent-driven-development (or superpowers:executing-plans), one worktree per story, following root `CLAUDE.md` §4.
+
+**Sprint goal:** Chaos proven in CI; security foundations. `make chaos` becomes a real, CI-enforced ledger-invariant gate (closing the one dependency Sprint 5's release notes flagged as a known gap), and the first half of the security lane lands: keys stored only as cryptograms with KCVs, PIN translation and MAC on the wire, PIN/MAC verification at the issuer, and PCI scanning wired into CI. **Duration:** 2 weeks. **Commitment:** 5 (MCN-407) + 8 (MCN-501) + 3 (MCN-506) + 5 (MCN-502) + 5 (MCN-503) = 26 points. **Release:** R4, per `docs/07-delivery-plan.md` §2/§3 ("R4" stamped on Sprint 6's row; MCN-407's chaos suite + MCN-501's key rotation groundwork complete the slice that Sprint 5 left unflagged).
+
+**Contract-first check:** MCN-502 needs one small `contracts/` PR before its own service-code task can start — `contracts/iso8583/vectors/mac/*.json` (MAC golden vectors), tracked as `MCN-502.md` Task 1. This is the same "contract first, then parallel" pattern every other sprint follows (`docs/07-delivery-plan.md` §1), scoped down to just the two new vector files this sprint actually needs — not a full slice-sized contract PR, since this sprint pairs no WEB story against these backend stories (Security and Keys screen, MCN-505, is Sprint 7). No other contract change is needed: `GET /v1/keys/issuer`, `GET /v1/keys/acquirer` and their `KeyInfo`/`KeyRotation` schemas already exist in `contracts/openapi.yaml` (confirmed by reading it — scaffolded ahead of need for MCN-504/505 in Sprint 7, and MCN-501 targets those same paths).
+
+## Waves
+
+| Wave | Stories (parallel lanes) | Starts when |
+| --- | --- | --- |
+| 1 | PLAT **MCN-407** chaos test suite ‖ ISS+GW **MCN-501** security module adapters and key store (two plans, `MCN-501-ISS.md` + `MCN-501-GW.md`) ‖ PLAT **MCN-506** PCI scanning in CI | Sprint 5 merged |
+| 2 | GW **MCN-502** PIN translation and MAC ‖ ISS **MCN-503** PIN and MAC verification | Wave 1's MCN-501 (both halves) merged — both Wave 2 stories extend `internal/hsm`/`SecurityModule`, the port MCN-501 builds |
+
+MCN-407 and MCN-506 (PLAT) have no dependency on MCN-501 and could in principle start immediately; they're grouped into Wave 1 alongside MCN-501 because all three are independent of each other (disjoint files: `gateway-go/internal/chaos/`, `issuer-jpos`+`gateway-go` key/crypto packages, `scripts/pci-scan/`) and none blocks the others, matching `docs/07-delivery-plan.md` §3's own Sprint 6 row (`PLAT MCN-407 ‖ ISS+GW MCN-501 ‖ PLAT MCN-506`).
+
+## Plans
+
+| Plan | Lane | Depends on |
+| --- | --- | --- |
+| [MCN-407](MCN-407.md) | PLAT | Sprint 5 / MCN-401, MCN-402 (merged) |
+| [MCN-501-ISS](MCN-501-ISS.md) | ISS | Sprint 3-4 / MCN-302, MCN-303 (merged) — parallel with MCN-501-GW, one story split across two lanes |
+| [MCN-501-GW](MCN-501-GW.md) | GW | Sprint 3-4 / MCN-302, MCN-303 (merged) — parallel with MCN-501-ISS |
+| [MCN-506](MCN-506.md) | PLAT | Sprint 0 / MCN-005 (merged) |
+| [MCN-502](MCN-502.md) | GW | MCN-501 (both halves) |
+| [MCN-503](MCN-503.md) | ISS | MCN-501 (both halves); MCN-502 Task 1 (contracts PR) |
+
+## Rulings for the whole sprint
+
+| Ruling | Why | Cost if wrong |
+| --- | --- | --- |
+| KCV/key-store representation is fixed once, in `MCN-501-ISS.md`'s Ruling 1 (restated in `MCN-501-GW.md`'s Ruling 1): KCV = first 3 bytes of `AES-ECB(key=<the clear key>, plaintext=16 zero bytes)`, hex-encoded uppercase; `key_under_lmk` is hex, matching `kcv`'s own encoding | `issuer.key_store` and `acquirer.key_store` are independently defined in `docs/assets/baseline-schema.sql` with the same column shape but built by two lanes with zero cross-communication until integration — a KCV algorithm mismatch would only surface as a visual inconsistency in Sprint 7's Security screen (MCN-505), with no test in *this* sprint catching it | A rework discovered only when MCN-505 (Sprint 7) renders both sides' keys side by side and their KCVs look structurally different despite both being "correct" under two different conventions |
+| MAC input/output convention is fixed once, in `MCN-502.md`'s Ruling 2 (restated in `MCN-503.md`'s Ruling 1): MAC = ISO 9797-1 algorithm 3 (Retail MAC/X9.19) over the full packed message excluding DE 64/128, 8 bytes, placed in DE 64 or DE 128 per the existing secondary-bitmap-presence logic | GW (MCN-502, producing/verifying on the acquirer side) and ISS (MCN-503, verifying on the issuer side) implement the *same* algorithm independently, in two different languages (Go, Java), against the *same* `contracts/iso8583/vectors/mac/*.json` fixture (MCN-502 Task 1) — this is the actual cross-check the sprint has, replacing the "no cross-communication until integration" risk the KCV Ruling above accepts | A MAC algorithm implemented subtly differently on one side (wrong padding, wrong key-split, wrong final-block treatment) would make every real cross-service transaction in this slice fail with RC 96, discovered only at the Sprint 6 integration checkpoint instead of in either lane's own vector test |
+| `contracts/iso8583/vectors/mac/*.json` is added by **one** contracts-only PR (`MCN-502.md` Task 1), read by **both** MCN-502's and MCN-503's tests — neither lane writes its own separate MAC fixture | Same reasoning as the DE 90/journey-vocabulary Rulings in Sprint 5's `SPRINT-5.md` — one shared fixture is the only thing that makes the cross-lane MAC Ruling above actually enforceable in CI, rather than just documented in prose | Two divergent MAC fixtures, each lane's own tests green, but the two lanes never actually provably agree — defeats the whole point of a shared golden vector |
+| DE 52 (PIN block) handling boundary: the *only* place it is ever decrypted to a clear value is inside `hsm.TranslatePIN` (gateway, MCN-502, decrypt-under-TPK-then-reencrypt-under-ZPK in one function body) and inside `VerifySecurity`'s PVV check (issuer, MCN-503, decrypt-under-ZPK then discard); `VerifySecurity` removes DE 52 from the request immediately after use, both on the wrong-PIN and correct-PIN paths | PCI DSS rule 2 (root `CLAUDE.md` §6) — a PIN block that survives past its one legitimate use site into a later participant, a log line, or a persisted row is exactly the kind of leak this sprint's own MCN-506 (PCI scanning in CI) exists to catch; getting the boundary right by construction is cheaper than relying on the scanner to catch a mistake after the fact | A future story that reads `Context`/`ISOMsg` for an unrelated reason (e.g. a new journey/audit feature) could accidentally serialize a still-present DE 52 into a log or API response, becoming a real PCI finding `MCN-506`'s scanner (this same sprint) would then have to catch in CI instead of the code never producing it |
+
+## Sprint 6 exit checklist
+
+- [ ] `make -C gateway-go test` green: `chaos.fakeissuer.Listener` (DROP_RESPONSE), `chaos.ToxiproxyClient` DROP_RESPONSE wiring, `hsm.JCEModule` (wrap/unwrap, KCV known-vector, MAC golden-vector, PIN translate never-exposes-clear masking test), `store.KeyStoreRepository`, `api.MountKeys`, `purchase.Service` MAC attach/verify + RC 96 reversal path, `internal/config` LMK fail-fast
+- [ ] `make -C issuer-jpos test` green: `JCESecurityModuleTest` (wrap/unwrap, KCV, never-logs-clear masking), `KeyStoreRepositoryTest`, `KeysEndpointTest`, `VerifySecurityTest` (MAC-first-then-PIN ordering, MAC golden-vector match, PVV wrong/correct/third-strike, DE 52 removed on both outcome paths)
+- [ ] `scripts/chaos` and `scripts/pci-scan` unit tests green (`TestRenderReport_*`, `TestReportFailed_*`, `TestScanPAN_*`, `TestScanPinBlock_*`, `TestScanTrack2_*`, `TestWalk_*`)
+- [ ] `make chaos` real (no longer the `exit 2` stub): six scenarios, `CHAOS_TX_PER_SCENARIO=500` locally green, `chaos-report.md` produced, `LedgerDiscrepancy` zero on every row, `DROP_RESPONSE` no longer returns the `501` stub
+- [ ] `make pci-scan` real (no longer the `exit 2` stub): clean on the current repo state, fails on an injected Luhn-valid PAN in a non-allowlisted file; `gitleaks` CI step green
+- [ ] `make contracts` green, including the two new `contracts/iso8583/vectors/mac/*.json` vectors round-tripping through both the Go and Java MAC implementations identically
+- [ ] Full integration checkpoint: `make up`, run a real purchase end to end and confirm DE 64 is present and verified on both sides (no RC 96 on a genuine transaction), then deliberately corrupt a ZAK copy on one side in a throwaway config and confirm the transaction fails RC 96 with a reversal queued and `mcn_mac_failure_total` incremented; enter a wrong PIN three times against a real card fixture and confirm `PIN_BLOCKED` and RC 75 on the third attempt; run `make chaos` against the real stack and confirm a `PASSED` report with `DROP_RESPONSE` exercising the real fake-issuer simulator (not the old `501`)
+- [ ] `docs/02` §9 updated if any dependency (gitleaks version, any new library) resolved to an unexpected version
+- [ ] `docs/releases/R4.md`'s "Known gaps" section needs a follow-up addendum once this sprint lands (the `DROP_RESPONSE` gap and the "chaos not yet CI-enforced at scale" gap it documents are both closed by MCN-407) — **out of scope for this planning pass**, flagged here for the tech lead to schedule as a short doc-only follow-up after Sprint 6 merges
+- [ ] Sprint 7 (MCN-504 dynamic key exchange, MCN-505 Security/Keys screen, MCN-602/603/604/803) can build directly on this sprint's `hsm.Module`/`SecurityModule` ports, `KeyStoreRepository`'s `Activate`-retires-previous pattern, and the `KeyInfo`/`KeyRotation` contract shapes already in `contracts/openapi.yaml` — confirmed no rework needed before Sprint 7 planning starts
