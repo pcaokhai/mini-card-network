@@ -41,6 +41,10 @@ const (
 
 	rcMacFailure = "96" // docs/03 §11: MAC verification failed
 	responseMTI  = "0210"
+
+	// dualKeyWindow is MCN-504-AC2's grace period: a ZAK retired by a rotation is still accepted
+	// for this long after retirement (docs/03 §9 "Reversal grace for new key (DE 70 = 161)").
+	dualKeyWindow = 5 * time.Minute
 )
 
 // ponytail: v1 seeds exactly one terminal/merchant (contracts/fixtures/cards.json's terminals
@@ -108,6 +112,12 @@ type Transaction struct {
 	TraceID      string    `json:"traceId"`
 }
 
+// RetiredKeyFinder looks up a recently-retired key, backing MAC dual-key acceptance during a
+// rotation's grace window (MCN-504-AC2). *store.KeyStoreRepository satisfies it.
+type RetiredKeyFinder interface {
+	FindRecentlyRetired(ctx context.Context, keyType, ownerRef string, within time.Duration) (*store.KeyRow, error)
+}
+
 // MuxSender sends a request on the acquirer's live issuer connection. *isonet.Supervisor
 // satisfies it (it shares MCN-202/204's one connection rather than opening a second one).
 type MuxSender interface {
@@ -167,6 +177,8 @@ type Service struct {
 	reversal      ReversalQueuer
 	hsm           hsm.Module
 	zak           []byte
+	keyStore      RetiredKeyFinder
+	ownerRef      string
 	duplicateHook func() bool
 }
 
@@ -180,15 +192,16 @@ func (s *Service) SetChaosDuplicateHook(fn func() bool) { s.duplicateHook = fn }
 // implements both). tranLog also serves as the TranLogGetter (*store.TranLogRepository
 // implements both). zak is the clear ZAK used for the Retail MAC (MCN-502-AC1/AC2), unwrapped
 // once at construction - not per-request, matching how Service already holds its other
-// long-lived dependencies.
+// long-lived dependencies. keyStore backs the dual-key acceptance retry (MCN-504-AC2); a nil
+// keyStore simply disables the retry (existing single-key MAC verification, unchanged).
 func NewService(mux interface {
 	MuxSender
 	LinkStatusPort
 }, cardTokens *CardTokenRegistry, tranLog interface {
 	TranLogPort
 	TranLogGetter
-}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte) *Service {
-	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak}
+}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder) *Service {
+	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, keyStore: keyStore}
 }
 
 // CreatePurchase builds a 0200, sends it through the live issuer connection, persists every
@@ -283,7 +296,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	resp, err := s.mux.Send(sendCtx, "0200", fields)
 
 	txn := s.baseTransaction(req, rrn, stan, maskedPAN)
-	macFailed, err := s.mapSendOutcome(&txn, resp, err)
+	macFailed, err := s.mapSendOutcome(ctx, &txn, resp, err)
 	if err != nil {
 		return Transaction{}, err
 	}
@@ -304,7 +317,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 // a timeout, a hard send error, or a normal response (with its incoming MAC verified, and on
 // mismatch overridden to RC 96 / DECLINED, mcn_mac_failure_total incremented) - and reports
 // whether the incoming MAC failed.
-func (s *Service) mapSendOutcome(txn *Transaction, resp map[int]string, sendErr error) (macFailed bool, err error) {
+func (s *Service) mapSendOutcome(ctx context.Context, txn *Transaction, resp map[int]string, sendErr error) (macFailed bool, err error) {
 	switch {
 	case errors.Is(sendErr, context.DeadlineExceeded):
 		txn.Status = statusTimedOut
@@ -320,7 +333,7 @@ func (s *Service) mapSendOutcome(txn *Transaction, resp map[int]string, sendErr 
 	} else {
 		txn.Status = statusDeclined
 	}
-	if s.verifyIncomingMAC(resp) {
+	if s.verifyIncomingMAC(ctx, resp) {
 		return false, nil
 	}
 	txn.Status = statusDeclined
@@ -359,8 +372,11 @@ func (s *Service) attachMAC(fields map[int]string) error {
 }
 
 // verifyIncomingMAC recomputes the Retail MAC over resp (excluding its own DE 64/128) and
-// compares it to the MAC resp carried. A response with no MAC field at all fails verification.
-func (s *Service) verifyIncomingMAC(resp map[int]string) bool {
+// compares it to the MAC resp carried. On a mismatch against the current ZAK, it retries once
+// against the most recently retired ZAK (if any, within dualKeyWindow) - MCN-504-AC2's dual-key
+// acceptance so an in-flight transaction MAC'd under the old ZAK still verifies during a
+// rotation's grace window (Ruling 2). A response with no MAC field at all fails verification.
+func (s *Service) verifyIncomingMAC(ctx context.Context, resp map[int]string) bool {
 	macHex, macField, ok := macFieldOf(resp)
 	if !ok {
 		return false
@@ -376,7 +392,36 @@ func (s *Service) verifyIncomingMAC(resp map[int]string) bool {
 	if err != nil {
 		return false
 	}
-	expected, err := s.hsm.ComputeMAC([]byte(packed), s.zak)
+	if s.macMatches(packed, macHex, s.zak) {
+		return true
+	}
+	return s.macMatchesRecentlyRetiredZAK(ctx, packed, macHex)
+}
+
+// macMatchesRecentlyRetiredZAK retries verification against the most recently retired ZAK, if
+// one retired within dualKeyWindow (MCN-504-AC2). s.keyStore is nil in tests that don't wire
+// dual-key acceptance; a nil keyStore or no recently-retired row simply skips the retry.
+func (s *Service) macMatchesRecentlyRetiredZAK(ctx context.Context, packed, macHex string) bool {
+	if s.keyStore == nil {
+		return false
+	}
+	retired, err := s.keyStore.FindRecentlyRetired(ctx, "ZAK", s.ownerRef, dualKeyWindow)
+	if err != nil || retired == nil {
+		return false
+	}
+	keyUnderLMK, err := hex.DecodeString(retired.KeyUnderLMKHex)
+	if err != nil {
+		return false
+	}
+	oldZAK, err := s.hsm.Unwrap(keyUnderLMK)
+	if err != nil {
+		return false
+	}
+	return s.macMatches(packed, macHex, oldZAK)
+}
+
+func (s *Service) macMatches(packed, macHex string, zak []byte) bool {
+	expected, err := s.hsm.ComputeMAC([]byte(packed), zak)
 	if err != nil {
 		return false
 	}
