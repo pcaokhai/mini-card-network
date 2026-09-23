@@ -44,8 +44,8 @@ export function useStartRotation() {
   return useMutation({
     mutationFn: async (keyType: RotatableKeyType): Promise<KeyRotation> => {
       const { data, error } = await client.POST("/v1/keys/acquirer/rotations", {
+        params: { header: { "Idempotency-Key": crypto.randomUUID() } },
         body: { keyType },
-        headers: { "Idempotency-Key": crypto.randomUUID() },
         fetch: liveFetch,
       });
       if (error) throw error;
