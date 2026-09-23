@@ -26,20 +26,24 @@ class KeyStoreRepositoryTest {
 
     long firstId =
         repo.insert(
-            new KeyStoreRow(0, "ZPK", "970436000", "aa".repeat(16), "AABBCC", "PENDING", null, null,
-                null));
+            new KeyStoreRow(
+                0, "ZPK", "970436000", "aa".repeat(16), "AABBCC", "PENDING", null, null, null));
     repo.activate(firstId);
 
     long secondId =
         repo.insert(
-            new KeyStoreRow(0, "ZPK", "970436000", "bb".repeat(16), "DDEEFF", "PENDING", null, null,
-                null));
+            new KeyStoreRow(
+                0, "ZPK", "970436000", "bb".repeat(16), "DDEEFF", "PENDING", null, null, null));
     repo.activate(secondId);
 
     List<KeyStoreRow> all = repo.findAll();
-    assertThat(all).filteredOn(r -> r.id() == firstId).extracting(KeyStoreRow::status)
+    assertThat(all)
+        .filteredOn(r -> r.id() == firstId)
+        .extracting(KeyStoreRow::status)
         .containsExactly("RETIRED");
-    assertThat(all).filteredOn(r -> r.id() == secondId).extracting(KeyStoreRow::status)
+    assertThat(all)
+        .filteredOn(r -> r.id() == secondId)
+        .extracting(KeyStoreRow::status)
         .containsExactly("ACTIVE");
   }
 }

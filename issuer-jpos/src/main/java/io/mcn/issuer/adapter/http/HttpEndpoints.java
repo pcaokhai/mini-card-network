@@ -15,9 +15,9 @@ import org.jpos.q2.QBeanSupport;
 
 /**
  * Q2 bean exposing health endpoints plus the {@code /v1/cards*} Admin API (MCN-308) and {@code
- * /v1/keys/issuer} (MCN-501); readiness drops before the server stops (NFR-09). The LMK test
- * value is read eagerly here so a missing/blank env var fails Q2 startup (root CLAUDE.md §6
- * rule 11), same fail-fast shape as {@code CheckCard}'s {@code CardCrypto} wiring.
+ * /v1/keys/issuer} (MCN-501); readiness drops before the server stops (NFR-09). The LMK test value
+ * is read eagerly here so a missing/blank env var fails Q2 startup (root CLAUDE.md §6 rule 11),
+ * same fail-fast shape as {@code CheckCard}'s {@code CardCrypto} wiring.
  */
 public final class HttpEndpoints extends QBeanSupport {
   private final Readiness readiness = new Readiness();

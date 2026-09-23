@@ -1,6 +1,5 @@
 package io.mcn.issuer.adapter.persistence;
 
-import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -38,7 +37,10 @@ public class KeyStoreRepository {
     }
   }
 
-  /** Retires any other ACTIVE row sharing {@code (key_type, counterparty)}, then activates {@code id}. */
+  /**
+   * Retires any other ACTIVE row sharing {@code (key_type, counterparty)}, then activates {@code
+   * id}.
+   */
   public void activate(long id) {
     String retirePrevious =
         """
