@@ -70,7 +70,7 @@ func BuildJourney(txn store.TranLogRow, history []store.StateTransition) Journey
 	}
 
 	start := history[0].At
-	steps := make([]Step, 0, len(history))
+	steps := make([]Step, 0, len(history)+1)
 	for i, st := range history {
 		steps = append(steps, buildStep(i+1, st, int(st.At.Sub(start).Milliseconds()), txn))
 	}
@@ -83,6 +83,15 @@ func BuildJourney(txn store.TranLogRow, history []store.StateTransition) Journey
 	}}
 	if txn.Status == statusReversed {
 		money = append(money, MoneyRow{Label: "Refund", Delta: txn.Amount, AtStep: last.Seq})
+	}
+
+	if txn.LateResponseAt != nil {
+		steps = append(steps, Step{
+			Seq: len(steps) + 1, Actor: ActorIssuer, OffsetMs: int(txn.LateResponseAt.Sub(start).Milliseconds()), Kind: KindWarn,
+			Title:         "Late response",
+			EasyText:      "Response arrived too late",
+			TechnicalText: fmt.Sprintf("0210 received after timeout, RC %s", txn.LateResponseCode),
+		})
 	}
 
 	return Journey{Steps: steps, Money: money}
