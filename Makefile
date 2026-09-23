@@ -73,7 +73,7 @@ chaos: ## Chaos suite with ledger invariant check (MCN-407)
 	exit $$status
 
 pci-scan: ## Scan logs and fixtures for PAN / PIN block / track data (MCN-506)
-	@echo "not implemented until MCN-506"; exit 2
+	@cd scripts/pci-scan && go run . ../../infra/logs ../../contracts/fixtures $${PCI_SCAN_DB_DUMP:-}
 
 seed: ## Load contracts/fixtures into issuer and acquirer databases
 	@for d in issuer-jpos gateway-go; do \
