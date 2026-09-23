@@ -67,11 +67,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer)
-	supervisor.SetLateResponseHandler(func(_ string, fields map[int]string) {
-		if err := purchaseService.RecordLateResponse(ctx, fields[37], fields[39]); err != nil {
-			logger.Error("record late response", "error", err.Error())
-		}
-	})
+	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 
 	toxiproxyClient := chaos.NewToxiproxyClient(cfg.ToxiproxyAdminAddr, cfg.IssuerProxyName)
@@ -81,18 +77,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		logger.Error("disable chaos toxics at boot", "error", err.Error())
 	}
 	chaosRunner := chaos.NewRunner(purchaseService, safRepo, tranLogRepo, purchase.DefaultCardTokens().Seeds(), hub)
-	purchaseService.SetChaosDuplicateHook(func() bool {
-		scenarios, err := toxiproxyClient.ListScenarios(ctx)
-		if err != nil {
-			return false
-		}
-		for _, s := range scenarios {
-			if s.ID == chaos.ScenarioDuplicateRequest {
-				return s.Enabled
-			}
-		}
-		return false
-	})
+	purchaseService.SetChaosDuplicateHook(newChaosDuplicateHook(ctx, toxiproxyClient))
 
 	health := api.NewHealth()
 	r := chi.NewRouter()
@@ -147,4 +132,32 @@ func serve(s *http.Server, ln net.Listener) error {
 		return err
 	}
 	return nil
+}
+
+// newLateResponseHandler builds the isonet.Supervisor callback (MCN-403) that persists a 0210
+// arriving after its transaction already left SENT, without ever flipping a final status.
+func newLateResponseHandler(ctx context.Context, logger *slog.Logger, purchaseService *purchase.Service) func(string, map[int]string) {
+	return func(_ string, fields map[int]string) {
+		if err := purchaseService.RecordLateResponse(ctx, fields[37], fields[39]); err != nil {
+			logger.Error("record late response", "error", err.Error())
+		}
+	}
+}
+
+// newChaosDuplicateHook reports whether the MCN-404 DUPLICATE_REQUEST scenario is currently
+// active, so purchase.Service knows whether to fire a blocking duplicate 0200 before the real
+// send.
+func newChaosDuplicateHook(ctx context.Context, toxiproxyClient *chaos.ToxiproxyClient) func() bool {
+	return func() bool {
+		scenarios, err := toxiproxyClient.ListScenarios(ctx)
+		if err != nil {
+			return false
+		}
+		for _, s := range scenarios {
+			if s.ID == chaos.ScenarioDuplicateRequest {
+				return s.Enabled
+			}
+		}
+		return false
+	}
 }
