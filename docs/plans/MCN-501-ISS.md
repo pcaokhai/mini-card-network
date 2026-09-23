@@ -43,7 +43,7 @@ Both lanes build in parallel with no cross-checking until integration (per the d
 
 **Files:** `src/main/resources/db/migration/V6__key_store.sql`
 
-- [ ] **Step 1:** Transcribe `issuer.key_store` from `docs/assets/baseline-schema.sql:275-289`, schema-prefix stripped, matching the existing `V1`-`V5` migration convention (plain Flyway SQL, no `-- +goose` markers — issuer uses Flyway, gateway uses goose; confirm by reading `V5__reversal_without_original.sql`'s header before writing this file).
+- [x] **Step 1:** Transcribe `issuer.key_store` from `docs/assets/baseline-schema.sql:275-289`, schema-prefix stripped, matching the existing `V1`-`V5` migration convention (plain Flyway SQL, no `-- +goose` markers — issuer uses Flyway, gateway uses goose; confirm by reading `V5__reversal_without_original.sql`'s header before writing this file).
 
 ```sql
 CREATE TABLE key_store (
@@ -63,7 +63,7 @@ CREATE UNIQUE INDEX uq_active_key
   WHERE status = 'ACTIVE';
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit** — `V6` reverted: `issuer.key_store` was already shipped verbatim in `V2__issuer_baseline.sql:224-237`; no new migration needed.
 
 ```bash
 git add issuer-jpos/src/main/resources/db/migration/V6__key_store.sql
@@ -78,7 +78,7 @@ git commit -m "feat(iss): key_store table, transcribed from baseline schema (MCN
 
 **Interfaces:** `SecurityModule{ byte[] wrapUnderLmk(byte[] clearKey); byte[] unwrap(byte[] keyUnderLmk); String computeKcv(byte[] clearKey); }` (all `byte[]` in/out, no `String` clear-key parameter ever — enforces Ruling 2's "no clear key as String" constraint at the type level). `JCESecurityModule(String lmkHex)` — throws `IllegalArgumentException` at construction if `lmkHex` is null/blank (the fail-fast path; startup wiring in Task 4 reads `LMK_TEST_VALUE_HEX` and constructs this eagerly).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```java
 package io.mcn.issuer.adapter.crypto;
@@ -127,7 +127,7 @@ class JCESecurityModuleTest {
 
 Run: `./gradlew test --tests JCESecurityModuleTest` → fails (`JCESecurityModule` missing).
 
-- [ ] **Step 2: Implement** `application/SecurityModule.java` (interface, three methods above) and `adapter/crypto/JCESecurityModule.java`: constructor validates `lmkHex` non-blank and parses it via `HexFormat.of().parseHex`, building an AES `SecretKeySpec` (32-byte LMK, same as `CardCrypto`'s `encryptionKey`); `wrapUnderLmk`/`unwrap` use `AES/GCM/NoPadding` (same cipher as `CardCrypto.encrypt`/`decrypt`, nonce-prefixed ciphertext); `computeKcv` encrypts a 16-byte zero block with `AES/ECB/NoPadding` under the clear key itself (not the LMK — the KCV proves knowledge of *that specific key*, per Ruling 1), takes the first 3 bytes, returns uppercase hex via `HexFormat.of().withUpperCase().formatHex(...)`.
+- [x] **Step 2: Implement** `application/SecurityModule.java` (interface, three methods above) and `adapter/crypto/JCESecurityModule.java`: constructor validates `lmkHex` non-blank and parses it via `HexFormat.of().parseHex`, building an AES `SecretKeySpec` (32-byte LMK, same as `CardCrypto`'s `encryptionKey`); `wrapUnderLmk`/`unwrap` use `AES/GCM/NoPadding` (same cipher as `CardCrypto.encrypt`/`decrypt`, nonce-prefixed ciphertext); `computeKcv` encrypts a 16-byte zero block with `AES/ECB/NoPadding` under the clear key itself (not the LMK — the KCV proves knowledge of *that specific key*, per Ruling 1), takes the first 3 bytes, returns uppercase hex via `HexFormat.of().withUpperCase().formatHex(...)`.
 
 Run: `./gradlew test --tests JCESecurityModuleTest` → PASS. Commit: `feat(iss): JCESecurityModule - wrap/unwrap under LMK, KCV (MCN-501)`.
 
@@ -139,7 +139,7 @@ Run: `./gradlew test --tests JCESecurityModuleTest` → PASS. Commit: `feat(iss)
 
 **Interfaces:** `KeyStoreRow{long id; String keyType; String counterparty; String keyUnderLmkHex; String kcv; String status; Instant activatedAt; Instant retiredAt; Instant createdAt}` (record). `KeyStoreRepository(DataSource)`; `.insert(KeyStoreRow row) -> long id` (status `PENDING`); `.activate(long id)` (sets `status = 'ACTIVE'`, `activated_at = now()`, and — inside the same statement's transaction — retires any existing `ACTIVE` row of the same `(key_type, counterparty)` pair, since `uq_active_key` allows only one); `.findAll() -> List<KeyStoreRow>`.
 
-- [ ] **Step 1: Write the failing test** (Testcontainers Postgres, same pattern as the existing `CardLimitRepository`/`AccountLockRepository` tests — grep one for the exact `DataSource` bootstrap helper before writing this)
+- [x] **Step 1: Write the failing test** (Testcontainers Postgres, same pattern as the existing `CardLimitRepository`/`AccountLockRepository` tests — grep one for the exact `DataSource` bootstrap helper before writing this)
 
 ```java
 package io.mcn.issuer.adapter.persistence;
@@ -172,7 +172,7 @@ Check: confirm the real base class name for Testcontainers-backed repository tes
 
 Run: `./gradlew test --tests KeyStoreRepositoryTest` → fails (needs Docker; if unavailable in this environment, note it in the final report rather than skipping silently).
 
-- [ ] **Step 2: Implement** `KeyStoreRepository` with plain JDBC (`PreparedStatement`, matching `CardLimitRepository`'s style): `insert` runs a single `INSERT ... RETURNING id`; `activate(id)` runs two statements in one JDBC transaction — `UPDATE key_store SET status='RETIRED', retired_at=now() WHERE key_type=(SELECT key_type FROM key_store WHERE id=$1) AND COALESCE(counterparty,'')=(SELECT COALESCE(counterparty,'') FROM key_store WHERE id=$1) AND status='ACTIVE'` then `UPDATE key_store SET status='ACTIVE', activated_at=now() WHERE id=$1`.
+- [x] **Step 2: Implement** `KeyStoreRepository` with plain JDBC (`PreparedStatement`, matching `CardLimitRepository`'s style): `insert` runs a single `INSERT ... RETURNING id`; `activate(id)` runs two statements in one JDBC transaction — `UPDATE key_store SET status='RETIRED', retired_at=now() WHERE key_type=(SELECT key_type FROM key_store WHERE id=$1) AND COALESCE(counterparty,'')=(SELECT COALESCE(counterparty,'') FROM key_store WHERE id=$1) AND status='ACTIVE'` then `UPDATE key_store SET status='ACTIVE', activated_at=now() WHERE id=$1`.
 
 Run: `./gradlew test --tests KeyStoreRepositoryTest` → PASS. Commit: `feat(iss): KeyStoreRepository - insert, activate-and-retire-previous (MCN-501)`.
 
@@ -182,7 +182,7 @@ Run: `./gradlew test --tests KeyStoreRepositoryTest` → PASS. Commit: `feat(iss
 
 **Files:** `adapter/http/HttpEndpoints.java` (extend), `src/test/java/io/mcn/issuer/adapter/http/KeysEndpointTest.java`, `src/dist/deploy/40_http_endpoints.xml` (extend if needed)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```java
 package io.mcn.issuer.adapter.http;
@@ -222,13 +222,13 @@ Check: wire this test against `HealthServer`'s real `start(int port)` pattern (`
 
 Run: `./gradlew test --tests KeysEndpointTest` → fails.
 
-- [ ] **Step 2: Implement**: add a `GET /v1/keys/issuer` route to `HealthServer`/`HttpEndpoints` (whichever currently owns route registration — confirm by reading the file; MCN-005's `HealthServer` only had `/health/*`, so this may need a new small `KeysServer` class following the exact same `Javalin.create().get(...).start(port)` shape, then registered as a route on the same Javalin app instance `HealthServer` already owns rather than a second port — reuse the existing 8081 admin port). Maps each `KeyStoreRow` to `contracts/openapi.yaml`'s `KeyInfo` JSON shape: `keyType`, `counterparty`, `kcv`, `status`, `activatedAt` (ISO-8601 or `null`), `daysRemaining` (computed as `lifetimeDays - daysSince(activatedAt)`, clamped at 0 for a `PENDING` row with no `activatedAt`), `lifetimeDays` (a fixed constant, `365`, until a rotation story like MCN-504 makes it configurable — flag with a `ponytail:` comment naming that ceiling).
-- [ ] **Step 3:** Wire `cmd`/`Q2` startup: read `LMK_TEST_VALUE_HEX` from env in the same startup path that already validates other required env vars (grep `System.getenv` in an existing QBean's `startService()`); construct `new JCESecurityModule(lmkHex)` eagerly there so a missing/blank value throws `IllegalArgumentException` and Q2 fails to start (matches root `CLAUDE.md` §6 rule 11's "fail fast on invalid config").
-- [ ] **Step 4:** Add `<property name="lmk-test-value" value="${env:LMK_TEST_VALUE_HEX}"/>` to whichever deploy descriptor owns the QBean wiring `JCESecurityModule` (confirm exact descriptor and env-substitution syntax against MCN-005's own "Check" note on `${env:NAME:default}` vs `$env{NAME}`, since the resolved jPOS version's syntax was only confirmed during that story's execution — reuse whatever it settled on, don't re-guess).
+- [x] **Step 2: Implement**: add a `GET /v1/keys/issuer` route to `HealthServer`/`HttpEndpoints` (whichever currently owns route registration — confirm by reading the file; MCN-005's `HealthServer` only had `/health/*`, so this may need a new small `KeysServer` class following the exact same `Javalin.create().get(...).start(port)` shape, then registered as a route on the same Javalin app instance `HealthServer` already owns rather than a second port — reuse the existing 8081 admin port). Maps each `KeyStoreRow` to `contracts/openapi.yaml`'s `KeyInfo` JSON shape: `keyType`, `counterparty`, `kcv`, `status`, `activatedAt` (ISO-8601 or `null`), `daysRemaining` (computed as `lifetimeDays - daysSince(activatedAt)`, clamped at 0 for a `PENDING` row with no `activatedAt`), `lifetimeDays` (a fixed constant, `365`, until a rotation story like MCN-504 makes it configurable — flag with a `ponytail:` comment naming that ceiling).
+- [x] **Step 3:** Wire `cmd`/`Q2` startup: read `LMK_TEST_VALUE_HEX` from env in the same startup path that already validates other required env vars (grep `System.getenv` in an existing QBean's `startService()`); construct `new JCESecurityModule(lmkHex)` eagerly there so a missing/blank value throws `IllegalArgumentException` and Q2 fails to start (matches root `CLAUDE.md` §6 rule 11's "fail fast on invalid config").
+- [x] **Step 4 (deviation):** No `40_http_endpoints.xml` deploy descriptor exists yet for the `HttpEndpoints` QBean in this repo (checked — MCN-005's route registration was never wired into a Q2 deploy XML); `JCESecurityModule` reads `LMK_TEST_VALUE_HEX` directly via `System.getenv`/`System.getProperty` in `HttpEndpoints.startService()`, same pattern as `CheckCard`'s `env()` helper. Original text value="${env:LMK_TEST_VALUE_HEX}"/>` to whichever deploy descriptor owns the QBean wiring `JCESecurityModule` (confirm exact descriptor and env-substitution syntax against MCN-005's own "Check" note on `${env:NAME:default}` vs `$env{NAME}`, since the resolved jPOS version's syntax was only confirmed during that story's execution — reuse whatever it settled on, don't re-guess).
 
 Run: `./gradlew test -v` → PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add issuer-jpos/src/main/java/io/mcn/issuer/adapter/http/ issuer-jpos/src/test/java/io/mcn/issuer/adapter/http/KeysEndpointTest.java issuer-jpos/src/dist/deploy/40_http_endpoints.xml
@@ -241,7 +241,7 @@ git commit -m "feat(iss): GET /v1/keys/issuer, LMK fail-fast startup (MCN-501)"
 
 **Files:** `src/test/java/io/mcn/issuer/adapter/crypto/JCESecurityModuleTest.java` (extend)
 
-- [ ] **Step 1: Write the failing masking test** (PCI DSS rule 2 requires this with the same rigor as PAN masking, per root `CLAUDE.md` §6 rule 2 and §7)
+- [x] **Step 1: Write the failing masking test** (written together with Task 2's test file) (PCI DSS rule 2 requires this with the same rigor as PAN masking, per root `CLAUDE.md` §6 rule 2 and §7)
 
 ```java
   @Test
@@ -263,14 +263,14 @@ git commit -m "feat(iss): GET /v1/keys/issuer, LMK fail-fast startup (MCN-501)"
 
 Run: `./gradlew test --tests JCESecurityModuleTest` → PASS (`JCESecurityModule.unwrap`'s exception path, implemented in Task 2, never interpolates raw bytes into its message — no code change needed here, only the test).
 
-- [ ] **Step 2:** Commit.
+- [x] **Step 2:** Commit (folded into Task 2's commit, same file).
 
 ```bash
 git add issuer-jpos/src/test/java/io/mcn/issuer/adapter/crypto/JCESecurityModuleTest.java
 git commit -m "test(iss): never-logs-clear-key masking test for JCESecurityModule (MCN-501)"
 ```
 
-- [ ] **Step 3:** `./gradlew test spotlessCheck` clean. AC → test table:
+- [x] **Step 3:** `./gradlew test spotlessCheck` clean. AC → test table:
 
 | AC | Test(s) |
 | --- | --- |
@@ -282,6 +282,6 @@ git commit -m "test(iss): never-logs-clear-key masking test for JCESecurityModul
 
 ## Self-review
 
-- [ ] `SecurityModule`'s port signature takes only `byte[]`, never `String`, for clear key material — a `String`-typed clear key would linger in the JVM string pool unmaskable.
-- [ ] `GET /v1/keys/issuer` response verified byte-for-byte against `contracts/openapi.yaml`'s `KeyInfo` schema (no extra `keyUnderLmk`/`key_under_lmk` leak).
-- [ ] Ruling 1's KCV convention (zero-block AES-ECB encrypt, leading 3 bytes) is the one both this plan and `MCN-501-GW.md` state — confirmed identical wording in both files before finishing.
+- [x] `SecurityModule`'s port signature takes only `byte[]`, never `String`, for clear key material — a `String`-typed clear key would linger in the JVM string pool unmaskable.
+- [x] `GET /v1/keys/issuer` response verified byte-for-byte against `contracts/openapi.yaml`'s `KeyInfo` schema (no extra `keyUnderLmk`/`key_under_lmk` leak).
+- [x] Ruling 1's KCV convention (zero-block AES-ECB encrypt, leading 3 bytes) is the one both this plan and `MCN-501-GW.md` state — confirmed identical wording in both files before finishing.
