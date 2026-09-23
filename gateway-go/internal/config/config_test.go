@@ -16,8 +16,11 @@ const envSafEncKey = "SAF_ENC_KEY"
 // testLMKHex is a valid 32-byte (64 hex char) LMK, required by every Load call since MCN-501-AC3.
 const testLMKHex = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
 
+// testZMKHex is a valid hex ZMK, required by every Load call since MCN-504-AC1.
+const testZMKHex = "3286f59aa74092995a585fd944be6c794b2de041874f2752c5a7895502d472b8" //gitleaks:allow
+
 func withLMK(m map[string]string) map[string]string {
-	merged := map[string]string{"LMK_TEST_VALUE_HEX": testLMKHex}
+	merged := map[string]string{"LMK_TEST_VALUE_HEX": testLMKHex, "ZMK_HEX": testZMKHex}
 	for k, v := range m {
 		merged[k] = v
 	}
@@ -85,7 +88,19 @@ func TestLoad_requiresLMKTestValueHex__MCN_501_AC3(t *testing.T) {
 	_, err := Load(env(nil))
 	require.ErrorContains(t, err, "LMK_TEST_VALUE_HEX")
 
-	cfg, err := Load(env(map[string]string{"LMK_TEST_VALUE_HEX": testLMKHex}))
+	cfg, err := Load(env(map[string]string{"LMK_TEST_VALUE_HEX": testLMKHex, "ZMK_HEX": testZMKHex}))
 	require.NoError(t, err)
 	require.NotEmpty(t, cfg.LMKTestValueHex)
+}
+
+func TestLoad_requiresZMKHex__MCN_504_AC1(t *testing.T) {
+	_, err := Load(env(map[string]string{"LMK_TEST_VALUE_HEX": testLMKHex}))
+	require.ErrorContains(t, err, "ZMK_HEX")
+
+	_, err = Load(env(map[string]string{"LMK_TEST_VALUE_HEX": testLMKHex, "ZMK_HEX": "not-hex!!"}))
+	require.ErrorContains(t, err, "ZMK_HEX")
+
+	cfg, err := Load(env(withLMK(nil)))
+	require.NoError(t, err)
+	require.NotEmpty(t, cfg.ZMK)
 }

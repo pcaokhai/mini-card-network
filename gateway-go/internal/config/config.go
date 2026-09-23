@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -22,6 +23,7 @@ type Config struct {
 	IssuerProxyName     string
 	ChaosFakeIssuerAddr string
 	LMKTestValueHex     string
+	ZMK                 []byte
 }
 
 // Load reads configuration through getenv (os.Getenv in production, a map in tests).
@@ -50,6 +52,16 @@ func Load(getenv func(string) string) (Config, error) {
 	if cfg.LMKTestValueHex == "" {
 		return Config{}, errors.New("LMK_TEST_VALUE_HEX is required")
 	}
+
+	zmkHex := getenv("ZMK_HEX")
+	if zmkHex == "" {
+		return Config{}, errors.New("ZMK_HEX is required")
+	}
+	zmk, err := hex.DecodeString(zmkHex)
+	if err != nil {
+		return Config{}, fmt.Errorf("ZMK_HEX: not valid hex: %w", err)
+	}
+	cfg.ZMK = zmk
 
 	if raw := getenv("SAF_ENC_KEY"); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)
