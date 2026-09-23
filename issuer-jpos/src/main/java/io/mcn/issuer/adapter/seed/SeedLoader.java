@@ -3,6 +3,7 @@ package io.mcn.issuer.adapter.seed;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mcn.issuer.adapter.crypto.CardCrypto;
+import io.mcn.issuer.adapter.crypto.PvvCalculator;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.PreparedStatement;
@@ -54,10 +55,11 @@ public class SeedLoader {
       String status = card.get("status").asText();
       String cardRef = card.get("cardRef").asText();
       String holderName = card.get("holderName").asText();
+      String pvv = PvvCalculator.computePvv(pan, card.get("pin").asText());
       try (PreparedStatement insertCard =
           conn.prepareStatement(
               "INSERT INTO card (account_id, pan_enc, pan_hash, bin, pan_last4, expiry_yymm,"
-                  + " status, card_ref, holder_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
+                  + " status, card_ref, holder_name, pvv) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
         insertCard.setLong(1, accountId);
         insertCard.setBytes(2, panEnc);
         insertCard.setBytes(3, panHash);
@@ -67,6 +69,7 @@ public class SeedLoader {
         insertCard.setString(7, status);
         insertCard.setString(8, cardRef);
         insertCard.setString(9, holderName);
+        insertCard.setString(10, pvv);
         insertCard.executeUpdate();
       }
     }

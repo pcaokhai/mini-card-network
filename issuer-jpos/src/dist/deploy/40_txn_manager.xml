@@ -2,8 +2,9 @@
 <!--
   Authorization TransactionManager (MCN-302a/302b). Participants run in this exact order per
   docs/06-user-stories.md MCN-302 and issuer-jpos/CLAUDE.md: ParseAndValidate -> Deduplicate ->
-  CheckCard -> LogAndOutbox -> VerifySecurity (no-op until E5) -> CheckLimits -> Authorize ->
-  Respond. LogAndOutbox moved before VerifySecurity/CheckLimits/Authorize in MCN-302b: its
+  CheckCard -> LogAndOutbox -> VerifySecurity (real MAC/PIN verification, MCN-503) -> CheckLimits
+  -> Authorize -> Respond. LogAndOutbox moved before VerifySecurity/CheckLimits/Authorize in
+  MCN-302b: its
   prepare() now inserts the tran_log row up front (status RECEIVED) so Authorize has an
   already-committed row to post its journal_entry against (journal_entry.tran_id has a real,
   non-deferred FK to tran_log) - see LogAndOutbox's class javadoc. Its commit()/abort() still run
@@ -36,7 +37,11 @@
     <property name="jdbc-password" value="${DB_PASSWORD}" />
   </participant>
 
-  <participant class="io.mcn.issuer.adapter.txn.VerifySecurity" logger="Q2" />
+  <participant class="io.mcn.issuer.adapter.txn.VerifySecurity" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+  </participant>
 
   <participant class="io.mcn.issuer.adapter.txn.CheckLimits" logger="Q2">
     <property name="jdbc-url" value="${DATABASE_URL}" />

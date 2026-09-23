@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
@@ -68,6 +69,68 @@ public class JCESecurityModule implements SecurityModule {
       return HexFormat.of().withUpperCase().formatHex(Arrays.copyOfRange(encryptedZeroBlock, 0, 3));
     } catch (Exception e) {
       throw new IllegalStateException("KCV computation failed", e);
+    }
+  }
+
+  /**
+   * Ported byte-for-byte from gateway-go's {@code JCEModule.ComputeMAC} (MCN-503.md Ruling 1):
+   * split {@code zak} into k1/k2 (single-length DES each), zero-pad the message to a DES block
+   * multiple, CBC-encrypt under k1 with a zero IV, decrypt the final block under k2, re-encrypt
+   * that block under k1 - those 8 bytes are the MAC.
+   */
+  @Override
+  public byte[] computeMac(byte[] packedMessageExcludingMacField, byte[] zak) {
+    if (zak.length != 16) {
+      throw new IllegalArgumentException("ZAK must be 16 bytes (double-length DES)");
+    }
+    try {
+      SecretKeySpec k1 = new SecretKeySpec(Arrays.copyOfRange(zak, 0, 8), "DES");
+      SecretKeySpec k2 = new SecretKeySpec(Arrays.copyOfRange(zak, 8, 16), "DES");
+      byte[] padded = zeroPad(packedMessageExcludingMacField, 8);
+
+      Cipher cbcEncrypt = Cipher.getInstance("DES/CBC/NoPadding");
+      cbcEncrypt.init(Cipher.ENCRYPT_MODE, k1, new IvParameterSpec(new byte[8]));
+      byte[] encrypted = cbcEncrypt.doFinal(padded);
+      byte[] lastBlock = Arrays.copyOfRange(encrypted, encrypted.length - 8, encrypted.length);
+
+      Cipher ecbDecrypt = Cipher.getInstance("DES/ECB/NoPadding");
+      ecbDecrypt.init(Cipher.DECRYPT_MODE, k2);
+      byte[] intermediate = ecbDecrypt.doFinal(lastBlock);
+
+      Cipher ecbEncrypt = Cipher.getInstance("DES/ECB/NoPadding");
+      ecbEncrypt.init(Cipher.ENCRYPT_MODE, k1);
+      return ecbEncrypt.doFinal(intermediate);
+    } catch (Exception e) {
+      throw new IllegalStateException("MAC computation failed", e);
+    }
+  }
+
+  private static byte[] zeroPad(byte[] data, int blockSize) {
+    if (data.length % blockSize == 0) {
+      return data;
+    }
+    byte[] padded = Arrays.copyOf(data, data.length + (blockSize - data.length % blockSize));
+    return padded;
+  }
+
+  /**
+   * 2-key 3DES (K1,K2,K1 expansion) ECB decrypt of one 8-byte block, matching gateway-go's
+   * desCipher(16).
+   */
+  @Override
+  public byte[] decryptPinBlock(byte[] pinBlockUnderZpk, byte[] zpk) {
+    if (zpk.length != 16) {
+      throw new IllegalArgumentException("ZPK must be 16 bytes (double-length 3DES)");
+    }
+    try {
+      byte[] tripleKey = new byte[24];
+      System.arraycopy(zpk, 0, tripleKey, 0, 16);
+      System.arraycopy(zpk, 0, tripleKey, 16, 8);
+      Cipher cipher = Cipher.getInstance("DESede/ECB/NoPadding");
+      cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(tripleKey, "DESede"));
+      return cipher.doFinal(pinBlockUnderZpk);
+    } catch (Exception e) {
+      throw new IllegalStateException("PIN block decryption failed", e);
     }
   }
 }
