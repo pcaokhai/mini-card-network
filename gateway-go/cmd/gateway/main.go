@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/mcn/gateway-go/internal/advtxn"
 	"github.com/mcn/gateway-go/internal/api"
 	"github.com/mcn/gateway-go/internal/chaos"
 	"github.com/mcn/gateway-go/internal/chaos/fakeissuer"
@@ -78,6 +79,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, keyStoreRepo)
+	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, hsmModule, zak)
 	rotationRepo := rotation.NewRepository(pool)
 	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK)
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
@@ -102,6 +104,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.MountLab(r)
 	api.MountNetwork(r, linkRepo, supervisor, safRepo)
 	api.MountPurchases(r, purchaseService)
+	api.MountAdvancedTransactions(r, advtxnService)
 	api.MountTransactionsQuery(r, tranLogRepo)
 	api.MountKeys(r, keyStoreRepo)
 	api.MountRotations(r, rotationAdapter{runner: rotationRunner, repo: rotationRepo})
@@ -186,6 +189,16 @@ func activeClearKey(ctx context.Context, repo *store.KeyStoreRepository, hsmModu
 		return hsmModule.Unwrap(keyUnderLMK)
 	}
 	return nil, fmt.Errorf("no ACTIVE %s key in key_store", keyType)
+}
+
+// advtxnHubAdapter adapts *ws.Hub to advtxn.HubPort: ws.Hub.BroadcastTransaction is typed to
+// purchase.Transaction, so advtxn.Service's own Transaction type broadcasts through ws.Hub's
+// already-generic BroadcastChaos(eventType string, data any) instead (same broadcastEvent path
+// on the wire; the Go method name doesn't reach the client, only the eventType string does).
+type advtxnHubAdapter struct{ hub *ws.Hub }
+
+func (a advtxnHubAdapter) BroadcastTransaction(eventType string, txn advtxn.Transaction) {
+	a.hub.BroadcastChaos(eventType, txn)
 }
 
 // rotationAdapter adapts rotation.Runner/rotation.Repository to api.Rotator. Rotation initiation
