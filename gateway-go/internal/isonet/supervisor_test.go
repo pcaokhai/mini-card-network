@@ -94,6 +94,77 @@ func fakeIssuer(t *testing.T) (addr string, closeFn func()) {
 	return ln.Addr().String(), func() { _ = ln.Close() }
 }
 
+// fakeIssuerWithUnsolicitedLateResponse signs on normally, then writes one unsolicited 0210 that
+// matches no pending request (simulating a response arriving after the caller's request already
+// timed out and gave up).
+func fakeIssuerWithUnsolicitedLateResponse(t *testing.T) (addr string, closeFn func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		payload, err := ReadFrame(conn)
+		if err != nil {
+			return
+		}
+		_, fields, err := iso8583.Unpack(string(payload))
+		if err != nil {
+			return
+		}
+		fields[39] = "00"
+		packed, err := iso8583.Pack("0810", fields)
+		if err != nil {
+			return
+		}
+		if err := WriteFrame(conn, []byte(packed)); err != nil {
+			return
+		}
+
+		late := map[int]string{7: "0101120000", 11: "999999", 37: "626514000999", 39: "05"}
+		latePacked, err := iso8583.Pack("0210", late)
+		if err != nil {
+			return
+		}
+		_ = WriteFrame(conn, []byte(latePacked))
+	}()
+	return ln.Addr().String(), func() { _ = ln.Close() }
+}
+
+func TestSupervisor_callsLateResponseHandlerForUnmatchedResponse__MCN_403_AC1(t *testing.T) {
+	addr, closeFn := fakeIssuerWithUnsolicitedLateResponse(t)
+	defer closeFn()
+
+	store := &fakeLinkStore{}
+	sup := NewSupervisor(Config{Addr: addr, EchoInterval: time.Hour, EchoFailureLimit: 3}, store)
+
+	var mu sync.Mutex
+	var gotRRN, gotRC string
+	sup.SetLateResponseHandler(func(_ string, fields map[int]string) {
+		mu.Lock()
+		defer mu.Unlock()
+		gotRRN, gotRC = fields[37], fields[39]
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = sup.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return gotRRN != ""
+	}, time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, "626514000999", gotRRN)
+	require.Equal(t, "05", gotRC)
+}
+
 func TestSupervisor_connectsSignsOnAndEchoes__MCN_202_AC1(t *testing.T) {
 	addr, closeFn := fakeIssuer(t)
 	defer closeFn()
