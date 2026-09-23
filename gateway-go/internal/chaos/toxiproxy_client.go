@@ -10,9 +10,10 @@ import (
 	"net/http"
 )
 
-// ErrScenarioNotImplemented is returned by SetScenario(DROP_RESPONSE, true): no fake-issuer
-// response-dropping mode exists yet (that's MCN-407, Sprint 6). See the Ruling in
-// docs/plans/MCN-404.md - this is a deliberate stub, not a silent no-op.
+// ErrScenarioNotImplemented is returned by SetScenario(DROP_RESPONSE, true) when no fake-issuer
+// address is wired in (WithDropResponseAddr / CHAOS_FAKE_ISSUER_ADDR, MCN-407): production and
+// every non-chaos environment leaves it unset, so this stays a deliberate stub, not a silent
+// no-op, outside a chaos run.
 var ErrScenarioNotImplemented = errors.New("chaos scenario not implemented yet")
 
 const (
@@ -59,6 +60,12 @@ type ToxiproxyClient struct {
 	proxyName string
 	http      *http.Client
 
+	// dropResponseAddr is the fake-issuer simulator's address (CHAOS_FAKE_ISSUER_ADDR). Empty
+	// outside a chaos run, in which case DROP_RESPONSE keeps returning ErrScenarioNotImplemented
+	// so an un-wired gateway fails loud instead of silently no-op'ing.
+	dropResponseAddr string
+	realIssuerAddr   string // remembered so SetScenario(false) can restore it; set on first enable
+
 	// enabled tracks scenarios with no Toxiproxy-side toxic (DUPLICATE_REQUEST, DROP_RESPONSE)
 	// so ListScenarios reports their state too. Never mutated concurrently with itself from
 	// more than one goroutine in practice (single HTTP handler at a time serializes writes),
@@ -66,17 +73,41 @@ type ToxiproxyClient struct {
 	localState map[ScenarioID]bool
 }
 
+// ToxiproxyClientOption configures optional ToxiproxyClient behavior.
+type ToxiproxyClientOption func(*ToxiproxyClient)
+
+// WithDropResponseAddr wires DROP_RESPONSE to repoint the issuer proxy at a fake-issuer
+// simulator's address instead of returning ErrScenarioNotImplemented.
+func WithDropResponseAddr(addr string) ToxiproxyClientOption {
+	return func(c *ToxiproxyClient) { c.dropResponseAddr = addr }
+}
+
 // NewToxiproxyClient builds a client against adminAddr (e.g. "http://localhost:8474") for the
 // named proxy.
-func NewToxiproxyClient(adminAddr, proxyName string) *ToxiproxyClient {
-	return &ToxiproxyClient{adminAddr: adminAddr, proxyName: proxyName, http: http.DefaultClient, localState: map[ScenarioID]bool{}}
+func NewToxiproxyClient(adminAddr, proxyName string, opts ...ToxiproxyClientOption) *ToxiproxyClient {
+	c := &ToxiproxyClient{adminAddr: adminAddr, proxyName: proxyName, http: http.DefaultClient, localState: map[ScenarioID]bool{}}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // SetScenario enables or disables id. For scenarios backed by a real Toxiproxy toxic, it
 // adds/removes that toxic; for gateway-side-only scenarios it just records local state.
 func (c *ToxiproxyClient) SetScenario(ctx context.Context, id ScenarioID, enabled bool) error {
-	if id == ScenarioDropResponse && enabled {
-		return ErrScenarioNotImplemented
+	if id == ScenarioDropResponse {
+		if c.dropResponseAddr == "" {
+			if enabled {
+				return ErrScenarioNotImplemented
+			}
+			c.localState[id] = false
+			return nil
+		}
+		if err := c.setDropResponse(ctx, enabled); err != nil {
+			return err
+		}
+		c.localState[id] = enabled
+		return nil
 	}
 	spec, hasToxic := specFor(id)
 	if !hasToxic {
@@ -192,4 +223,72 @@ func (c *ToxiproxyClient) activeToxicNames(ctx context.Context) (map[string]bool
 
 func (c *ToxiproxyClient) toxicsURL() string {
 	return c.adminAddr + "/proxies/" + c.proxyName + "/toxics"
+}
+
+// setDropResponse repoints the issuer proxy's upstream at the fake-issuer simulator (enabled) or
+// restores the real issuer upstream it remembered on first enable (disabled).
+func (c *ToxiproxyClient) setDropResponse(ctx context.Context, enabled bool) error {
+	if !enabled {
+		if c.realIssuerAddr == "" {
+			return nil // never enabled - nothing to restore
+		}
+		return c.updateUpstream(ctx, c.realIssuerAddr)
+	}
+	if c.realIssuerAddr == "" {
+		current, err := c.currentUpstream(ctx)
+		if err != nil {
+			return err
+		}
+		c.realIssuerAddr = current
+	}
+	return c.updateUpstream(ctx, c.dropResponseAddr)
+}
+
+func (c *ToxiproxyClient) proxyURL() string {
+	return c.adminAddr + "/proxies/" + c.proxyName
+}
+
+func (c *ToxiproxyClient) currentUpstream(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.proxyURL(), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("get proxy %s: %w", c.proxyName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("get proxy %s: status %d: %s", c.proxyName, resp.StatusCode, msg)
+	}
+	var proxy struct {
+		Upstream string `json:"upstream"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&proxy); err != nil {
+		return "", fmt.Errorf("decode proxy %s: %w", c.proxyName, err)
+	}
+	return proxy.Upstream, nil
+}
+
+func (c *ToxiproxyClient) updateUpstream(ctx context.Context, upstream string) error {
+	body, err := json.Marshal(map[string]any{"upstream": upstream})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.proxyURL(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("update proxy %s upstream: %w", c.proxyName, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("update proxy %s upstream: status %d: %s", c.proxyName, resp.StatusCode, msg)
+	}
+	return nil
 }

@@ -49,6 +49,27 @@ func TestToxiproxyClient_disableAllClearsEverything__MCN_404_AC1(t *testing.T) {
 	}
 }
 
+func TestSetScenario_dropResponseNoLongerReturnsNotImplemented__MCN_407(t *testing.T) {
+	if !toxiproxyReachable() {
+		t.Skip("Toxiproxy not reachable - run `make up` first")
+	}
+	client := NewToxiproxyClient(toxiproxyAdminAddr, "issuer", WithDropResponseAddr("127.0.0.1:19999"))
+	defer func() { _ = client.DisableAll(context.Background()) }()
+
+	err := client.SetScenario(context.Background(), ScenarioDropResponse, true)
+
+	require.NoError(t, err)
+	require.NotErrorIs(t, err, ErrScenarioNotImplemented)
+}
+
+func TestSetScenario_dropResponseStillNotImplementedWhenUnwired__MCN_407(t *testing.T) {
+	client := NewToxiproxyClient(toxiproxyAdminAddr, "issuer")
+
+	err := client.SetScenario(context.Background(), ScenarioDropResponse, true)
+
+	require.ErrorIs(t, err, ErrScenarioNotImplemented)
+}
+
 func findEnabled(states []Scenario, id ScenarioID) bool {
 	for _, s := range states {
 		if s.ID == id && s.Enabled {
