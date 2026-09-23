@@ -1,0 +1,5 @@
+/* MCN-505: same compositor-friendly transform-only bar as cards.css's .usage-bar-fill. */
+.key-lifetime-fill {
+  transform-origin: left;
+  transition: transform 200ms ease-out;
+}
