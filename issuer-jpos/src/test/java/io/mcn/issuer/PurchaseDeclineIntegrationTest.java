@@ -5,12 +5,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.crypto.CardCrypto;
+import io.mcn.issuer.adapter.crypto.JCESecurityModule;
 import io.mcn.issuer.adapter.seed.SeedLoader;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Path;
 import java.sql.ResultSet;
+import java.util.HexFormat;
 import java.util.Map;
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.jpos.iso.ISOException;
@@ -41,6 +45,12 @@ class PurchaseDeclineIntegrationTest {
 
   private static final String ENCRYPTION_KEY_HEX = "0".repeat(64);
   private static final String HMAC_KEY_HEX = "1".repeat(64);
+  private static final String LMK_HEX =
+      "00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
+  private static final byte[] ZAK = HexFormat.of().parseHex("3132333435363738393a3b3c3d3e3f40");
+  private static final byte[] ZPK = HexFormat.of().parseHex("2132333435363738393a3b3c3d3e3f41");
+  private static final String FIXTURE_PIN =
+      "1234"; // every contracts/fixtures/cards.json card shares this PIN
 
   @Container
   static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
@@ -79,6 +89,9 @@ class PurchaseDeclineIntegrationTest {
         "ISO_PACKAGER_CFG", Path.of("src/dist/cfg/iso87ascii.xml").toAbsolutePath().toString());
     System.setProperty("PAN_ENCRYPTION_KEY_HEX", ENCRYPTION_KEY_HEX);
     System.setProperty("PAN_HMAC_KEY_HEX", HMAC_KEY_HEX);
+    System.setProperty("LMK_TEST_VALUE_HEX", LMK_HEX);
+    System.setProperty("ZAK_HEX", HexFormat.of().formatHex(ZAK));
+    System.setProperty("ZPK_HEX", HexFormat.of().formatHex(ZPK));
 
     packager = new GenericPackager("src/dist/cfg/iso87ascii.xml");
 
@@ -148,7 +161,47 @@ class PurchaseDeclineIntegrationTest {
                 41, "00000042",
                 42, "GOCPHO000000001"));
     request.set(2, pan);
+    // VerifySecurity (MCN-503) verifies DE 52/64 on every 0200; a real gateway always sends
+    // both, so the test builds a genuine PIN block (fixture PIN) and Retail MAC too - otherwise
+    // every purchase would fail RC 96 before CheckCard's own RC 14/62/51 checks get exercised.
+    request.set(52, HexFormat.of().formatHex(encryptPinBlock(buildPinBlock(FIXTURE_PIN, pan))));
+    JCESecurityModule securityModule = new JCESecurityModule(LMK_HEX);
+    byte[] mac = securityModule.computeMac(request.pack(), ZAK);
+    request.set(64, HexFormat.of().formatHex(mac));
     return unpack(send(request.pack()));
+  }
+
+  /** ISO 9564-1 format 0, matching web-next's {@code buildPinBlock} (pinblock.ts). */
+  private static byte[] buildPinBlock(String pin, String pan) {
+    String pinField = "0" + Integer.toHexString(pin.length()) + pin;
+    StringBuilder padded = new StringBuilder(pinField);
+    while (padded.length() < 16) {
+      padded.append('F');
+    }
+    String panDigits = pan.substring(0, pan.length() - 1);
+    panDigits = panDigits.substring(panDigits.length() - 12);
+    String panField = "0000" + panDigits;
+
+    byte[] result = new byte[8];
+    for (int i = 0; i < 8; i++) {
+      int hi =
+          Character.digit(padded.charAt(i * 2), 16) ^ Character.digit(panField.charAt(i * 2), 16);
+      int lo =
+          Character.digit(padded.charAt(i * 2 + 1), 16)
+              ^ Character.digit(panField.charAt(i * 2 + 1), 16);
+      result[i] = (byte) ((hi << 4) | lo);
+    }
+    return result;
+  }
+
+  /** Test-only counterpart to {@code JCESecurityModule.decryptPinBlock}, same key expansion. */
+  private static byte[] encryptPinBlock(byte[] clearBlock) throws Exception {
+    byte[] tripleKey = new byte[24];
+    System.arraycopy(ZPK, 0, tripleKey, 0, 16);
+    System.arraycopy(ZPK, 0, tripleKey, 16, 8);
+    Cipher cipher = Cipher.getInstance("DESede/ECB/NoPadding");
+    cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(tripleKey, "DESede"));
+    return cipher.doFinal(clearBlock);
   }
 
   @Test

@@ -112,6 +112,57 @@ public class CardRepository {
     }
   }
 
+  public Optional<String> findPvv(long cardId) {
+    String sql = "SELECT pvv FROM card WHERE id = ?";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, cardId);
+      var rs = stmt.executeQuery();
+      if (!rs.next()) return Optional.empty();
+      return Optional.ofNullable(rs.getString(1));
+    } catch (SQLException e) {
+      throw new IllegalStateException("find card pvv failed", e);
+    }
+  }
+
+  /** Returns the new {@code pin_try_count} after incrementing (used to decide the third strike). */
+  public int incrementPinTryCount(long cardId) {
+    String sql =
+        "UPDATE card SET pin_try_count = pin_try_count + 1, updated_at = now() WHERE id = ?"
+            + " RETURNING pin_try_count";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, cardId);
+      var rs = stmt.executeQuery();
+      rs.next();
+      return rs.getInt(1);
+    } catch (SQLException e) {
+      throw new IllegalStateException("increment pin_try_count failed", e);
+    }
+  }
+
+  public void resetPinTryCount(long cardId) {
+    String sql = "UPDATE card SET pin_try_count = 0, updated_at = now() WHERE id = ?";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, cardId);
+      stmt.executeUpdate();
+    } catch (SQLException e) {
+      throw new IllegalStateException("reset pin_try_count failed", e);
+    }
+  }
+
+  public void blockForPin(long cardId) {
+    String sql = "UPDATE card SET status = 'PIN_BLOCKED', updated_at = now() WHERE id = ?";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, cardId);
+      stmt.executeUpdate();
+    } catch (SQLException e) {
+      throw new IllegalStateException("block card for pin failed", e);
+    }
+  }
+
   private Card toCard(java.sql.ResultSet rs) throws SQLException {
     return new Card(
         rs.getLong(1),
