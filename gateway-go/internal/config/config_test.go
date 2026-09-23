@@ -11,6 +11,8 @@ func env(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
+const envSafEncKey = "SAF_ENC_KEY"
+
 func TestLoad_defaults__MCN_005_AC1(t *testing.T) {
 	cfg, err := Load(env(nil))
 	require.NoError(t, err)
@@ -40,4 +42,20 @@ func TestLoad_rejectsInvalidValues(t *testing.T) {
 	require.ErrorContains(t, err, "SHUTDOWN_TIMEOUT")
 	_, err = Load(env(map[string]string{"SHUTDOWN_TIMEOUT": "0s"}))
 	require.ErrorContains(t, err, "must be positive")
+}
+
+func TestLoad_safEncKeyMustBe32BytesBase64__MCN_401(t *testing.T) {
+	cfg, err := Load(env(nil))
+	require.NoError(t, err)
+	require.Empty(t, cfg.SafEncKey) // unset is allowed (dev/local)
+
+	_, err = Load(env(map[string]string{envSafEncKey: "not-base64!!"}))
+	require.ErrorContains(t, err, envSafEncKey)
+
+	_, err = Load(env(map[string]string{envSafEncKey: "dG9vc2hvcnQ="})) // "tooshort", 8 bytes
+	require.ErrorContains(t, err, "32 bytes")
+
+	cfg, err = Load(env(map[string]string{envSafEncKey: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="})) // 32 bytes
+	require.NoError(t, err)
+	require.Len(t, cfg.SafEncKey, 32)
 }
