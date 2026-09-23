@@ -92,8 +92,17 @@
   "pos": {
     "title": "POS terminal",
     "amount": "Amount",
+    "rrn": "RRN",
     "pay": "Pay",
-    "processing": "Processing..."
+    "processing": "Processing...",
+    "transactionType": {
+      "label": "Transaction type",
+      "PURCHASE": "Purchase",
+      "PREAUTH": "Pre-auth",
+      "COMPLETION": "Completion",
+      "REFUND": "Refund",
+      "BALANCE": "Balance inquiry"
+    }
   },
   "overview": {
     "title": "Overview",
@@ -146,8 +155,14 @@
       "held": "Held"
     },
     "holds": {
-      "title": "Active holds",
-      "empty": "No active holds"
+      "title": "Holds",
+      "empty": "No holds yet",
+      "status": {
+        "ACTIVE": "Active",
+        "COMPLETED": "Completed",
+        "RELEASED": "Released",
+        "EXPIRED": "Expired"
+      }
     },
     "limits": {
       "daily": "Daily limit",

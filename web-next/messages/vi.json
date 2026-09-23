@@ -92,8 +92,17 @@
   "pos": {
     "title": "Máy POS",
     "amount": "Số tiền",
+    "rrn": "Số RRN",
     "pay": "Thanh toán",
-    "processing": "Đang xử lý..."
+    "processing": "Đang xử lý...",
+    "transactionType": {
+      "label": "Loại giao dịch",
+      "PURCHASE": "Mua hàng",
+      "PREAUTH": "Tiền ủy quyền trước",
+      "COMPLETION": "Hoàn tất",
+      "REFUND": "Hoàn tiền",
+      "BALANCE": "Tra cứu số dư"
+    }
   },
   "overview": {
     "title": "Tổng quan",
@@ -146,8 +155,14 @@
       "held": "Đang giữ"
     },
     "holds": {
-      "title": "Khoản giữ đang hoạt động",
-      "empty": "Không có khoản giữ nào"
+      "title": "Khoản giữ",
+      "empty": "Chưa có khoản giữ nào",
+      "status": {
+        "ACTIVE": "Đang hoạt động",
+        "COMPLETED": "Đã hoàn tất",
+        "RELEASED": "Đã giải phóng",
+        "EXPIRED": "Hết hạn"
+      }
     },
     "limits": {
       "daily": "Hạn mức ngày",
