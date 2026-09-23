@@ -93,7 +93,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	r := chi.NewRouter()
 	api.NewRouter(r, health)
 	api.MountLab(r)
-	api.MountNetwork(r, linkRepo, supervisor)
+	api.MountNetwork(r, linkRepo, supervisor, safRepo)
 	api.MountPurchases(r, purchaseService)
 	api.MountTransactionsQuery(r, tranLogRepo)
 	api.MountChaos(r, toxiproxyClient, chaosRunner, hub)

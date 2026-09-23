@@ -35,6 +35,35 @@ func (f *fakeTrigger) TriggerEcho(context.Context) (isonet.EchoResult, error) {
 func (f *fakeTrigger) TriggerSignOn(context.Context) error  { return f.signOnErr }
 func (f *fakeTrigger) TriggerSignOff(context.Context) error { return f.signOffErr }
 
+type fakeSafReader struct {
+	items     []store.SafItemRow
+	deadCount int
+}
+
+func (f *fakeSafReader) ListItems(context.Context) ([]store.SafItemRow, int, error) {
+	return f.items, f.deadCount, nil
+}
+
+func TestGetSaf_returnsDepthAndDeadCount__MCN_407_AC2(t *testing.T) {
+	r := chi.NewRouter()
+	MountNetwork(r, &fakeLinkReader{}, nil, &fakeSafReader{
+		items: []store.SafItemRow{
+			{ID: 1, MTI: "0420", RRN: "626514000999", AmountMinor: 10000, Currency: "704", Attempts: 1, Status: "PENDING", NextRetryAt: time.Now()},
+			{ID: 2, MTI: "0420", RRN: "626514001111", AmountMinor: 5000, Currency: "704", Attempts: 5, Status: "DEAD", NextRetryAt: time.Now()},
+		},
+		deadCount: 1,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/network/saf", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"depth":2`)
+	require.Contains(t, rec.Body.String(), `"deadCount":1`)
+	require.Contains(t, rec.Body.String(), `"rrn":"626514000999"`)
+}
+
 func TestGetLinks_returnsCurrentStatus__MCN_204_AC1(t *testing.T) {
 	r := chi.NewRouter()
 	MountNetwork(r, &fakeLinkReader{link: store.Link{Endpoint: "issuer", Status: "SIGNED_ON"}}, nil)
