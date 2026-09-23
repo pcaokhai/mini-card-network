@@ -141,6 +141,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks-action diffs base^..head; a shallow clone can't resolve that range
       - uses: actions/setup-go@v5
         with:
           go-version-file: gateway-go/go.mod
