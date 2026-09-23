@@ -68,7 +68,9 @@ e2e: ## Playwright journeys against the running stack
 	else echo "skip: web-next not scaffolded yet"; fi
 
 chaos: ## Chaos suite with ledger invariant check (MCN-407)
-	@echo "not implemented until MCN-407"; exit 2
+	@cd scripts/chaos && CHAOS_TX_PER_SCENARIO=$${CHAOS_TX_PER_SCENARIO:-500} go run . ; status=$$? ; \
+	mv -f chaos-report.md ../../chaos-report.md 2>/dev/null || true ; \
+	exit $$status
 
 pci-scan: ## Scan logs and fixtures for PAN / PIN block / track data (MCN-506)
 	@echo "not implemented until MCN-506"; exit 2

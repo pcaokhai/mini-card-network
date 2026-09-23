@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -23,17 +25,79 @@ type LinkTrigger interface {
 	TriggerSignOff(ctx context.Context) error
 }
 
+// SafReader is the port GET /v1/network/saf needs; *store.SafRepository satisfies it.
+type SafReader interface {
+	ListItems(ctx context.Context) ([]store.SafItemRow, int, error)
+}
+
 const issuerLinkID = "issuer" // v1 has exactly one link; the switch (Sprint 10) adds more.
 
 const defaultEventsLimit = 50
 
 // MountNetwork registers the network operations routes (contracts/openapi.yaml, tag "network").
-func MountNetwork(r chi.Router, reader LinkReader, trigger LinkTrigger) {
+// safReader is optional (nil/omitted disables GET /v1/network/saf) so existing callers that
+// don't need SAF status keep working unchanged.
+func MountNetwork(r chi.Router, reader LinkReader, trigger LinkTrigger, safReader ...SafReader) {
 	r.Get("/v1/network/links", handleListLinks(reader))
 	r.Get("/v1/network/events", handleListNetworkEvents(reader))
 	r.Post("/v1/network/links/{linkId}/echo", handleEchoLink(trigger))
 	r.Post("/v1/network/links/{linkId}/sign-on", handleSignOnLink(reader, trigger))
 	r.Post("/v1/network/links/{linkId}/sign-off", handleSignOffLink(reader, trigger))
+	if len(safReader) > 0 && safReader[0] != nil {
+		r.Get("/v1/network/saf", handleGetSaf(safReader[0]))
+	}
+}
+
+func handleGetSaf(reader SafReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		items, deadCount, err := reader.ListItems(req.Context())
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "saf-read-failed", err.Error())
+			return
+		}
+		writeJSONBody(w, http.StatusOK, struct {
+			Depth     int           `json:"depth"`
+			DeadCount int           `json:"deadCount"`
+			Items     []safItemBody `json:"items"`
+		}{Depth: len(items), DeadCount: deadCount, Items: toSafItemBodies(items)})
+	}
+}
+
+type safItemBody struct {
+	ID          string  `json:"id"`
+	MTI         string  `json:"mti"`
+	RRN         string  `json:"rrn"`
+	Amount      money   `json:"amount"`
+	Attempts    int     `json:"attempts"`
+	Status      string  `json:"status"`
+	NextRetryAt string  `json:"nextRetryAt"`
+	LastError   *string `json:"lastError"`
+}
+
+type money struct {
+	Amount   int64  `json:"amount"`
+	Currency string `json:"currency"`
+}
+
+func toSafItemBodies(items []store.SafItemRow) []safItemBody {
+	bodies := make([]safItemBody, 0, len(items))
+	for _, it := range items {
+		var lastError *string
+		if it.LastError != "" {
+			lastError = &it.LastError
+		}
+		bodies = append(bodies, safItemBody{
+			ID:          strconv.FormatInt(it.ID, 10),
+			MTI:         it.MTI,
+			RRN:         it.RRN,
+			Amount:      money{Amount: it.AmountMinor, Currency: it.Currency},
+			Attempts:    it.Attempts,
+			Status:      it.Status,
+			NextRetryAt: it.NextRetryAt.Format(time.RFC3339),
+			LastError:   lastError,
+		})
+	}
+	return bodies
 }
 
 func handleListLinks(reader LinkReader) http.HandlerFunc {

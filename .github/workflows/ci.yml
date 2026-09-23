@@ -5,6 +5,8 @@ on:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: "0 2 * * *" # nightly chaos suite at 02:00 UTC (MCN-407)
 
 jobs:
   changes:
@@ -134,6 +136,26 @@ jobs:
         env:
           BASE_REF: origin/${{ github.base_ref || 'main' }}
           API_BREAKING: ${{ contains(github.event.pull_request.labels.*.name, 'api-breaking') }}
+
+  chaos:
+    if: github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'chaos')
+    runs-on: ubuntu-latest
+    env:
+      CHAOS_TX_PER_SCENARIO: ${{ github.event_name == 'schedule' && '10000' || '500' }}
+      CHAOS_FAKE_ISSUER_ADDR: "gateway:19999"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: gateway-go/go.mod
+      - run: make up
+      - name: Run chaos suite
+        run: make chaos
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chaos-report
+          path: chaos-report.md
 
   pr-title:
     if: github.event_name == 'pull_request'

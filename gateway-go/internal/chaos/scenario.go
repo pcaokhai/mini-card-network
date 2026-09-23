@@ -39,7 +39,7 @@ type Scenario struct {
 var scenarioText = map[ScenarioID][2]string{
 	ScenarioSlowNetwork:      {"The network gets slow.", "3000ms latency toxic on the issuer link."},
 	ScenarioConnectionCut:    {"The connection drops mid-transaction.", "reset_peer toxic on the issuer link."},
-	ScenarioDropResponse:     {"The issuer's reply never arrives.", "Requires a fake-issuer response-dropping mode (MCN-407, not yet built)."},
+	ScenarioDropResponse:     {"The issuer's reply never arrives.", "Repoints the issuer link at a fake-issuer simulator that accepts the request and never replies."},
 	ScenarioDuplicateRequest: {"The same payment is sent twice.", "The gateway sends the same 0200 twice with the same STAN."},
 	ScenarioIssuerDown:       {"The issuer is completely unreachable.", "reset_peer toxic on the whole issuer link."},
 	ScenarioLateResponse:     {"The reply arrives after we've given up.", "latency toxic exceeding the 30s request timeout."},

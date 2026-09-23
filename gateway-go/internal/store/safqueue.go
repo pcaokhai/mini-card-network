@@ -121,3 +121,45 @@ func (r *SafRepository) ListPending(ctx context.Context) ([]SafRow, int, error) 
 	}
 	return pending, deadCount, nil
 }
+
+// SafItemRow is one saf_queue row joined with its transaction's rrn/amount/currency, backing
+// GET /v1/network/saf's items (contracts/openapi.yaml's SafItem).
+type SafItemRow struct {
+	ID          int64
+	MTI         string
+	RRN         string
+	AmountMinor int64
+	Currency    string
+	Attempts    int
+	Status      string
+	NextRetryAt time.Time
+	LastError   string
+}
+
+// ListItems returns every non-ACKED saf_queue row (PENDING, IN_FLIGHT, DEAD) with its
+// transaction's rrn/amount, plus the DEAD count, backing GET /v1/network/saf.
+func (r *SafRepository) ListItems(ctx context.Context) ([]SafItemRow, int, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT s.id, s.mti, t.rrn, t.amount, t.currency, s.attempts, s.status, s.next_retry_at, coalesce(s.last_error, '')
+		 FROM saf_queue s JOIN tran_log t ON t.id = s.tran_id
+		 WHERE s.status IN ('PENDING', 'IN_FLIGHT', 'DEAD') ORDER BY s.id`)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var items []SafItemRow
+	deadCount := 0
+	for rows.Next() {
+		var row SafItemRow
+		if err := rows.Scan(&row.ID, &row.MTI, &row.RRN, &row.AmountMinor, &row.Currency,
+			&row.Attempts, &row.Status, &row.NextRetryAt, &row.LastError); err != nil {
+			return nil, 0, err
+		}
+		if row.Status == "DEAD" {
+			deadCount++
+		}
+		items = append(items, row)
+	}
+	return items, deadCount, rows.Err()
+}

@@ -20,3 +20,4 @@ coverage/
 __pycache__/
 *.pyc
 .venv/
+chaos-report.md

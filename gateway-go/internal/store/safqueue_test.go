@@ -77,3 +77,32 @@ func TestSafRepository_markDeadIncrementsDeadCount__MCN_401_AC3(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, deadCount)
 }
+
+func TestSafRepository_listItemsReportsRRNAndDeadCount__MCN_407(t *testing.T) {
+	pool := newTestPool(t)
+	tranLog := NewTranLogRepository(pool)
+	saf := NewSafRepository(pool)
+	ctx := context.Background()
+
+	tranID := insertTestTran(ctx, t, tranLog, "626514000999", "000999")
+	pendingID, err := saf.Enqueue(ctx, tranID, "0420", []byte("payload"))
+	require.NoError(t, err)
+	deadTranID := insertTestTran(ctx, t, tranLog, "626514001111", "001111")
+	deadID, err := saf.Enqueue(ctx, deadTranID, "0420", []byte("payload"))
+	require.NoError(t, err)
+	require.NoError(t, saf.MarkDead(ctx, deadID, "max attempts exceeded"))
+
+	items, deadCount, err := saf.ListItems(ctx)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, deadCount)
+	require.Len(t, items, 2)
+	byID := map[int64]SafItemRow{}
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	require.Equal(t, "626514000999", byID[pendingID].RRN)
+	require.Equal(t, int64(10000), byID[pendingID].AmountMinor)
+	require.Equal(t, "PENDING", byID[pendingID].Status)
+	require.Equal(t, "DEAD", byID[deadID].Status)
+}
