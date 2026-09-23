@@ -22,6 +22,7 @@ import (
 	"github.com/mcn/gateway-go/internal/chaos"
 	"github.com/mcn/gateway-go/internal/chaos/fakeissuer"
 	"github.com/mcn/gateway-go/internal/config"
+	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/purchase"
@@ -48,6 +49,10 @@ func main() {
 
 // run serves until ctx is cancelled, then drains within cfg.ShutdownTimeout (NFR-09).
 func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	// A bad LMK must fail the process before it binds a port.
+	if _, err := hsm.NewJCEModule(cfg.LMKTestValueHex); err != nil {
+		return fmt.Errorf("init hsm module: %w", err)
+	}
 	shutdownTracing, err := obs.SetupTracing(ctx, cfg.ServiceName, cfg.TracingEnabled)
 	if err != nil {
 		return err
@@ -65,6 +70,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	hub := ws.NewHub()
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
+	keyStoreRepo := store.NewKeyStoreRepository(pool)
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer)
@@ -100,6 +106,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.MountNetwork(r, linkRepo, supervisor, safRepo)
 	api.MountPurchases(r, purchaseService)
 	api.MountTransactionsQuery(r, tranLogRepo)
+	api.MountKeys(r, keyStoreRepo)
 	api.MountChaos(r, toxiproxyClient, chaosRunner, hub)
 	r.Handle("/v1/stream", hub)
 	apiServer := &http.Server{
