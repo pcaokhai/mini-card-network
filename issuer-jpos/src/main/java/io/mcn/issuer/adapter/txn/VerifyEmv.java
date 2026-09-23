@@ -1,31 +1,55 @@
 package io.mcn.issuer.adapter.txn;
 
+import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.crypto.ArqcSimulator;
 import io.mcn.issuer.adapter.crypto.EmvTlvParser;
 import io.mcn.issuer.adapter.persistence.CardRepository;
 import java.io.Serializable;
 import java.math.BigInteger;
 import java.util.Map;
+import org.jpos.core.Configurable;
+import org.jpos.core.Configuration;
+import org.jpos.core.ConfigurationException;
 import org.jpos.iso.ISOMsg;
 import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
+import org.jpos.util.Destroyable;
 
 /**
  * Parses DE 55 (EMV/chip data, docs/03 §11) when present, rejects malformed TLV with RC 30,
  * enforces the ATC replay guard (RC 05, MCN-602-AC2) and verifies the simulated ARQC, storing the
  * simulated ARPC in {@link TxnContextKeys#EMV_ARPC} for {@link Respond} to place in tag 91. Runs
- * after {@code CheckCard} and before {@code VerifySecurity} in the purchase chain: EMV format/replay
- * is a card-data validation concern, checked before the PIN/MAC layer. No-op (returns {@code
- * PREPARED}) when DE 55 is absent - manual/magstripe entry has no EMV data to verify.
+ * after {@code CheckCard}/{@code LogAndOutbox} and before {@code VerifySecurity} in the purchase
+ * chain: EMV format/replay is a card-data validation concern, checked before the PIN/MAC layer.
+ * No-op (returns {@code PREPARED}) when DE 55 is absent - manual/magstripe entry has no EMV data to
+ * verify.
  */
-public class VerifyEmv implements TransactionParticipant {
+public class VerifyEmv implements TransactionParticipant, Configurable, Destroyable {
 
-  private final ArqcSimulator arqcSimulator;
-  private final CardRepository cardRepository;
+  private ArqcSimulator arqcSimulator;
+  private CardRepository cardRepository;
+  private HikariDataSource dataSource;
+
+  /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
+  public VerifyEmv() {}
 
   public VerifyEmv(ArqcSimulator arqcSimulator, CardRepository cardRepository) {
     this.arqcSimulator = arqcSimulator;
     this.cardRepository = cardRepository;
+  }
+
+  @Override
+  public void setConfiguration(Configuration cfg) throws ConfigurationException {
+    this.dataSource = TxnDataSource.fromConfig(cfg);
+    this.cardRepository = new CardRepository(dataSource);
+    this.arqcSimulator = new ArqcSimulator();
+  }
+
+  @Override
+  public void destroy() {
+    if (dataSource != null) {
+      dataSource.close();
+    }
   }
 
   @Override

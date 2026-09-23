@@ -37,6 +37,7 @@ class EmvTlvParserTest {
     Map<String, byte[]> tags = EmvTlvParser.parse(tlv);
 
     assertThat(tags).containsKey("9C");
-    assertThat(tags).containsKey("DF01"); // parsed structurally even though it has no named accessor
+    assertThat(tags)
+        .containsKey("DF01"); // parsed structurally even though it has no named accessor
   }
 }

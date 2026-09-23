@@ -82,7 +82,9 @@ class VerifyEmvTest {
     HexFormat hex = HexFormat.of();
     StringBuilder de55 = new StringBuilder();
     de55.append("9F3602").append(hex.formatHex(new byte[] {0x00, 0x03})); // ATC
-    de55.append("9F26").append(String.format("%02X", validArqc.length)).append(hex.formatHex(validArqc));
+    de55.append("9F26")
+        .append(String.format("%02X", validArqc.length))
+        .append(hex.formatHex(validArqc));
     de55.append("9F37").append(String.format("%02X", un.length)).append(hex.formatHex(un));
 
     VerifyEmv participant = new VerifyEmv(arqcSimulator, cardRepository);
@@ -97,6 +99,7 @@ class VerifyEmvTest {
     int result = participant.prepare(1L, ctx);
 
     assertThat(result).isEqualTo(PREPARED);
-    assertThat(ctx.<byte[]>get(TxnContextKeys.EMV_ARPC)).isEqualTo(arqcSimulator.computeArpc(validArqc));
+    assertThat(ctx.<byte[]>get(TxnContextKeys.EMV_ARPC))
+        .isEqualTo(arqcSimulator.computeArpc(validArqc));
   }
 }

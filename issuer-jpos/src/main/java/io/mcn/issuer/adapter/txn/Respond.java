@@ -73,7 +73,9 @@ public class Respond implements AbortParticipant {
     return response;
   }
 
-  /** Tag 91 (ARPC), simple-TLV, single-byte length - matches {@code EmvTlvParser}'s own encoding. */
+  /**
+   * Tag 91 (ARPC), simple-TLV, single-byte length - matches {@code EmvTlvParser}'s own encoding.
+   */
   private static byte[] buildArpcTlv(byte[] arpc) {
     byte[] tlv = new byte[2 + arpc.length];
     tlv[0] = (byte) 0x91;
