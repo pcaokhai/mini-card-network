@@ -86,6 +86,10 @@ func (h *Hub) BroadcastTransaction(eventType string, txn purchase.Transaction) {
 	h.broadcastEvent(eventType, txn)
 }
 
+// BroadcastChaos sends a chaos event (eventType, e.g. "chaos.changed" or "chaos.run.progress")
+// carrying data (contracts/ws-events.schema.json).
+func (h *Hub) BroadcastChaos(eventType string, data any) { h.broadcastEvent(eventType, data) }
+
 func (h *Hub) broadcastEvent(eventType string, data any) {
 	msg, err := json.Marshal(Event{ID: uuid.NewString(), Type: eventType, OccurredAt: time.Now().UTC(), Data: data})
 	if err != nil {

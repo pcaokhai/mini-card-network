@@ -150,15 +150,22 @@ type TranLogGetter interface {
 
 // Service builds and sends purchase transactions.
 type Service struct {
-	mux         MuxSender
-	linkStatus  LinkStatusPort
-	cardTokens  *CardTokenRegistry
-	tranLog     TranLogPort
-	tranLogGet  TranLogGetter
-	idempotency IdempotencyPort
-	hub         HubPort
-	reversal    ReversalQueuer
+	mux           MuxSender
+	linkStatus    LinkStatusPort
+	cardTokens    *CardTokenRegistry
+	tranLog       TranLogPort
+	tranLogGet    TranLogGetter
+	idempotency   IdempotencyPort
+	hub           HubPort
+	reversal      ReversalQueuer
+	duplicateHook func() bool
 }
+
+// SetChaosDuplicateHook installs fn, checked once per purchase send: when it returns true, the
+// same 0200 (same STAN) is fired twice before the response is processed, exercising the issuer's
+// Deduplicate participant end-to-end (MCN-404's DUPLICATE_REQUEST scenario). A nil hook (the
+// default) never duplicates.
+func (s *Service) SetChaosDuplicateHook(fn func() bool) { s.duplicateHook = fn }
 
 // NewService builds a Service. mux also serves as the LinkStatusPort (e.g. *isonet.Supervisor
 // implements both). tranLog also serves as the TranLogGetter (*store.TranLogRepository
@@ -252,6 +259,16 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	}
 	if err := s.tranLog.RecordStateTransition(ctx, id, statusCreated, statusSent); err != nil {
 		return Transaction{}, fmt.Errorf("record %s->%s: %w", statusCreated, statusSent, err)
+	}
+
+	if s.duplicateHook != nil && s.duplicateHook() {
+		// Blocking duplicate with the same STAN/DE37, sent before the "real" send below: the
+		// issuer's Deduplicate participant should recognize the repeat and never double-post the
+		// ledger entry. Its response is discarded - only the send below drives txn.Status.
+		// Sequential (not fire-and-forget) per gateway-go/CLAUDE.md's goroutine-ownership rule.
+		dupCtx, dupCancel := context.WithTimeout(ctx, requestTimeout)
+		_, _ = s.mux.Send(dupCtx, "0200", fields)
+		dupCancel()
 	}
 
 	sendCtx, cancel := context.WithTimeout(ctx, requestTimeout)

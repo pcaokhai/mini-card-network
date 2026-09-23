@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/mcn/gateway-go/internal/api"
+	"github.com/mcn/gateway-go/internal/chaos"
 	"github.com/mcn/gateway-go/internal/config"
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
@@ -72,6 +73,27 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 	})
 	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
+
+	toxiproxyClient := chaos.NewToxiproxyClient(cfg.ToxiproxyAdminAddr, cfg.IssuerProxyName)
+	if err := toxiproxyClient.DisableAll(ctx); err != nil {
+		// Non-fatal: a boot-time Toxiproxy hiccup shouldn't stop the gateway from serving real
+		// traffic, only chaos scenarios.
+		logger.Error("disable chaos toxics at boot", "error", err.Error())
+	}
+	chaosRunner := chaos.NewRunner(purchaseService, safRepo, tranLogRepo, purchase.DefaultCardTokens().Seeds(), hub)
+	purchaseService.SetChaosDuplicateHook(func() bool {
+		scenarios, err := toxiproxyClient.ListScenarios(ctx)
+		if err != nil {
+			return false
+		}
+		for _, s := range scenarios {
+			if s.ID == chaos.ScenarioDuplicateRequest {
+				return s.Enabled
+			}
+		}
+		return false
+	})
+
 	health := api.NewHealth()
 	r := chi.NewRouter()
 	api.NewRouter(r, health)
@@ -79,6 +101,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.MountNetwork(r, linkRepo, supervisor)
 	api.MountPurchases(r, purchaseService)
 	api.MountTransactionsQuery(r, tranLogRepo)
+	api.MountChaos(r, toxiproxyClient, chaosRunner, hub)
 	r.Handle("/v1/stream", hub)
 	apiServer := &http.Server{
 		Handler:      otelhttp.NewHandler(r, "gateway-http"),
