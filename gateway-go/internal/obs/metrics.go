@@ -18,6 +18,12 @@ var SafDeadTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "SAF advice items that reached max_attempts without an ACK",
 })
 
+// MacFailureTotal counts incoming responses whose MAC did not verify (MCN-502-AC3).
+var MacFailureTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "mcn_mac_failure_total",
+	Help: "Incoming ISO 8583 responses whose MAC failed verification",
+})
+
 func init() {
-	prometheus.MustRegister(LinkUp, LateResponseTotal, SafDeadTotal)
+	prometheus.MustRegister(LinkUp, LateResponseTotal, SafDeadTotal, MacFailureTotal)
 }

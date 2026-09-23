@@ -62,11 +62,11 @@ func (m *JCEModule) ComputeMAC(packedMessageExcludingMACField []byte, zak []byte
 	}
 	k1, k2 := zak[:8], zak[8:16]
 
-	block1, err := des.NewCipher(k1)
+	block1, err := des.NewCipher(k1) //nolint:gosec // Retail MAC (ISO 9797-1 alg 3 / X9.19) is DES by ISO 8583 convention (docs/03 §11), not a choice made here.
 	if err != nil {
 		return nil, fmt.Errorf("hsm: compute MAC: %w", err)
 	}
-	block2, err := des.NewCipher(k2)
+	block2, err := des.NewCipher(k2) //nolint:gosec // same convention as k1 above.
 	if err != nil {
 		return nil, fmt.Errorf("hsm: compute MAC: %w", err)
 	}
@@ -119,11 +119,11 @@ func zeroPad(data []byte, blockSize int) []byte {
 func desCipher(key []byte) (cipher.Block, error) {
 	switch len(key) {
 	case 8:
-		return des.NewCipher(key)
+		return des.NewCipher(key) //nolint:gosec // single-length DES is a caller-chosen key length under this same convention.
 	case 16:
-		return des.NewTripleDESCipher(append(append([]byte{}, key...), key[:8]...))
+		return des.NewTripleDESCipher(append(append([]byte{}, key...), key[:8]...)) //nolint:gosec // same convention as ComputeMAC above.
 	case 24:
-		return des.NewTripleDESCipher(key)
+		return des.NewTripleDESCipher(key) //nolint:gosec // same convention as ComputeMAC above.
 	default:
 		return nil, fmt.Errorf("hsm: key must be 8, 16 or 24 bytes, got %d", len(key))
 	}

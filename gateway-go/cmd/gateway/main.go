@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,7 +51,8 @@ func main() {
 // run serves until ctx is cancelled, then drains within cfg.ShutdownTimeout (NFR-09).
 func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// A bad LMK must fail the process before it binds a port.
-	if _, err := hsm.NewJCEModule(cfg.LMKTestValueHex); err != nil {
+	hsmModule, err := hsm.NewJCEModule(cfg.LMKTestValueHex)
+	if err != nil {
 		return fmt.Errorf("init hsm module: %w", err)
 	}
 	shutdownTracing, err := obs.SetupTracing(ctx, cfg.ServiceName, cfg.TracingEnabled)
@@ -71,9 +73,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
 	keyStoreRepo := store.NewKeyStoreRepository(pool)
+	zak := loadActiveZAK(ctx, keyStoreRepo, hsmModule, logger)
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
-	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer)
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak)
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 
@@ -147,6 +150,38 @@ func serve(s *http.Server, ln net.Listener) error {
 		return err
 	}
 	return nil
+}
+
+// loadActiveZAK looks up the ACTIVE ZAK, logging and continuing with a nil key on failure.
+// ponytail: no ZAK provisioning flow exists yet (MCN-501 seeded no keys) - log and carry on
+// rather than blocking startup; add fail-fast once a seeding story exists to make "no ZAK" mean
+// "misconfigured" instead of "not provisioned yet".
+func loadActiveZAK(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, logger *slog.Logger) []byte {
+	zak, err := activeClearKey(ctx, repo, hsmModule, "ZAK")
+	if err != nil {
+		logger.Warn("no active ZAK found, MAC on purchases will fail until one is provisioned", "error", err.Error())
+	}
+	return zak
+}
+
+// activeClearKey looks up the ACTIVE key_store row of keyType and unwraps it under the LMK
+// (MCN-502-AC1: purchase.Service holds the clear ZAK once at startup, not per-request).
+func activeClearKey(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, keyType string) ([]byte, error) {
+	rows, err := repo.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list keys: %w", err)
+	}
+	for _, row := range rows {
+		if row.KeyType != keyType || row.Status != "ACTIVE" {
+			continue
+		}
+		keyUnderLMK, err := hex.DecodeString(row.KeyUnderLMKHex)
+		if err != nil {
+			return nil, fmt.Errorf("decode %s cryptogram: %w", keyType, err)
+		}
+		return hsmModule.Unwrap(keyUnderLMK)
+	}
+	return nil, fmt.Errorf("no ACTIVE %s key in key_store", keyType)
 }
 
 // setupFakeIssuer starts the MCN-407 DROP_RESPONSE fake-issuer listener when

@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "time/tzdata" // Asia/Ho_Chi_Minh must resolve even on a minimal container image
 
+	"github.com/mcn/gateway-go/internal/hsm"
+	"github.com/mcn/gateway-go/internal/iso8583"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -34,6 +37,10 @@ const (
 
 	reasonTimeout      = "68" // docs/03 §7.3 DE 39: response arrived too late / timeout
 	reasonCancellation = "17" // docs/03 §7.3 DE 39: cancelled by customer
+	reasonMacFailure   = "06" // docs/03 §7.3 DE 39: error (reused for a bad incoming MAC)
+
+	rcMacFailure = "96" // docs/03 §11: MAC verification failed
+	responseMTI  = "0210"
 )
 
 // ponytail: v1 seeds exactly one terminal/merchant (contracts/fixtures/cards.json's terminals
@@ -158,6 +165,8 @@ type Service struct {
 	idempotency   IdempotencyPort
 	hub           HubPort
 	reversal      ReversalQueuer
+	hsm           hsm.Module
+	zak           []byte
 	duplicateHook func() bool
 }
 
@@ -169,15 +178,17 @@ func (s *Service) SetChaosDuplicateHook(fn func() bool) { s.duplicateHook = fn }
 
 // NewService builds a Service. mux also serves as the LinkStatusPort (e.g. *isonet.Supervisor
 // implements both). tranLog also serves as the TranLogGetter (*store.TranLogRepository
-// implements both).
+// implements both). zak is the clear ZAK used for the Retail MAC (MCN-502-AC1/AC2), unwrapped
+// once at construction - not per-request, matching how Service already holds its other
+// long-lived dependencies.
 func NewService(mux interface {
 	MuxSender
 	LinkStatusPort
 }, cardTokens *CardTokenRegistry, tranLog interface {
 	TranLogPort
 	TranLogGetter
-}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer) *Service {
-	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal}
+}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte) *Service {
+	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak}
 }
 
 // CreatePurchase builds a 0200, sends it through the live issuer connection, persists every
@@ -261,6 +272,10 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 		return Transaction{}, fmt.Errorf("record %s->%s: %w", statusCreated, statusSent, err)
 	}
 
+	if err := s.attachMAC(fields); err != nil {
+		return Transaction{}, fmt.Errorf("compute outgoing MAC: %w", err)
+	}
+
 	s.sendDuplicateIfActive(ctx, fields)
 
 	sendCtx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -268,22 +283,116 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	resp, err := s.mux.Send(sendCtx, "0200", fields)
 
 	txn := s.baseTransaction(req, rrn, stan, maskedPAN)
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		txn.Status = statusTimedOut
-	case err != nil:
-		return Transaction{}, fmt.Errorf("send purchase: %w", err)
-	default:
-		txn.ResponseCode = resp[39]
-		txn.AuthCode = resp[38]
-		if txn.ResponseCode == "00" {
-			txn.Status = statusApproved
-		} else {
-			txn.Status = statusDeclined
-		}
+	macFailed, err := s.mapSendOutcome(&txn, resp, err)
+	if err != nil {
+		return Transaction{}, err
 	}
 
-	return s.finalizeSendResult(ctx, id, row, txn, now)
+	finalized, err := s.finalizeSendResult(ctx, id, row, txn, now)
+	if err != nil {
+		return Transaction{}, err
+	}
+	if macFailed {
+		if err := s.queueMacFailureReversal(ctx, row, id, now); err != nil {
+			return Transaction{}, err
+		}
+	}
+	return finalized, nil
+}
+
+// mapSendOutcome maps mux.Send's (resp, sendErr) onto txn's Status/ResponseCode/AuthCode -
+// a timeout, a hard send error, or a normal response (with its incoming MAC verified, and on
+// mismatch overridden to RC 96 / DECLINED, mcn_mac_failure_total incremented) - and reports
+// whether the incoming MAC failed.
+func (s *Service) mapSendOutcome(txn *Transaction, resp map[int]string, sendErr error) (macFailed bool, err error) {
+	switch {
+	case errors.Is(sendErr, context.DeadlineExceeded):
+		txn.Status = statusTimedOut
+		return false, nil
+	case sendErr != nil:
+		return false, fmt.Errorf("send purchase: %w", sendErr)
+	}
+
+	txn.ResponseCode = resp[39]
+	txn.AuthCode = resp[38]
+	if txn.ResponseCode == "00" {
+		txn.Status = statusApproved
+	} else {
+		txn.Status = statusDeclined
+	}
+	if s.verifyIncomingMAC(resp) {
+		return false, nil
+	}
+	txn.Status = statusDeclined
+	txn.ResponseCode = rcMacFailure
+	obs.MacFailureTotal.Inc()
+	return true, nil
+}
+
+// queueMacFailureReversal queues the DE 39 "06" reversal for a purchase whose incoming MAC
+// failed verification (MCN-502-AC3).
+func (s *Service) queueMacFailureReversal(ctx context.Context, row store.TranLogRow, id int64, now time.Time) error {
+	reversalRow := row
+	reversalRow.ID = id
+	reversalRow.Status = statusDeclined
+	reversalRow.CreatedAt = now
+	if err := s.reversal.Queue(ctx, reversalRow, reasonMacFailure); err != nil {
+		return fmt.Errorf("queue reversal for mac failure: %w", err)
+	}
+	return nil
+}
+
+// attachMAC computes the Retail MAC over fields (MTI 0200, not yet containing DE 64/128) and
+// sets DE 64 with the result, uppercase hex (MCN-502's Ruling 2 - DE 128 is unneeded here since
+// this service never sets a field above 64 itself).
+func (s *Service) attachMAC(fields map[int]string) error {
+	packed, err := iso8583.Pack("0200", fields)
+	if err != nil {
+		return fmt.Errorf("pack for MAC: %w", err)
+	}
+	mac, err := s.hsm.ComputeMAC([]byte(packed), s.zak)
+	if err != nil {
+		return fmt.Errorf("compute MAC: %w", err)
+	}
+	fields[64] = strings.ToUpper(hex.EncodeToString(mac))
+	return nil
+}
+
+// verifyIncomingMAC recomputes the Retail MAC over resp (excluding its own DE 64/128) and
+// compares it to the MAC resp carried. A response with no MAC field at all fails verification.
+func (s *Service) verifyIncomingMAC(resp map[int]string) bool {
+	macHex, macField, ok := macFieldOf(resp)
+	if !ok {
+		return false
+	}
+	respWithoutMAC := make(map[int]string, len(resp))
+	for n, v := range resp {
+		if n == macField {
+			continue
+		}
+		respWithoutMAC[n] = v
+	}
+	packed, err := iso8583.Pack(responseMTI, respWithoutMAC)
+	if err != nil {
+		return false
+	}
+	expected, err := s.hsm.ComputeMAC([]byte(packed), s.zak)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(macHex, hex.EncodeToString(expected))
+}
+
+// macFieldOf returns whichever of DE 64/DE 128 is present in fields (MCN-502's Ruling 2: DE 128
+// only when a secondary bitmap is present).
+func macFieldOf(fields map[int]string) (macHex string, fieldNum int, ok bool) {
+	if v, present := fields[64]; present {
+		return v, 64, true
+	}
+	if v, present := fields[128]; present {
+		return v, 128, true
+	}
+	return "", 0, false
 }
 
 // sendDuplicateIfActive fires a blocking duplicate with the same STAN/DE37 before the "real"
