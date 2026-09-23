@@ -60,12 +60,26 @@ public class Respond implements AbortParticipant {
       }
     }
 
-    response.set(39, ctx.<String>get(TxnContextKeys.RESPONSE_CODE));
+    String responseCode = ctx.get(TxnContextKeys.RESPONSE_CODE);
+    response.set(39, responseCode);
     String authCode = ctx.get(TxnContextKeys.AUTH_CODE);
     if (authCode != null) {
       response.set(38, authCode);
     }
+    byte[] arpc = ctx.get(TxnContextKeys.EMV_ARPC);
+    if (arpc != null && ("00".equals(responseCode) || "10".equals(responseCode))) {
+      response.set(55, buildArpcTlv(arpc));
+    }
     return response;
+  }
+
+  /** Tag 91 (ARPC), simple-TLV, single-byte length - matches {@code EmvTlvParser}'s own encoding. */
+  private static byte[] buildArpcTlv(byte[] arpc) {
+    byte[] tlv = new byte[2 + arpc.length];
+    tlv[0] = (byte) 0x91;
+    tlv[1] = (byte) arpc.length;
+    System.arraycopy(arpc, 0, tlv, 2, arpc.length);
+    return tlv;
   }
 
   private static void copyIfPresent(ISOMsg from, ISOMsg to, int field) throws ISOException {

@@ -39,4 +39,33 @@ class RespondTest {
     assertThat(response.getString(39)).isEqualTo("00");
     assertThat(response.getString(38)).isEqualTo("123456");
   }
+
+  @Test
+  void setsTag91ArpcOnApprovedChipTransaction__MCN_602_AC3() throws Exception {
+    ISOMsg request = new ISOMsg("0200");
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.REQUEST, request);
+    ctx.put(TxnContextKeys.RESPONSE_CODE, "00");
+    byte[] arpc = new byte[] {1, 2, 3, 4, 5, 6, 7, 8};
+    ctx.put(TxnContextKeys.EMV_ARPC, arpc);
+
+    ISOMsg response = new Respond().buildResponse(ctx);
+
+    byte[] de55 = response.getBytes(55);
+    assertThat(de55[0]).isEqualTo((byte) 0x91);
+    assertThat(de55[1]).isEqualTo((byte) arpc.length);
+  }
+
+  @Test
+  void omitsTag91ArpcOnDeclinedTransaction() throws Exception {
+    ISOMsg request = new ISOMsg("0200");
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.REQUEST, request);
+    ctx.put(TxnContextKeys.RESPONSE_CODE, "05");
+    ctx.put(TxnContextKeys.EMV_ARPC, new byte[] {1, 2, 3, 4, 5, 6, 7, 8});
+
+    ISOMsg response = new Respond().buildResponse(ctx);
+
+    assertThat(response.hasField(55)).isFalse();
+  }
 }

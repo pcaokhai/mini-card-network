@@ -29,7 +29,7 @@ public final class ArqcSimulator {
   }
 
   /** Test-only helper mirroring the real HMAC construction, so tests build a known-good vector. */
-  byte[] computeArqcForTest(String pan, int atc, byte[] unpredictableNumber) {
+  public byte[] computeArqcForTest(String pan, int atc, byte[] unpredictableNumber) {
     String data = pan + atc + HexFormat.of().formatHex(unpredictableNumber);
     return hmacTruncated(SIMULATOR_ARQC_KEY, data.getBytes(StandardCharsets.UTF_8));
   }
