@@ -27,6 +27,7 @@ import (
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/purchase"
+	"github.com/mcn/gateway-go/internal/rotation"
 	"github.com/mcn/gateway-go/internal/saf"
 	"github.com/mcn/gateway-go/internal/store"
 	"github.com/mcn/gateway-go/internal/ws"
@@ -76,7 +77,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	zak := loadActiveZAK(ctx, keyStoreRepo, hsmModule, logger)
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
-	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak)
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, keyStoreRepo)
+	rotationRepo := rotation.NewRepository(pool)
+	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK)
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 
@@ -101,6 +104,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.MountPurchases(r, purchaseService)
 	api.MountTransactionsQuery(r, tranLogRepo)
 	api.MountKeys(r, keyStoreRepo)
+	api.MountRotations(r, rotationAdapter{runner: rotationRunner, repo: rotationRepo})
 	api.MountChaos(r, toxiproxyClient, chaosRunner, hub)
 	r.Handle("/v1/stream", hub)
 	apiServer := &http.Server{
@@ -182,6 +186,22 @@ func activeClearKey(ctx context.Context, repo *store.KeyStoreRepository, hsmModu
 		return hsmModule.Unwrap(keyUnderLMK)
 	}
 	return nil, fmt.Errorf("no ACTIVE %s key in key_store", keyType)
+}
+
+// rotationAdapter adapts rotation.Runner/rotation.Repository to api.Rotator. Rotation initiation
+// (owner-ref empty, matching activeClearKey's single-global-key-per-type simulator model) always
+// runs synchronously in Runner.Run for v1, so StartRotation already returns the final row.
+type rotationAdapter struct {
+	runner *rotation.Runner
+	repo   *rotation.Repository
+}
+
+func (a rotationAdapter) StartRotation(ctx context.Context, keyType string) (rotation.Row, error) {
+	return a.runner.Run(ctx, keyType, "")
+}
+
+func (a rotationAdapter) GetRotation(ctx context.Context, id int64) (rotation.Row, error) {
+	return a.repo.Get(ctx, id)
 }
 
 // setupFakeIssuer starts the MCN-407 DROP_RESPONSE fake-issuer listener when

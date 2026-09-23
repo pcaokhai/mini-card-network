@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // KeyRow is one key_store row (docs/assets/baseline-schema.sql:474-488). KeyUnderLMKHex is a
@@ -80,6 +83,29 @@ func (r *KeyStoreRepository) List(ctx context.Context) ([]KeyRow, error) {
 		result = append(result, row)
 	}
 	return result, rows.Err()
+}
+
+// FindRecentlyRetired returns the most recently RETIRED row for (keyType, ownerRef) if it
+// retired within the last `within` duration, or nil if none qualifies (not an error - "no
+// recently-retired key" is the expected steady state outside a rotation's grace window).
+func (r *KeyStoreRepository) FindRecentlyRetired(ctx context.Context, keyType, ownerRef string, within time.Duration) (*KeyRow, error) {
+	var row KeyRow
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
+		 FROM key_store
+		 WHERE key_type = $1 AND coalesce(owner_ref, '') = $2 AND status = 'RETIRED'
+		   AND retired_at > now() - $3::interval
+		 ORDER BY retired_at DESC LIMIT 1`,
+		keyType, ownerRef, within.String(),
+	).Scan(&row.ID, &row.KeyType, &row.OwnerRef, &row.KeyUnderLMKHex, &row.KCV,
+		&row.Status, &row.ActivatedAt, &row.RetiredAt, &row.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
 }
 
 func nullableOwnerRef(ownerRef string) any {
