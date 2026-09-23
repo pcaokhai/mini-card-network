@@ -2,8 +2,12 @@ package io.mcn.issuer.adapter.iso;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.mcn.issuer.adapter.crypto.JCESecurityModule;
 import io.mcn.issuer.adapter.persistence.AcquirerLinkRepository;
+import io.mcn.issuer.adapter.persistence.AuditLogRepository;
 import io.mcn.issuer.adapter.persistence.JdbcAcquirerLinkRepository;
+import io.mcn.issuer.adapter.persistence.KeyStoreRepository;
+import java.util.HexFormat;
 import org.flywaydb.core.Flyway;
 import org.jpos.core.Configurable;
 import org.jpos.core.Configuration;
@@ -22,12 +26,20 @@ import org.jpos.util.Log;
  */
 public final class NetworkManagementListener extends Log
     implements ISORequestListener, Configurable {
+  private static final String LAB_ACQUIRER_ID = "970499"; // docs/03 §3, matches HandleNetworkManagement
+
   private AcquirerLinkRepository links;
+  private ReceiveKeyChange receiveKeyChange;
 
   public NetworkManagementListener() {}
 
   public NetworkManagementListener(AcquirerLinkRepository links) {
+    this(links, null);
+  }
+
+  public NetworkManagementListener(AcquirerLinkRepository links, ReceiveKeyChange receiveKeyChange) {
     this.links = links;
+    this.receiveKeyChange = receiveKeyChange;
   }
 
   @Override
@@ -40,12 +52,27 @@ public final class NetworkManagementListener extends Log
     HikariDataSource dataSource = new HikariDataSource(hikariConfig);
     Flyway.configure().dataSource(dataSource).load().migrate();
     this.links = new JdbcAcquirerLinkRepository(dataSource);
+
+    JCESecurityModule securityModule = new JCESecurityModule(env("LMK_TEST_VALUE_HEX"));
+    byte[] zmk = HexFormat.of().parseHex(env("ZMK_HEX"));
+    this.receiveKeyChange =
+        new ReceiveKeyChange(
+            securityModule,
+            new KeyStoreRepository(dataSource),
+            new AuditLogRepository(dataSource),
+            zmk,
+            LAB_ACQUIRER_ID);
+  }
+
+  private static String env(String name) {
+    String value = System.getenv(name);
+    return value != null ? value : System.getProperty(name);
   }
 
   @Override
   public boolean process(ISOSource source, ISOMsg request) {
     try {
-      ISOMsg response = new HandleNetworkManagement(links).handle(request);
+      ISOMsg response = new HandleNetworkManagement(links, receiveKeyChange).handle(request);
       if (response == null) {
         return false; // not ours (e.g. a financial request) - let the next listener handle it
       }
