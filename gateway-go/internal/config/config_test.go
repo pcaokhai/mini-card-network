@@ -76,7 +76,7 @@ func TestLoad_safEncKeyMustBe32BytesBase64__MCN_401(t *testing.T) {
 	_, err = Load(env(withLMK(map[string]string{envSafEncKey: "dG9vc2hvcnQ="}))) // "tooshort", 8 bytes
 	require.ErrorContains(t, err, "32 bytes")
 
-	cfg, err = Load(env(withLMK(map[string]string{envSafEncKey: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="}))) // 32 bytes
+	cfg, err = Load(env(withLMK(map[string]string{envSafEncKey: "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="}))) // 32 bytes, decodes to "01234567890123456789012345678901" - not a real key //gitleaks:allow
 	require.NoError(t, err)
 	require.Len(t, cfg.SafEncKey, 32)
 }
