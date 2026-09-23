@@ -12,3 +12,11 @@ regexes = [
   # not a real key. Flagged by gitleaks' generic-api-key heuristic on entropy alone.
   '''MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=''',
 ]
+# docs/plans/*.md is narrative planning prose (see the writing-plans skill and root CLAUDE.md
+# §4/§9) - it never carries real secrets, only quoted spec text, but its long dense paragraphs
+# repeatedly trip gitleaks' entropy-based generic-api-key rule on ordinary prose (first hit:
+# MCN-504-ISS.md's Spec line, a plain description of the ISO 8583 key-change message, no secret
+# present at all). Excluded by path rather than chasing each new false positive by value.
+paths = [
+  '''docs/plans/.*\.md''',
+]
