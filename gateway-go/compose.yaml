@@ -6,6 +6,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       HTTP_ADDR: ":8080"
       METRICS_ADDR: ":9464"
+      CHAOS_FAKE_ISSUER_ADDR: ${CHAOS_FAKE_ISSUER_ADDR:-} # opt-in: set for chaos runs only (MCN-407)
     ports: ["8080:8080", "9464:9464"]
     stop_grace_period: 35s
     depends_on: [otel-collector]

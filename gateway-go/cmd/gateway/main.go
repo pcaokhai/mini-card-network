@@ -78,7 +78,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("listen chaos fake issuer %s: %w", cfg.ChaosFakeIssuerAddr, err)
 		}
-		toxiproxyOpts = append(toxiproxyOpts, chaos.WithDropResponseAddr(fakeIssuer.Addr()))
+		// cfg.ChaosFakeIssuerAddr (not fakeIssuer.Addr()) is what Toxiproxy - a different
+		// container - must dial, e.g. "gateway:19999"; fakeIssuer.Addr() is only the local bind
+		// address (e.g. "[::]:19999") once net.Listen resolves it, which isn't dialable from
+		// another container.
+		toxiproxyOpts = append(toxiproxyOpts, chaos.WithDropResponseAddr(cfg.ChaosFakeIssuerAddr))
 	}
 	toxiproxyClient := chaos.NewToxiproxyClient(cfg.ToxiproxyAdminAddr, cfg.IssuerProxyName, toxiproxyOpts...)
 	if err := toxiproxyClient.DisableAll(ctx); err != nil {
