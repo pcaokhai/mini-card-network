@@ -22,4 +22,19 @@ describe("MoneyPanel", () => {
     expect(screen.getByText(/\+5,000 VND/)).toBeInTheDocument();
     expect(screen.getByText(/990,000 VND/)).toBeInTheDocument();
   });
+
+  it("shows a debit then a refund row with distinct sign styling (MCN-406-AC1)", () => {
+    renderWithIntl(
+      <MoneyPanel
+        money={[
+          { label: "Purchase", delta: -10000, balanceAfter: null, atStep: 2 },
+          { label: "Refund", delta: 10000, balanceAfter: null, atStep: 3 },
+        ]}
+        currency="704"
+      />,
+    );
+    const rows = screen.getAllByRole("listitem");
+    expect(rows[0]).toHaveAttribute("data-sign", "debit");
+    expect(rows[1]).toHaveAttribute("data-sign", "credit");
+  });
 });

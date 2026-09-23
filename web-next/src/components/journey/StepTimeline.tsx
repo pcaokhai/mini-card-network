@@ -18,6 +18,7 @@ export function StepTimeline({ steps, currentStep, onSelectStep }: StepTimelineP
           <li
             key={step.seq}
             data-state={state}
+            data-kind={step.kind}
             onClick={() => onSelectStep(index)}
             className="cursor-pointer rounded-card border border-border bg-surface p-3"
           >

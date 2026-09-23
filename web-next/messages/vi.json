@@ -257,6 +257,9 @@
       "name": "Trường",
       "value": "Giá trị"
     },
+    "countdown": {
+      "ariaLabel": "Đang chờ phản hồi từ ngân hàng phát hành"
+    },
     "viewJourney": "Xem hành trình"
   }
 }

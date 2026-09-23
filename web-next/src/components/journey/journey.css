@@ -19,10 +19,66 @@
   background-color: transparent;
 }
 
+.step-timeline li[data-kind="WARN"] {
+  border-color: var(--color-warn);
+  background-color: var(--color-warn-soft);
+}
+
+.step-timeline li[data-kind="REVERSAL"] {
+  border-color: var(--color-rev);
+  background-color: var(--color-rev-soft);
+}
+
+.step-timeline li[data-kind="BAD"] {
+  border-color: var(--color-bad);
+  background-color: var(--color-bad-soft);
+}
+
+[data-sign="credit"] {
+  color: var(--color-ok);
+}
+
+[data-sign="debit"] {
+  color: var(--color-muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .step-timeline li[data-state="current"] {
     animation: none;
     outline: 2px solid var(--color-accent, oklch(68% 0.21 250));
     outline-offset: 2px;
+  }
+}
+
+@keyframes countdown-ring {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 113;
+  }
+}
+
+.countdown-ring-track {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 3;
+}
+
+.countdown-ring-progress {
+  fill: none;
+  stroke: var(--color-warn);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  animation-name: countdown-ring;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .countdown-ring-progress {
+    animation: none;
   }
 }
