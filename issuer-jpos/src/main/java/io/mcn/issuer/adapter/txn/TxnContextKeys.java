@@ -21,4 +21,11 @@ public final class TxnContextKeys {
   public static final String CARD_ID = "CARD_ID";
   public static final String TRAN_ID = "TRAN_ID";
   public static final String AUTH_CODE = "AUTH_CODE";
+
+  // MCN-402: DE 90 (original data elements) decoded by ParseReversal.
+  public static final String ORIGINAL_MTI = "ORIGINAL_MTI";
+  public static final String ORIGINAL_STAN = "ORIGINAL_STAN";
+  public static final String ORIGINAL_DE7 = "ORIGINAL_DE7";
+  public static final String ORIGINAL_ACQUIRER = "ORIGINAL_ACQUIRER";
+  public static final String REVERSAL_REASON = "REVERSAL_REASON";
 }

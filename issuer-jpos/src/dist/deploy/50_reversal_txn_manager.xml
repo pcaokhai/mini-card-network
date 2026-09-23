@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reversal-advice TransactionManager (MCN-402), parallel to iso-txn-mgr (40_txn_manager.xml).
+  Owns MTI class 04 (0420/0421). Participants: ParseReversal (decode DE 90) -> DeduplicateReversal
+  (exact-resend guard) -> LocateAndReverse (domain core: find original, post reversing journal or
+  record reversal_without_original) -> RespondReversal (always sends 0430). ReversalListener looks
+  this bean up by name via NameRegistrar once it's registered in startService().
+-->
+<txnmgr name="reversal-txn-mgr" class="org.jpos.transaction.TransactionManager" logger="Q2">
+  <property name="queue" value="reversal-txn-mgr-queue" />
+  <property name="sessions" value="2" />
+  <property name="max-sessions" value="8" />
+
+  <participant class="io.mcn.issuer.adapter.txn.ParseReversal" logger="Q2" />
+
+  <participant class="io.mcn.issuer.adapter.txn.DeduplicateReversal" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+  </participant>
+
+  <participant class="io.mcn.issuer.adapter.txn.LocateAndReverse" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+  </participant>
+
+  <participant class="io.mcn.issuer.adapter.txn.RespondReversal" logger="Q2" />
+</txnmgr>

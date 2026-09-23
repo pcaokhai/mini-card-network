@@ -33,7 +33,7 @@ public class LedgerRepository {
       long amount,
       String currency) {
     try {
-      long journalId = insertJournalEntry(conn, tranId, businessDate);
+      long journalId = insertJournalEntry(conn, tranId, businessDate, "PURCHASE");
       insertPosting(conn, journalId, accountId, null, "D", amount, currency);
       insertPosting(conn, journalId, null, SETTLEMENT_SUSPENSE_GL_CODE, "C", amount, currency);
       return journalId;
@@ -42,15 +42,37 @@ public class LedgerRepository {
     }
   }
 
-  private long insertJournalEntry(Connection conn, long tranId, LocalDate businessDate)
-      throws SQLException {
+  /**
+   * Posts a balanced reversing journal: the customer's money comes back (credit the account, debit
+   * {@code SETTLEMENT_SUSPENSE}) - the debit/credit sides swapped from {@link #postPurchase}.
+   */
+  public long postReversal(
+      Connection conn,
+      long tranId,
+      LocalDate businessDate,
+      long accountId,
+      long amount,
+      String currency) {
+    try {
+      long journalId = insertJournalEntry(conn, tranId, businessDate, "REVERSAL");
+      insertPosting(conn, journalId, accountId, null, "C", amount, currency);
+      insertPosting(conn, journalId, null, SETTLEMENT_SUSPENSE_GL_CODE, "D", amount, currency);
+      return journalId;
+    } catch (SQLException e) {
+      throw new IllegalStateException("post reversal journal failed", e);
+    }
+  }
+
+  private long insertJournalEntry(
+      Connection conn, long tranId, LocalDate businessDate, String entryType) throws SQLException {
     String sql =
         """
         INSERT INTO journal_entry (tran_id, tran_business_date, entry_type)
-        VALUES (?, ?, 'PURCHASE')""";
+        VALUES (?, ?, ?)""";
     try (PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
       stmt.setLong(1, tranId);
       stmt.setObject(2, businessDate);
+      stmt.setString(3, entryType);
       stmt.executeUpdate();
       try (ResultSet keys = stmt.getGeneratedKeys()) {
         keys.next();

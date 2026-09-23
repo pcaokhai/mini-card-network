@@ -60,6 +60,20 @@ public class CardRepository {
     }
   }
 
+  /** MCN-402: resolves the account a reversal's original card belongs to. */
+  public Optional<Card> findById(long cardId) {
+    String sql = "SELECT " + SELECT_COLUMNS + " FROM card WHERE id = ?";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, cardId);
+      var rs = stmt.executeQuery();
+      if (!rs.next()) return Optional.empty();
+      return Optional.of(toCard(rs));
+    } catch (SQLException e) {
+      throw new IllegalStateException("find card by id failed", e);
+    }
+  }
+
   public Optional<Card> findByCardRef(String cardRef) {
     String sql = "SELECT " + SELECT_COLUMNS + " FROM card WHERE card_ref = ?";
     try (var conn = dataSource.getConnection();

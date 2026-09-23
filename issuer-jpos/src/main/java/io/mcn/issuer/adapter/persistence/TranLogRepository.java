@@ -135,4 +135,53 @@ public class TranLogRepository {
       throw new IllegalStateException("find tran_log by dedupe key failed", e);
     }
   }
+
+  /**
+   * Locates the original transaction a reversal's DE 90 refers to. Unlike {@link #findByDedupeKey},
+   * this never filters on {@code tid} (DE 90 carries no TID, docs/03 §7.3) or on a business date (a
+   * reversal can arrive on a later business date than its original, per docs/03 §7.3, so filtering
+   * by the reversal's own business date would miss the original).
+   */
+  public Optional<OriginalTransactionRow> findByReversalKey(
+      String originalMti, String originalStan, String originalDe7, String originalAcquirer) {
+    String sql =
+        """
+        SELECT id, business_date, card_id, amount, currency, status
+        FROM tran_log
+        WHERE acquirer_id = ? AND stan = ? AND transmission_dt_raw = ? AND mti = ?
+        ORDER BY id DESC LIMIT 1""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, originalAcquirer);
+      stmt.setString(2, originalStan);
+      stmt.setString(3, originalDe7);
+      stmt.setString(4, originalMti);
+      var rs = stmt.executeQuery();
+      if (!rs.next()) return Optional.empty();
+      return Optional.of(
+          new OriginalTransactionRow(
+              rs.getLong("id"),
+              rs.getObject("business_date", LocalDate.class),
+              rs.getLong("card_id"),
+              rs.getLong("amount"),
+              rs.getString("currency").trim(),
+              rs.getString("status")));
+    } catch (SQLException e) {
+      throw new IllegalStateException("find tran_log by reversal key failed", e);
+    }
+  }
+
+  /** Marks the original transaction's row {@code REVERSED} once its reversing journal is posted. */
+  public void markReversed(long tranId, LocalDate businessDate) {
+    String sql =
+        "UPDATE tran_log SET status = 'REVERSED', updated_at = now() WHERE id = ? AND business_date = ?";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, tranId);
+      stmt.setObject(2, businessDate);
+      stmt.executeUpdate();
+    } catch (SQLException e) {
+      throw new IllegalStateException("mark tran_log reversed failed", e);
+    }
+  }
 }

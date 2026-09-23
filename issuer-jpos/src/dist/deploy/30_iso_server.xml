@@ -31,4 +31,12 @@
     <property name="jdbc-password" value="${DB_PASSWORD}" />
     <property name="txn-mgr-name" value="iso-txn-mgr" />
   </request-listener>
+
+  <!-- Owns every reversal advice (MTI class 04) request (MCN-402). -->
+  <request-listener class="io.mcn.issuer.adapter.iso.ReversalListener" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+    <property name="txn-mgr-name" value="reversal-txn-mgr" />
+  </request-listener>
 </iso-server>
