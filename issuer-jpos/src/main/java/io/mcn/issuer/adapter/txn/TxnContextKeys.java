@@ -28,4 +28,7 @@ public final class TxnContextKeys {
   public static final String ORIGINAL_DE7 = "ORIGINAL_DE7";
   public static final String ORIGINAL_ACQUIRER = "ORIGINAL_ACQUIRER";
   public static final String REVERSAL_REASON = "REVERSAL_REASON";
+
+  // MCN-602: simulated ARPC bytes computed by VerifyEmv, consumed by Respond for tag 91.
+  public static final String EMV_ARPC = "EMV_ARPC";
 }

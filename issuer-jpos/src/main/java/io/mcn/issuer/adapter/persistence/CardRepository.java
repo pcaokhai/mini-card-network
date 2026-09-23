@@ -152,6 +152,39 @@ public class CardRepository {
     }
   }
 
+  /**
+   * Atomic replay guard (MCN-602-AC2): the {@code WHERE} clause itself is the guard, so no
+   * read-then-write race window exists. Returns whether the ATC advanced.
+   */
+  public boolean updateEmvLastAtcIfIncreasing(long cardId, int atc) {
+    String sql =
+        "UPDATE card SET emv_last_atc = ?, updated_at = now()"
+            + " WHERE id = ? AND (emv_last_atc IS NULL OR emv_last_atc < ?)";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setInt(1, atc);
+      stmt.setLong(2, cardId);
+      stmt.setInt(3, atc);
+      return stmt.executeUpdate() > 0;
+    } catch (SQLException e) {
+      throw new IllegalStateException("update emv_last_atc failed", e);
+    }
+  }
+
+  public Optional<Integer> findEmvLastAtc(long cardId) {
+    String sql = "SELECT emv_last_atc FROM card WHERE id = ?";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, cardId);
+      var rs = stmt.executeQuery();
+      if (!rs.next()) return Optional.empty();
+      int value = rs.getInt(1);
+      return rs.wasNull() ? Optional.empty() : Optional.of(value);
+    } catch (SQLException e) {
+      throw new IllegalStateException("find card emv_last_atc failed", e);
+    }
+  }
+
   public void blockForPin(long cardId) {
     String sql = "UPDATE card SET status = 'PIN_BLOCKED', updated_at = now() WHERE id = ?";
     try (var conn = dataSource.getConnection();
