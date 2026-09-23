@@ -12,6 +12,7 @@ public final class HealthServer {
   private static final String DRAINING = "{\"status\":\"DRAINING\"}";
   private final Readiness readiness;
   private final CardAdminController cardAdmin;
+  private final KeysController keys;
   private Javalin app;
 
   public HealthServer(Readiness readiness) {
@@ -19,8 +20,13 @@ public final class HealthServer {
   }
 
   public HealthServer(Readiness readiness, CardAdminController cardAdmin) {
+    this(readiness, cardAdmin, null);
+  }
+
+  public HealthServer(Readiness readiness, CardAdminController cardAdmin, KeysController keys) {
     this.readiness = readiness;
     this.cardAdmin = cardAdmin;
+    this.keys = keys;
   }
 
   /** Starts on {@code port} (0 = random) and returns the bound port. */
@@ -46,6 +52,9 @@ public final class HealthServer {
                           });
                   if (cardAdmin != null) {
                     cardAdmin.registerRoutes(config.routes);
+                  }
+                  if (keys != null) {
+                    keys.registerRoutes(config.routes);
                   }
                 })
             .start(port);
