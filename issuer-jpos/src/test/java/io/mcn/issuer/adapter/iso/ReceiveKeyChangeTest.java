@@ -27,7 +27,8 @@ class ReceiveKeyChangeTest {
     byte[] cryptogramUnderZmk = HexFormat.of().parseHex("22".repeat(16));
 
     when(securityModule.unwrapUnderKey(eq(cryptogramUnderZmk), eq(zmk))).thenReturn(newClearKey);
-    when(securityModule.wrapUnderLmk(newClearKey)).thenReturn(HexFormat.of().parseHex("ff".repeat(16)));
+    when(securityModule.wrapUnderLmk(newClearKey))
+        .thenReturn(HexFormat.of().parseHex("ff".repeat(16)));
     when(securityModule.computeKcv(newClearKey)).thenReturn("DDEEFF");
     when(keyStoreRepository.insert(any())).thenReturn(42L);
 
@@ -53,8 +54,7 @@ class ReceiveKeyChangeTest {
                         && "PENDING".equals(r.status())));
     verify(keyStoreRepository).activate(42L);
     verify(auditLogRepository)
-        .record(
-            eq("issuer"), eq("key_change.activated"), eq("key_store"), eq("42"), any(), any());
+        .record(eq("issuer"), eq("key_change.activated"), eq("key_store"), eq("42"), any(), any());
     assertThat(request.hasField(48)).isFalse();
   }
 

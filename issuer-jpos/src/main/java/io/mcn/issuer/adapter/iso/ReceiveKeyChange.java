@@ -15,11 +15,11 @@ import org.jpos.iso.ISOMsg;
  * issuer's perspective - no separate confirm round-trip, per {@code MCN-504-ISS.md}'s Ruling 1).
  *
  * <p>Ruling (deviates from {@code MCN-504-ISS.md}'s Task 2): the plan's DE 123 key-type carrier
- * does not exist in this project's packager ({@code cfg/iso87ascii.xml} defines no field 123),
- * and adding one is a {@code contracts/} change out of scope for this branch (root {@code
- * CLAUDE.md} §9). Key type instead travels as a literal {@code "ZPK:"}/{@code "ZAK:"} prefix
- * inside DE 48's own value ({@code prefix + hex(cryptogramUnderZmk)}) - no packager change, no new
- * field. The gateway (initiator) side must emit DE 48 in this same shape.
+ * does not exist in this project's packager ({@code cfg/iso87ascii.xml} defines no field 123), and
+ * adding one is a {@code contracts/} change out of scope for this branch (root {@code CLAUDE.md}
+ * §9). Key type instead travels as a literal {@code "ZPK:"}/{@code "ZAK:"} prefix inside DE 48's
+ * own value ({@code prefix + hex(cryptogramUnderZmk)}) - no packager change, no new field. The
+ * gateway (initiator) side must emit DE 48 in this same shape.
  */
 public final class ReceiveKeyChange {
 
@@ -80,7 +80,13 @@ public final class ReceiveKeyChange {
           "key_store",
           String.valueOf(id),
           null,
-          "{\"keyType\":\"" + keyType + "\",\"counterparty\":\"" + counterpartyId + "\",\"newKcv\":\"" + kcv + "\"}");
+          "{\"keyType\":\""
+              + keyType
+              + "\",\"counterparty\":\""
+              + counterpartyId
+              + "\",\"newKcv\":\""
+              + kcv
+              + "\"}");
       return true;
     } catch (Exception e) {
       return false;

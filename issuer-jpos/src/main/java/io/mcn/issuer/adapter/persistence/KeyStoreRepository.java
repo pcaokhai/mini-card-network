@@ -13,6 +13,10 @@ import javax.sql.DataSource;
 
 /** Reads/writes {@code key_store}; keys are always cryptograms under LMK, never clear. */
 public class KeyStoreRepository {
+
+  /** Dual-key acceptance window (docs/03 §9's "Reversal grace for new key (DE 70 = 161)"). */
+  public static final Duration DUAL_KEY_WINDOW = Duration.ofMinutes(5);
+
   private final DataSource dataSource;
 
   public KeyStoreRepository(DataSource dataSource) {
@@ -70,8 +74,8 @@ public class KeyStoreRepository {
 
   /**
    * Dual-key acceptance window (MCN-504-AC2): the most recently {@code RETIRED} row for {@code
-   * (keyType, counterparty)}, if it retired within {@code within} of now - a time-boxed read, not
-   * a second {@code ACTIVE} row, per {@code MCN-504-GW.md}'s Ruling 2.
+   * (keyType, counterparty)}, if it retired within {@code within} of now - a time-boxed read, not a
+   * second {@code ACTIVE} row, per {@code MCN-504-GW.md}'s Ruling 2.
    */
   public Optional<KeyStoreRow> findRecentlyRetired(
       String keyType, String counterparty, Duration within) {

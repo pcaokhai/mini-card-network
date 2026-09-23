@@ -26,7 +26,8 @@ import org.jpos.util.Log;
  */
 public final class NetworkManagementListener extends Log
     implements ISORequestListener, Configurable {
-  private static final String LAB_ACQUIRER_ID = "970499"; // docs/03 §3, matches HandleNetworkManagement
+  private static final String LAB_ACQUIRER_ID =
+      "970499"; // docs/03 §3, matches HandleNetworkManagement
 
   private AcquirerLinkRepository links;
   private ReceiveKeyChange receiveKeyChange;
@@ -37,7 +38,8 @@ public final class NetworkManagementListener extends Log
     this(links, null);
   }
 
-  public NetworkManagementListener(AcquirerLinkRepository links, ReceiveKeyChange receiveKeyChange) {
+  public NetworkManagementListener(
+      AcquirerLinkRepository links, ReceiveKeyChange receiveKeyChange) {
     this.links = links;
     this.receiveKeyChange = receiveKeyChange;
   }
