@@ -21,6 +21,7 @@ type Config struct {
 	ToxiproxyAdminAddr  string
 	IssuerProxyName     string
 	ChaosFakeIssuerAddr string
+	LMKTestValueHex     string
 }
 
 // Load reads configuration through getenv (os.Getenv in production, a map in tests).
@@ -44,6 +45,11 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("SHUTDOWN_TIMEOUT must be positive")
 	}
 	cfg.ShutdownTimeout = timeout
+
+	cfg.LMKTestValueHex = getenv("LMK_TEST_VALUE_HEX")
+	if cfg.LMKTestValueHex == "" {
+		return Config{}, errors.New("LMK_TEST_VALUE_HEX is required")
+	}
 
 	if raw := getenv("SAF_ENC_KEY"); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)

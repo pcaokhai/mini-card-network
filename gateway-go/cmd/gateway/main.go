@@ -22,6 +22,7 @@ import (
 	"github.com/mcn/gateway-go/internal/chaos"
 	"github.com/mcn/gateway-go/internal/chaos/fakeissuer"
 	"github.com/mcn/gateway-go/internal/config"
+	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/purchase"
@@ -48,6 +49,10 @@ func main() {
 
 // run serves until ctx is cancelled, then drains within cfg.ShutdownTimeout (NFR-09).
 func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	// A bad LMK must fail the process before it binds a port.
+	if _, err := hsm.NewJCEModule(cfg.LMKTestValueHex); err != nil {
+		return fmt.Errorf("init hsm module: %w", err)
+	}
 	shutdownTracing, err := obs.SetupTracing(ctx, cfg.ServiceName, cfg.TracingEnabled)
 	if err != nil {
 		return err
@@ -65,24 +70,16 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	hub := ws.NewHub()
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
+	keyStoreRepo := store.NewKeyStoreRepository(pool)
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer)
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 
-	var toxiproxyOpts []chaos.ToxiproxyClientOption
-	var fakeIssuer *fakeissuer.Listener
-	if cfg.ChaosFakeIssuerAddr != "" {
-		fakeIssuer, err = fakeissuer.NewListener(cfg.ChaosFakeIssuerAddr)
-		if err != nil {
-			return fmt.Errorf("listen chaos fake issuer %s: %w", cfg.ChaosFakeIssuerAddr, err)
-		}
-		// cfg.ChaosFakeIssuerAddr (not fakeIssuer.Addr()) is what Toxiproxy - a different
-		// container - must dial, e.g. "gateway:19999"; fakeIssuer.Addr() is only the local bind
-		// address (e.g. "[::]:19999") once net.Listen resolves it, which isn't dialable from
-		// another container.
-		toxiproxyOpts = append(toxiproxyOpts, chaos.WithDropResponseAddr(cfg.ChaosFakeIssuerAddr))
+	fakeIssuer, toxiproxyOpts, err := setupFakeIssuer(cfg)
+	if err != nil {
+		return err
 	}
 	toxiproxyClient := chaos.NewToxiproxyClient(cfg.ToxiproxyAdminAddr, cfg.IssuerProxyName, toxiproxyOpts...)
 	if err := toxiproxyClient.DisableAll(ctx); err != nil {
@@ -100,6 +97,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.MountNetwork(r, linkRepo, supervisor, safRepo)
 	api.MountPurchases(r, purchaseService)
 	api.MountTransactionsQuery(r, tranLogRepo)
+	api.MountKeys(r, keyStoreRepo)
 	api.MountChaos(r, toxiproxyClient, chaosRunner, hub)
 	r.Handle("/v1/stream", hub)
 	apiServer := &http.Server{
@@ -149,6 +147,24 @@ func serve(s *http.Server, ln net.Listener) error {
 		return err
 	}
 	return nil
+}
+
+// setupFakeIssuer starts the MCN-407 DROP_RESPONSE fake-issuer listener when
+// cfg.ChaosFakeIssuerAddr is set, and returns the ToxiproxyClientOption that repoints the issuer
+// proxy at it during that scenario. Returns a nil listener and no options when unset (off by
+// default).
+func setupFakeIssuer(cfg config.Config) (*fakeissuer.Listener, []chaos.ToxiproxyClientOption, error) {
+	if cfg.ChaosFakeIssuerAddr == "" {
+		return nil, nil, nil
+	}
+	fakeIssuer, err := fakeissuer.NewListener(cfg.ChaosFakeIssuerAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen chaos fake issuer %s: %w", cfg.ChaosFakeIssuerAddr, err)
+	}
+	// cfg.ChaosFakeIssuerAddr (not fakeIssuer.Addr()) is what Toxiproxy - a different container -
+	// must dial, e.g. "gateway:19999"; fakeIssuer.Addr() is only the local bind address (e.g.
+	// "[::]:19999") once net.Listen resolves it, which isn't dialable from another container.
+	return fakeIssuer, []chaos.ToxiproxyClientOption{chaos.WithDropResponseAddr(cfg.ChaosFakeIssuerAddr)}, nil
 }
 
 // newLateResponseHandler builds the isonet.Supervisor callback (MCN-403) that persists a 0210

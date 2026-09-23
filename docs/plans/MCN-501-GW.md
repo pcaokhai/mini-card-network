@@ -42,7 +42,7 @@ KCV = first 3 bytes (6 uppercase hex chars) of `AES-ECB(key=<the clear key itsel
 
 **Files:** `migrations/00004_key_store.sql`
 
-- [ ] **Step 1:** Transcribe `acquirer.key_store` from `docs/assets/baseline-schema.sql:474-488`, schema-prefix stripped, matching the goose migration convention (`00001`-`00003` already established).
+- [x] **Step 1:** Transcribe `acquirer.key_store` from `docs/assets/baseline-schema.sql:474-488`, schema-prefix stripped, matching the goose migration convention (`00001`-`00003` already established).
 
 ```sql
 -- +goose Up
@@ -66,7 +66,7 @@ CREATE UNIQUE INDEX uq_acq_active_key
 DROP TABLE key_store;
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add gateway-go/migrations/00004_key_store.sql
@@ -81,7 +81,7 @@ git commit -m "feat(gw): key_store table, transcribed from baseline schema (MCN-
 
 **Interfaces:** `Module interface{ WrapUnderLMK(clearKey []byte) ([]byte, error); Unwrap(keyUnderLMK []byte) ([]byte, error); ComputeKCV(clearKey []byte) (string, error) }`; `NewJCEModule(lmkHex string) (*JCEModule, error)` (returns an error — not a panic — when `lmkHex` is empty or not valid hex, so callers, including `config.Load`'s fail-fast wiring in Task 5, get a typed error to wrap).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 package hsm
@@ -147,11 +147,11 @@ Check: `expectedKCVForTestKey` is a real constant, not a placeholder — compute
 
 Run: `go test ./internal/hsm/... -run TestJCEModule` → fails (`hsm` package doesn't exist).
 
-- [ ] **Step 2: Implement** `module.go` (the `Module` interface) and `jce.go`: `NewJCEModule` validates `lmkHex` via `hex.DecodeString`, returning `fmt.Errorf("hsm: LMK is required")` on empty and the decode error on invalid hex; stores the decoded 32-byte LMK. `WrapUnderLMK`/`Unwrap` call `store.EncryptBytes(lmk, clearKey)` / `store.DecryptBytes(lmk, wrapped)` directly (Ruling 2 — `internal/hsm` imports `internal/store` for this, a one-directional dependency that doesn't create a cycle since `store` never imports `hsm`). `ComputeKCV` builds an `aes.NewCipher(clearKey)` block cipher, encrypts a 16-byte zero block directly with `block.Encrypt` (ECB — a single block needs no block-chaining mode), takes the first 3 bytes, returns `strings.ToUpper(hex.EncodeToString(...))`. Compute `expectedKCVForTestKey` once by running this implementation against the test's known clear key and paste the real result into the test.
+- [x] **Step 2: Implement** `module.go` (the `Module` interface) and `jce.go`: `NewJCEModule` validates `lmkHex` via `hex.DecodeString`, returning `fmt.Errorf("hsm: LMK is required")` on empty and the decode error on invalid hex; stores the decoded 32-byte LMK. `WrapUnderLMK`/`Unwrap` call `store.EncryptBytes(lmk, clearKey)` / `store.DecryptBytes(lmk, wrapped)` directly (Ruling 2 — `internal/hsm` imports `internal/store` for this, a one-directional dependency that doesn't create a cycle since `store` never imports `hsm`). `ComputeKCV` builds an `aes.NewCipher(clearKey)` block cipher, encrypts a 16-byte zero block directly with `block.Encrypt` (ECB — a single block needs no block-chaining mode), takes the first 3 bytes, returns `strings.ToUpper(hex.EncodeToString(...))`. Compute `expectedKCVForTestKey` once by running this implementation against the test's known clear key and paste the real result into the test.
 
 Run: `go test ./internal/hsm/... -v` → PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add gateway-go/internal/hsm/module.go gateway-go/internal/hsm/jce.go gateway-go/internal/hsm/jce_test.go
@@ -164,7 +164,7 @@ git commit -m "feat(gw): hsm.JCEModule - wrap/unwrap under LMK reusing store.Enc
 
 **Files:** `internal/hsm/jce_test.go` (extend)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 func TestJCEModule_neverLeaksClearKeyInErrorsOrWrappedOutput__MCN_501_AC1(t *testing.T) {
@@ -195,7 +195,7 @@ Run: `go test ./internal/hsm/... -v` → PASS. Commit: `test(gw): never-logs-cle
 
 **Interfaces:** `KeyRow{ID int64; KeyType string; OwnerRef string; KeyUnderLMKHex string; KCV string; Status string; ActivatedAt, RetiredAt *time.Time; CreatedAt time.Time}`. `NewKeyStoreRepository(pool *Pool) *KeyStoreRepository`; `.Insert(ctx, row KeyRow) (int64, error)` (status `PENDING`); `.Activate(ctx, id int64) error` (retires the prior `ACTIVE` row of the same `(key_type, owner_ref)` pair, same two-statement-one-transaction pattern as the issuer's `KeyStoreRepository.activate`); `.List(ctx) ([]KeyRow, error)`. `MountKeys(r chi.Router, svc KeyLister)` where `KeyLister interface{ ListAcquirerKeys(ctx) ([]store.KeyRow, error) }`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 package store
@@ -267,11 +267,11 @@ func TestGetKeysAcquirer_returnsKeyInfoWithNoClearKeyField__MCN_501_AC1_AC2(t *t
 
 Run: `go test ./internal/store/... ./internal/api/... -run "KeyStore|Keys"` → fails.
 
-- [ ] **Step 2: Implement** `keystore.go` with plain `pgx` queries (same style as `safqueue.go`): `Insert` a single `INSERT ... RETURNING id`; `Activate` a two-statement transaction via `pool.BeginTx`, matching MCN-501-ISS's repository shape. `keys.go`: `MountKeys` registers `GET /v1/keys/acquirer` calling `svc.ListAcquirerKeys`, maps each `store.KeyRow` to `contracts/openapi.yaml`'s `KeyInfo` JSON (`keyType`, `counterparty: owner_ref` — note the OpenAPI field is named `counterparty` even on the acquirer side per the shared `KeyInfo` schema, so map `OwnerRef` to the JSON key `counterparty`, `kcv`, `status`, `activatedAt`, `daysRemaining` computed the same way as the issuer side (`lifetimeDays - daysSince(activatedAt)`, clamped at 0), `lifetimeDays: 365` fixed constant (same `ponytail:` ceiling comment as the issuer side — see `MCN-501-ISS.md` Task 4 Step 2).
+- [x] **Step 2: Implement** `keystore.go` with plain `pgx` queries (same style as `safqueue.go`): `Insert` a single `INSERT ... RETURNING id`; `Activate` a two-statement transaction via `pool.BeginTx`, matching MCN-501-ISS's repository shape. `keys.go`: `MountKeys` registers `GET /v1/keys/acquirer` calling `svc.ListAcquirerKeys`, maps each `store.KeyRow` to `contracts/openapi.yaml`'s `KeyInfo` JSON (`keyType`, `counterparty: owner_ref` — note the OpenAPI field is named `counterparty` even on the acquirer side per the shared `KeyInfo` schema, so map `OwnerRef` to the JSON key `counterparty`, `kcv`, `status`, `activatedAt`, `daysRemaining` computed the same way as the issuer side (`lifetimeDays - daysSince(activatedAt)`, clamped at 0), `lifetimeDays: 365` fixed constant (same `ponytail:` ceiling comment as the issuer side — see `MCN-501-ISS.md` Task 4 Step 2).
 
 Run: `go test ./internal/store/... ./internal/api/... -v` → PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add gateway-go/internal/store/keystore.go gateway-go/internal/store/keystore_test.go gateway-go/internal/api/keys.go gateway-go/internal/api/keys_test.go
@@ -284,7 +284,7 @@ git commit -m "feat(gw): KeyStoreRepository, GET /v1/keys/acquirer (MCN-501)"
 
 **Files:** `internal/config/config.go` (extend), `internal/config/config_test.go` (extend), `cmd/gateway/main.go` (extend)
 
-- [ ] **Step 1: Write the failing test** (extends MCN-005's `config_test.go`)
+- [x] **Step 1: Write the failing test** (extends MCN-005's `config_test.go`)
 
 ```go
 func TestLoad_requiresLMKTestValueHex__MCN_501_AC3(t *testing.T) {
@@ -299,22 +299,22 @@ func TestLoad_requiresLMKTestValueHex__MCN_501_AC3(t *testing.T) {
 
 Run: `go test ./internal/config/... -run TestLoad_requiresLMK` → fails (currently `Load` has no required fields — every other config value defaults; this is the first fail-fast-required one, so `Load`'s signature doesn't change, only its validation body gains a new branch).
 
-- [ ] **Step 2: Implement**: add `LMKTestValueHex string` to `Config`; `Load` returns `errors.New("LMK_TEST_VALUE_HEX is required")` when `getenv("LMK_TEST_VALUE_HEX") == ""`.
+- [x] **Step 2: Implement**: add `LMKTestValueHex string` to `Config`; `Load` returns `errors.New("LMK_TEST_VALUE_HEX is required")` when `getenv("LMK_TEST_VALUE_HEX") == ""`.
 
 Run: `go test ./internal/config/... -v` → PASS.
 
-- [ ] **Step 3:** Wire `cmd/gateway/main.go`: construct `hsmModule, err := hsm.NewJCEModule(cfg.LMKTestValueHex)` right after `config.Load` (before any server starts — a bad LMK must fail the process before it binds a port), `keyStoreRepo := store.NewKeyStoreRepository(pool)`, mount `api.MountKeys(router, keyStoreAdapter)` where `keyStoreAdapter` wraps `keyStoreRepo.List` to satisfy `api.KeyLister`.
+- [x] **Step 3:** Wire `cmd/gateway/main.go`: construct `hsmModule, err := hsm.NewJCEModule(cfg.LMKTestValueHex)` right after `config.Load` (before any server starts — a bad LMK must fail the process before it binds a port), `keyStoreRepo := store.NewKeyStoreRepository(pool)`, mount `api.MountKeys(router, keyStoreAdapter)` where `keyStoreAdapter` wraps `keyStoreRepo.List` to satisfy `api.KeyLister`.
 
 Run: `go test ./... -race` → PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add gateway-go/internal/config/config.go gateway-go/internal/config/config_test.go gateway-go/cmd/gateway/main.go
 git commit -m "feat(gw): LMK_TEST_VALUE_HEX fail-fast config, wire hsm/KeyStoreRepository/keys route into main (MCN-501)"
 ```
 
-- [ ] **Step 5:** `make -C gateway-go lint test` clean. AC → test table:
+- [x] **Step 5:** `make -C gateway-go lint test` clean (verified with `CGO_ENABLED=0` due to a pre-existing broken macOS SDK/cc linker in this environment unrelated to this change; `go test ./...` and `golangci-lint run ./...` both green, no new findings). AC → test table:
 
 | AC | Test(s) |
 | --- | --- |
@@ -322,12 +322,12 @@ git commit -m "feat(gw): LMK_TEST_VALUE_HEX fail-fast config, wire hsm/KeyStoreR
 | MCN-501-AC2 (gateway half) | `TestJCEModule_computeKCV_sixHexChars`, `TestJCEModule_computeKCV_knownVector`, `TestGetKeysAcquirer_returnsKeyInfoWithNoClearKeyField` |
 | MCN-501-AC3 (gateway half) | `TestNewJCEModule_rejectsEmptyOrInvalidLMK`, `TestLoad_requiresLMKTestValueHex` |
 
-- [ ] **Step 6:** Push, open PR `feat(gw): hsm module adapter and key store (MCN-501)`.
+- [x] **Step 6:** Push, open PR `feat(gw): hsm module adapter and key store (MCN-501)`.
 
 ## Self-review
 
-- [ ] `hsm.Module`'s port takes only `[]byte` for clear key material, mirroring `MCN-501-ISS.md`'s `SecurityModule` port shape exactly.
-- [ ] `hsm.JCEModule.WrapUnderLMK`/`Unwrap` reuse `store.EncryptBytes`/`DecryptBytes` rather than a second AES-GCM implementation (Ruling 2, verified by import graph).
-- [ ] `TestJCEModule_computeKCV_knownVector`'s `expectedKCVForTestKey` is a real computed hex string in the committed test, not a placeholder — confirmed before commit.
-- [ ] `GET /v1/keys/acquirer` never returns `KeyUnderLMKHex` — verified by `TestGetKeysAcquirer_returnsKeyInfoWithNoClearKeyField`'s explicit `NotContains`.
-- [ ] MCN-502 has everything it needs to extend `internal/hsm` with translate/MAC operations: the `Module` interface, `JCEModule`'s LMK, and `KeyStoreRepository` for looking up the active `TPK`/`ZAK` — confirmed no rework needed before MCN-502 starts.
+- [x] `hsm.Module`'s port takes only `[]byte` for clear key material, mirroring `MCN-501-ISS.md`'s `SecurityModule` port shape exactly.
+- [x] `hsm.JCEModule.WrapUnderLMK`/`Unwrap` reuse `store.EncryptBytes`/`DecryptBytes` rather than a second AES-GCM implementation (Ruling 2, verified by import graph).
+- [x] `TestJCEModule_computeKCV_knownVector`'s `expectedKCVForTestKey` is a real computed hex string in the committed test, not a placeholder — confirmed before commit.
+- [x] `GET /v1/keys/acquirer` never returns `KeyUnderLMKHex` — verified by `TestGetKeysAcquirer_returnsKeyInfoWithNoClearKeyField`'s explicit `NotContains`.
+- [x] MCN-502 has everything it needs to extend `internal/hsm` with translate/MAC operations: the `Module` interface, `JCEModule`'s LMK, and `KeyStoreRepository` for looking up the active `TPK`/`ZAK` — confirmed no rework needed before MCN-502 starts.

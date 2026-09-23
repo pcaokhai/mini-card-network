@@ -1,0 +1,14 @@
+title = "mini-card-network gitleaks config"
+
+# Extend the default gitleaks ruleset (MCN-506) rather than replacing it.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe synthetic test fixtures, not real secrets"
+regexes = [
+  # gateway-go/internal/config/config_test.go: a base64-encoded 32-byte SAF_ENC_KEY test
+  # fixture (MCN-401) that decodes to "01234567890123456789012345678901" - sequential digits,
+  # not a real key. Flagged by gitleaks' generic-api-key heuristic on entropy alone.
+  '''MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=''',
+]
