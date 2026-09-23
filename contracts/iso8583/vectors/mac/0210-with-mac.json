@@ -1,0 +1,27 @@
+{
+  "name": "0210-with-mac",
+  "spec": "MCN-87A v1",
+  "mti": "0210",
+  "fields": {
+    "2": "9704360000004417",
+    "3": "000000",
+    "4": "000000250000",
+    "7": "0921073208",
+    "11": "000123",
+    "12": "143208",
+    "13": "0921",
+    "15": "0921",
+    "32": "970499",
+    "37": "626514000123",
+    "38": "A00123",
+    "39": "00",
+    "41": "00000042",
+    "42": "GOCPHO000000001",
+    "49": "704",
+    "64": "DDBEB2B8A0853B4A"
+  },
+  "packedHexExcludingMac": "3032313037323341303030313045433038303030313639373034333630303030303034343137303030303030303030303030323530303030303932313037333230383030303132333134333230383039323130393231303639373034393936323635313430303031323341303031323330303030303030303432474f4350484f303030303030303031373034",
+  "zakHex": "3132333435363738393a3b3c3d3e3f40",
+  "expectedMacHex": "ddbeb2b8a0853b4a",
+  "note": "packedHexExcludingMac is hex.EncodeToString of the raw bytes returned by the real internal/iso8583.Pack(\"0210\", fields) (DE 64 genuinely absent from the fields map, so bit 64 is unset and no DE 64 bytes are appended) - decode it back to bytes before use. expectedMacHex is ISO 9797-1 algorithm 3 (Retail MAC / X9.19) over those decoded bytes under zakHex (K1 = first 8 bytes, K2 = last 8 bytes): CBC-encrypt zero-padded blocks under K1 with zero IV, decrypt the final block under K2, re-encrypt under K1 - computed with Go's crypto/des per docs/03-iso8583-interface-spec.md section 11. DE 64 in fields above is expectedMacHex uppercased, per Ruling 2 of docs/plans/MCN-502.md."
+}
