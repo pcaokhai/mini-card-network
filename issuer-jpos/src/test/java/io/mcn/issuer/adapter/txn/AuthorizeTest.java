@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import io.mcn.issuer.adapter.persistence.AccountLockRepository;
 import io.mcn.issuer.adapter.persistence.AccountRow;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
+import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import java.sql.Connection;
 import java.sql.SQLException;
 import javax.sql.DataSource;
@@ -26,19 +27,23 @@ class AuthorizeTest {
   }
 
   @Test
-  void sufficientFundsApprovesAndPostsLedger() throws Exception {
+  void sufficientFundsApprovesAndPostsLedgerAndIncrementsVelocity() throws Exception {
     var lockRepo = Mockito.mock(AccountLockRepository.class);
     var ledgerRepo = Mockito.mock(LedgerRepository.class);
+    var velocityCounterRepo = Mockito.mock(VelocityCounterRepository.class);
     when(lockRepo.lockAndGet(any(), anyLong()))
         .thenReturn(new AccountRow(1L, 100_000L, 100_000L, 0L, 0L));
     when(lockRepo.debit(any(), anyLong(), anyLong(), anyLong())).thenReturn(true);
 
     Context ctx = new Context();
     ctx.put(TxnContextKeys.ACCOUNT_ID, 1L);
+    ctx.put(TxnContextKeys.CARD_ID, 7L);
     ctx.put(TxnContextKeys.AMOUNT, 10_000L);
     ctx.put(TxnContextKeys.TRAN_ID, 42L);
 
-    var authorize = new Authorize(lockRepo, ledgerRepo, new AuthCodeGenerator(), fakeDataSource());
+    var authorize =
+        new Authorize(
+            lockRepo, ledgerRepo, velocityCounterRepo, new AuthCodeGenerator(), fakeDataSource());
     int result = authorize.prepare(1L, ctx);
 
     assertThat(result & PREPARED).isEqualTo(PREPARED);
@@ -46,37 +51,46 @@ class AuthorizeTest {
     assertThat(ctx.<String>get(TxnContextKeys.AUTH_CODE)).hasSize(6);
     Mockito.verify(ledgerRepo)
         .postPurchase(any(), Mockito.eq(42L), any(), Mockito.eq(1L), Mockito.eq(10_000L), any());
+    Mockito.verify(velocityCounterRepo)
+        .incrementDaily(any(), Mockito.eq(7L), Mockito.eq("PURCHASE"), any(), Mockito.eq(10_000L));
   }
 
   @Test
-  void insufficientFundsDeclinesRc51WithoutPostingLedger() throws Exception {
+  void insufficientFundsDeclinesRc51WithoutPostingLedgerOrIncrementingVelocity() throws Exception {
     var lockRepo = Mockito.mock(AccountLockRepository.class);
     var ledgerRepo = Mockito.mock(LedgerRepository.class);
+    var velocityCounterRepo = Mockito.mock(VelocityCounterRepository.class);
     when(lockRepo.lockAndGet(any(), anyLong()))
         .thenReturn(new AccountRow(1L, 5_000L, 5_000L, 0L, 0L));
 
     Context ctx = new Context();
     ctx.put(TxnContextKeys.ACCOUNT_ID, 1L);
+    ctx.put(TxnContextKeys.CARD_ID, 7L);
     ctx.put(TxnContextKeys.AMOUNT, 10_000L);
 
-    var authorize = new Authorize(lockRepo, ledgerRepo, new AuthCodeGenerator(), fakeDataSource());
+    var authorize =
+        new Authorize(
+            lockRepo, ledgerRepo, velocityCounterRepo, new AuthCodeGenerator(), fakeDataSource());
     authorize.prepare(1L, ctx);
 
     assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("51");
-    Mockito.verifyNoInteractions(ledgerRepo);
+    Mockito.verifyNoInteractions(ledgerRepo, velocityCounterRepo);
   }
 
   @Test
   void priorDeclineFromAnEarlierParticipantIsPreservedUnchanged() throws Exception {
     var lockRepo = Mockito.mock(AccountLockRepository.class);
     var ledgerRepo = Mockito.mock(LedgerRepository.class);
+    var velocityCounterRepo = Mockito.mock(VelocityCounterRepository.class);
     Context ctx = new Context();
     ctx.put(TxnContextKeys.RESPONSE_CODE, "61");
 
-    var authorize = new Authorize(lockRepo, ledgerRepo, new AuthCodeGenerator(), fakeDataSource());
+    var authorize =
+        new Authorize(
+            lockRepo, ledgerRepo, velocityCounterRepo, new AuthCodeGenerator(), fakeDataSource());
     authorize.prepare(1L, ctx);
 
     assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("61");
-    Mockito.verifyNoInteractions(lockRepo, ledgerRepo);
+    Mockito.verifyNoInteractions(lockRepo, ledgerRepo, velocityCounterRepo);
   }
 }

@@ -19,14 +19,16 @@ public class DailyAmountRule implements VelocityRule {
   private final VelocityCounterRepository velocityCounterRepository;
 
   public DailyAmountRule(
-      CardLimitRepository cardLimitRepository, VelocityCounterRepository velocityCounterRepository) {
+      CardLimitRepository cardLimitRepository,
+      VelocityCounterRepository velocityCounterRepository) {
     this.cardLimitRepository = cardLimitRepository;
     this.velocityCounterRepository = velocityCounterRepository;
   }
 
   /** Reflective config-driven registration factory; see {@code CheckLimits#setConfiguration}. */
   public static DailyAmountRule create(
-      CardLimitRepository cardLimitRepository, VelocityCounterRepository velocityCounterRepository) {
+      CardLimitRepository cardLimitRepository,
+      VelocityCounterRepository velocityCounterRepository) {
     return new DailyAmountRule(cardLimitRepository, velocityCounterRepository);
   }
 

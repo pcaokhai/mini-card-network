@@ -16,14 +16,16 @@ public class DailyCountRule implements VelocityRule {
   private final VelocityCounterRepository velocityCounterRepository;
 
   public DailyCountRule(
-      CardLimitRepository cardLimitRepository, VelocityCounterRepository velocityCounterRepository) {
+      CardLimitRepository cardLimitRepository,
+      VelocityCounterRepository velocityCounterRepository) {
     this.cardLimitRepository = cardLimitRepository;
     this.velocityCounterRepository = velocityCounterRepository;
   }
 
   /** Reflective config-driven registration factory; see {@code CheckLimits#setConfiguration}. */
   public static DailyCountRule create(
-      CardLimitRepository cardLimitRepository, VelocityCounterRepository velocityCounterRepository) {
+      CardLimitRepository cardLimitRepository,
+      VelocityCounterRepository velocityCounterRepository) {
     return new DailyCountRule(cardLimitRepository, velocityCounterRepository);
   }
 

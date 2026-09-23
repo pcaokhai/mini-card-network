@@ -1,5 +1,7 @@
 package io.mcn.issuer.adapter.persistence;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.Optional;
@@ -16,17 +18,30 @@ public class VelocityCounterRepository {
     this.dataSource = dataSource;
   }
 
+  private static final String INCREMENT_SQL =
+      """
+      INSERT INTO velocity_counter (card_id, tran_type, period, period_key, txn_count, txn_amount)
+      VALUES (?, ?, 'DAILY', ?, 1, ?)
+      ON CONFLICT (card_id, tran_type, period, period_key)
+      DO UPDATE SET txn_count = velocity_counter.txn_count + 1,
+                    txn_amount = velocity_counter.txn_amount + EXCLUDED.txn_amount""";
+
   /** Upserts today's row in one round trip - no read-then-write race. */
   public void incrementDaily(long cardId, String tranType, LocalDate businessDate, long amount) {
-    String sql =
-        """
-        INSERT INTO velocity_counter (card_id, tran_type, period, period_key, txn_count, txn_amount)
-        VALUES (?, ?, 'DAILY', ?, 1, ?)
-        ON CONFLICT (card_id, tran_type, period, period_key)
-        DO UPDATE SET txn_count = velocity_counter.txn_count + 1,
-                      txn_amount = velocity_counter.txn_amount + EXCLUDED.txn_amount""";
-    try (var conn = dataSource.getConnection();
-        var stmt = conn.prepareStatement(sql)) {
+    try (var conn = dataSource.getConnection()) {
+      incrementDaily(conn, cardId, tranType, businessDate, amount);
+    } catch (SQLException e) {
+      throw new IllegalStateException("increment velocity_counter failed", e);
+    }
+  }
+
+  /**
+   * Same upsert, on a connection the caller owns - so a decline never increments (Authorize calls
+   * this only after its own ledger post, on the same open transaction, before commit).
+   */
+  public void incrementDaily(
+      Connection conn, long cardId, String tranType, LocalDate businessDate, long amount) {
+    try (PreparedStatement stmt = conn.prepareStatement(INCREMENT_SQL)) {
       stmt.setLong(1, cardId);
       stmt.setString(2, tranType);
       stmt.setString(3, businessDate.toString());
@@ -37,7 +52,8 @@ public class VelocityCounterRepository {
     }
   }
 
-  public Optional<VelocityCounterRow> findDaily(long cardId, String tranType, LocalDate businessDate) {
+  public Optional<VelocityCounterRow> findDaily(
+      long cardId, String tranType, LocalDate businessDate) {
     String sql =
         "SELECT txn_count, txn_amount FROM velocity_counter "
             + "WHERE card_id = ? AND tran_type = ? AND period = 'DAILY' AND period_key = ?";

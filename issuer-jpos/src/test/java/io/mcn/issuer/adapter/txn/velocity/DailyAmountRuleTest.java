@@ -23,7 +23,8 @@ class DailyAmountRuleTest {
     when(velocityCounterRepository.findDaily(1L, "PURCHASE", LocalDate.now()))
         .thenReturn(
             Optional.of(
-                new VelocityCounterRow(1L, "PURCHASE", "DAILY", LocalDate.now().toString(), 3, 45_000L)));
+                new VelocityCounterRow(
+                    1L, "PURCHASE", "DAILY", LocalDate.now().toString(), 3, 45_000L)));
 
     DailyAmountRule rule = new DailyAmountRule(cardLimitRepository, velocityCounterRepository);
 

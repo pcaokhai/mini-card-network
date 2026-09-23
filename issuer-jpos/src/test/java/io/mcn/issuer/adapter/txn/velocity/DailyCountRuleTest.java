@@ -22,7 +22,9 @@ class DailyCountRuleTest {
         .thenReturn(List.of(new CardLimit("PURCHASE", "DAILY", null, 5)));
     when(velocityCounterRepository.findDaily(1L, "PURCHASE", LocalDate.now()))
         .thenReturn(
-            Optional.of(new VelocityCounterRow(1L, "PURCHASE", "DAILY", LocalDate.now().toString(), 5, 0L)));
+            Optional.of(
+                new VelocityCounterRow(
+                    1L, "PURCHASE", "DAILY", LocalDate.now().toString(), 5, 0L)));
 
     DailyCountRule rule = new DailyCountRule(cardLimitRepository, velocityCounterRepository);
 
@@ -35,7 +37,8 @@ class DailyCountRuleTest {
     VelocityCounterRepository velocityCounterRepository = mock(VelocityCounterRepository.class);
     when(cardLimitRepository.findApplicableLimits(1L, "PURCHASE"))
         .thenReturn(List.of(new CardLimit("PURCHASE", "DAILY", null, 5)));
-    when(velocityCounterRepository.findDaily(1L, "PURCHASE", LocalDate.now())).thenReturn(Optional.empty());
+    when(velocityCounterRepository.findDaily(1L, "PURCHASE", LocalDate.now()))
+        .thenReturn(Optional.empty());
 
     DailyCountRule rule = new DailyCountRule(cardLimitRepository, velocityCounterRepository);
 

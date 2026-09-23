@@ -18,7 +18,8 @@ public class PerTransactionAmountRule implements VelocityRule {
 
   /** Reflective config-driven registration factory; see {@code CheckLimits#setConfiguration}. */
   public static PerTransactionAmountRule create(
-      CardLimitRepository cardLimitRepository, VelocityCounterRepository velocityCounterRepository) {
+      CardLimitRepository cardLimitRepository,
+      VelocityCounterRepository velocityCounterRepository) {
     return new PerTransactionAmountRule(cardLimitRepository);
   }
 

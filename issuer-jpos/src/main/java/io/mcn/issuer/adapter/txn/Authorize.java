@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.persistence.AccountLockRepository;
 import io.mcn.issuer.adapter.persistence.AccountRow;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
+import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import java.io.Serializable;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -44,32 +45,37 @@ import org.jpos.util.Destroyable;
 public class Authorize implements TransactionParticipant, Configurable, Destroyable {
 
   private static final String CURRENCY = "704";
+  private static final String PURCHASE_TRAN_TYPE = "PURCHASE";
 
   private AccountLockRepository lockRepository;
   private LedgerRepository ledgerRepository;
+  private VelocityCounterRepository velocityCounterRepository;
   private final AuthCodeGenerator authCodeGenerator;
   private DataSource dataSource;
   private HikariDataSource ownedDataSource;
 
   /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
   public Authorize() {
-    this(null, null, new AuthCodeGenerator(), null);
+    this(null, null, null, new AuthCodeGenerator(), null);
   }
 
   public Authorize(
       AccountLockRepository lockRepository,
       LedgerRepository ledgerRepository,
+      VelocityCounterRepository velocityCounterRepository,
       AuthCodeGenerator authCodeGenerator) {
-    this(lockRepository, ledgerRepository, authCodeGenerator, null);
+    this(lockRepository, ledgerRepository, velocityCounterRepository, authCodeGenerator, null);
   }
 
   public Authorize(
       AccountLockRepository lockRepository,
       LedgerRepository ledgerRepository,
+      VelocityCounterRepository velocityCounterRepository,
       AuthCodeGenerator authCodeGenerator,
       DataSource dataSource) {
     this.lockRepository = lockRepository;
     this.ledgerRepository = ledgerRepository;
+    this.velocityCounterRepository = velocityCounterRepository;
     this.authCodeGenerator = authCodeGenerator;
     this.dataSource = dataSource;
   }
@@ -80,6 +86,7 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     this.dataSource = ownedDataSource;
     this.lockRepository = new AccountLockRepository(this.dataSource);
     this.ledgerRepository = new LedgerRepository();
+    this.velocityCounterRepository = new VelocityCounterRepository(this.dataSource);
   }
 
   @Override
@@ -122,13 +129,15 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
       String authCode = authCodeGenerator.generate();
       Long tranId = ctx.get(TxnContextKeys.TRAN_ID);
       LocalDate businessDate = ctx.get(TxnContextKeys.BUSINESS_DATE);
+      LocalDate effectiveBusinessDate = businessDate == null ? LocalDate.now() : businessDate;
       ledgerRepository.postPurchase(
-          conn,
-          tranId == null ? 0L : tranId,
-          businessDate == null ? LocalDate.now() : businessDate,
-          accountId,
-          amount,
-          CURRENCY);
+          conn, tranId == null ? 0L : tranId, effectiveBusinessDate, accountId, amount, CURRENCY);
+
+      Long cardId = ctx.get(TxnContextKeys.CARD_ID);
+      if (cardId != null) {
+        velocityCounterRepository.incrementDaily(
+            conn, cardId, PURCHASE_TRAN_TYPE, effectiveBusinessDate, amount);
+      }
 
       conn.commit();
       ctx.put(TxnContextKeys.RESPONSE_CODE, "00");

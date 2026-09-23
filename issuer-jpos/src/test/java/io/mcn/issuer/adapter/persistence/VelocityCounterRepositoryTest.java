@@ -28,7 +28,12 @@ class VelocityCounterRepositoryTest {
     long accountId = accounts.insert("ACC-VEL-1", "704", 1_000_000L);
     long cardId =
         cards.insert(
-            accountId, "enc".getBytes(), "hash-vel-1".getBytes(), "970436", "0001", "2811",
+            accountId,
+            "enc".getBytes(),
+            "hash-vel-1".getBytes(),
+            "970436",
+            "0001",
+            "2811",
             "ACTIVE");
     var repo = new VelocityCounterRepository(ds);
     LocalDate today = LocalDate.now();
@@ -49,7 +54,12 @@ class VelocityCounterRepositoryTest {
     long accountId = accounts.insert("ACC-VEL-2", "704", 1_000_000L);
     long cardId =
         cards.insert(
-            accountId, "enc".getBytes(), "hash-vel-2".getBytes(), "970436", "0002", "2811",
+            accountId,
+            "enc".getBytes(),
+            "hash-vel-2".getBytes(),
+            "970436",
+            "0002",
+            "2811",
             "ACTIVE");
     var repo = new VelocityCounterRepository(ds);
 
