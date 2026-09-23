@@ -44,6 +44,16 @@ func TestLoad_rejectsInvalidValues(t *testing.T) {
 	require.ErrorContains(t, err, "must be positive")
 }
 
+func TestLoad_chaosFakeIssuerAddr__MCN_407(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"CHAOS_FAKE_ISSUER_ADDR": "127.0.0.1:19999"}))
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:19999", cfg.ChaosFakeIssuerAddr)
+
+	cfg, err = Load(env(nil))
+	require.NoError(t, err)
+	require.Empty(t, cfg.ChaosFakeIssuerAddr)
+}
+
 func TestLoad_safEncKeyMustBe32BytesBase64__MCN_401(t *testing.T) {
 	cfg, err := Load(env(nil))
 	require.NoError(t, err)

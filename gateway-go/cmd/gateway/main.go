@@ -20,6 +20,7 @@ import (
 
 	"github.com/mcn/gateway-go/internal/api"
 	"github.com/mcn/gateway-go/internal/chaos"
+	"github.com/mcn/gateway-go/internal/chaos/fakeissuer"
 	"github.com/mcn/gateway-go/internal/config"
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
@@ -70,7 +71,16 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 
-	toxiproxyClient := chaos.NewToxiproxyClient(cfg.ToxiproxyAdminAddr, cfg.IssuerProxyName)
+	var toxiproxyOpts []chaos.ToxiproxyClientOption
+	var fakeIssuer *fakeissuer.Listener
+	if cfg.ChaosFakeIssuerAddr != "" {
+		fakeIssuer, err = fakeissuer.NewListener(cfg.ChaosFakeIssuerAddr)
+		if err != nil {
+			return fmt.Errorf("listen chaos fake issuer %s: %w", cfg.ChaosFakeIssuerAddr, err)
+		}
+		toxiproxyOpts = append(toxiproxyOpts, chaos.WithDropResponseAddr(fakeIssuer.Addr()))
+	}
+	toxiproxyClient := chaos.NewToxiproxyClient(cfg.ToxiproxyAdminAddr, cfg.IssuerProxyName, toxiproxyOpts...)
 	if err := toxiproxyClient.DisableAll(ctx); err != nil {
 		// Non-fatal: a boot-time Toxiproxy hiccup shouldn't stop the gateway from serving real
 		// traffic, only chaos scenarios.
@@ -113,6 +123,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	g.Go(func() error { return serve(metricsServer, metricsLn) })
 	g.Go(func() error { return supervisor.Run(gctx) })
 	g.Go(func() error { return safWorker.Run(gctx) })
+	if fakeIssuer != nil {
+		g.Go(func() error { return fakeIssuer.Serve(gctx) })
+	}
 	g.Go(func() error {
 		<-gctx.Done()
 		logger.Info("draining", "timeout", cfg.ShutdownTimeout.String())
