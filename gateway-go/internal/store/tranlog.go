@@ -18,20 +18,22 @@ var ErrNotFound = errors.New("not found")
 // TranLogRow is one tran_log row (docs/05-data-model.md). RRN and MaskedPAN are never the real
 // PAN; the caller resolves cardToken->PAN only long enough to build DE 2 and never persists it.
 type TranLogRow struct {
-	ID           int64
-	RRN          string
-	Type         string
-	Status       string
-	Amount       int64
-	Currency     string
-	MaskedPAN    string
-	TerminalID   string
-	MerchantID   string
-	MerchantName string
-	NetworkSTAN  string
-	ResponseCode string
-	AuthCode     string
-	CreatedAt    time.Time
+	ID               int64
+	RRN              string
+	Type             string
+	Status           string
+	Amount           int64
+	Currency         string
+	MaskedPAN        string
+	TerminalID       string
+	MerchantID       string
+	MerchantName     string
+	NetworkSTAN      string
+	ResponseCode     string
+	AuthCode         string
+	CreatedAt        time.Time
+	LateResponseCode string
+	LateResponseAt   *time.Time
 }
 
 // TransactionFilter narrows TranLogRepository.List. Nil pointer fields mean "no filter".
@@ -82,6 +84,15 @@ func (r *TranLogRepository) UpdateStatus(ctx context.Context, id int64, status, 
 	return err
 }
 
+// UpdateLateResponse records a response that arrived for rrn after its transaction already moved
+// on to a final status. It never touches state - the transaction is already final (MCN-403-AC1).
+func (r *TranLogRepository) UpdateLateResponse(ctx context.Context, rrn, responseCode string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE tran_log SET late_response_code = $2, late_response_at = now() WHERE rrn = $1`,
+		rrn, responseCode)
+	return err
+}
+
 // RecordStateTransition appends a tran_state_history row for id's move from fromStatus to toStatus.
 func (r *TranLogRepository) RecordStateTransition(ctx context.Context, id int64, fromStatus, toStatus string) error {
 	_, err := r.pool.Exec(ctx,
@@ -112,14 +123,14 @@ func (r *TranLogRepository) ListStateHistory(ctx context.Context, id int64) ([]S
 	return history, rows.Err()
 }
 
-const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at`
+const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at`
 
 // Get reads the tran_log row for the given RRN.
 func (r *TranLogRepository) Get(ctx context.Context, rrn string) (TranLogRow, error) {
 	var row TranLogRow
 	err := r.pool.QueryRow(ctx,
 		`SELECT `+tranLogSelectColumns+` FROM tran_log t JOIN merchant m ON m.mid = t.mid WHERE t.rrn = $1`, rrn,
-	).Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt)
+	).Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TranLogRow{}, ErrNotFound
 	}
@@ -200,7 +211,7 @@ func scanTranLogRows(rows pgx.Rows) ([]TranLogRow, error) {
 	var page []TranLogRow
 	for rows.Next() {
 		var row TranLogRow
-		if err := rows.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt); err != nil {
 			return nil, err
 		}
 		row.RRN = strings.TrimSpace(row.RRN)
