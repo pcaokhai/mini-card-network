@@ -9,6 +9,13 @@ public interface SecurityModule {
 
   byte[] unwrap(byte[] keyUnderLmk);
 
+  /**
+   * Unwraps a cryptogram under an explicit key instead of the module's own LMK - used for the
+   * key-change advice's DE 48, which arrives as a cryptogram under the shared ZMK, not this
+   * issuer's LMK (MCN-504).
+   */
+  byte[] unwrapUnderKey(byte[] cryptogram, byte[] key);
+
   String computeKcv(byte[] clearKey);
 
   /**

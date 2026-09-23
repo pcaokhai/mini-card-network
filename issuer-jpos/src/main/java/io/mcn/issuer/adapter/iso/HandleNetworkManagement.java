@@ -14,9 +14,16 @@ public final class HandleNetworkManagement {
   private static final String LAB_ACQUIRER_ID = "970499"; // docs/03 §3
 
   private final AcquirerLinkRepository links;
+  private final ReceiveKeyChange receiveKeyChange;
 
   public HandleNetworkManagement(AcquirerLinkRepository links) {
+    this(links, null);
+  }
+
+  /** {@code receiveKeyChange} may be {@code null} if key rotation (MCN-504) is not configured. */
+  public HandleNetworkManagement(AcquirerLinkRepository links, ReceiveKeyChange receiveKeyChange) {
     this.links = links;
+    this.receiveKeyChange = receiveKeyChange;
   }
 
   public ISOMsg handle(ISOMsg request) throws ISOException {
@@ -43,6 +50,13 @@ public final class HandleNetworkManagement {
       case "002" -> links.upsertStatus(LAB_ACQUIRER_ID, "DISCONNECTED");
       case "301" -> {
         // echo: no state change, just RC 00
+      }
+      case "161" -> {
+        // key-change advice (MCN-504): the 0810 RC 00 below *is* PARTNER_CONFIRM.
+        if (receiveKeyChange == null || !receiveKeyChange.receive(request)) {
+          response.set(39, "96");
+          return response;
+        }
       }
       default -> {
         response.set(39, "30"); // unsupported network management code

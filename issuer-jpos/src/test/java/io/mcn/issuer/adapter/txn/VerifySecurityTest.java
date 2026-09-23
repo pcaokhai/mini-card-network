@@ -11,6 +11,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mcn.issuer.adapter.crypto.JCESecurityModule;
 import io.mcn.issuer.adapter.crypto.PvvCalculator;
 import io.mcn.issuer.adapter.persistence.CardRepository;
+import io.mcn.issuer.adapter.persistence.KeyStoreRepository;
+import io.mcn.issuer.adapter.persistence.KeyStoreRow;
 import java.io.File;
 import java.util.HexFormat;
 import java.util.Iterator;
@@ -26,7 +28,7 @@ import org.mockito.Mockito;
 class VerifySecurityTest {
 
   private static final String LMK_HEX =
-      "00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
+      "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
   private static final byte[] ZAK = HexFormat.of().parseHex("3132333435363738393a3b3c3d3e3f40");
   private static final byte[] ZPK = HexFormat.of().parseHex("2132333435363738393a3b3c3d3e3f41");
   private static final String PAN = "9704360000004417";
@@ -180,6 +182,49 @@ class VerifySecurityTest {
     ctxCorrect.put(TxnContextKeys.PAN, PAN);
     participant.prepare(1L, ctxCorrect);
     assertThat(correctPinRequest.hasField(52)).isFalse();
+  }
+
+  @Test
+  void should_verify_mac_against_recently_retired_zak_during_rotation_window__MCN_504_AC2()
+      throws Exception {
+    JCESecurityModule securityModule = new JCESecurityModule(LMK_HEX);
+    CardRepository cardRepository = Mockito.mock(CardRepository.class);
+    KeyStoreRepository keyStoreRepository = Mockito.mock(KeyStoreRepository.class);
+    byte[] retiredZak = HexFormat.of().parseHex("5132333435363738393a3b3c3d3e3f40");
+    String retiredZakUnderLmkHex =
+        HexFormat.of().formatHex(securityModule.wrapUnderLmk(retiredZak));
+    when(keyStoreRepository.findRecentlyRetired(
+            org.mockito.ArgumentMatchers.eq("ZAK"),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.eq(KeyStoreRepository.DUAL_KEY_WINDOW)))
+        .thenReturn(
+            java.util.Optional.of(
+                new KeyStoreRow(
+                    9,
+                    "ZAK",
+                    "970499",
+                    retiredZakUnderLmkHex,
+                    "AAAAAA",
+                    "RETIRED",
+                    null,
+                    null,
+                    null)));
+    VerifySecurity participant =
+        new VerifySecurity(securityModule, cardRepository, keyStoreRepository, ZAK, ZPK);
+
+    ISOMsg request = baseFields();
+    byte[] packed = request.pack();
+    byte[] macUnderRetiredKey = securityModule.computeMac(packed, retiredZak);
+    request.set(64, HexFormat.of().formatHex(macUnderRetiredKey));
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.REQUEST, request);
+    ctx.put(TxnContextKeys.CARD_ID, CARD_ID);
+    ctx.put(TxnContextKeys.PAN, PAN);
+
+    int result = participant.prepare(1L, ctx);
+
+    assertThat(result).isNotEqualTo(ABORTED);
+    assertThat((String) ctx.get(TxnContextKeys.RESPONSE_CODE)).isNotEqualTo("96");
   }
 
   private static ISOMsg baseFields() throws Exception {

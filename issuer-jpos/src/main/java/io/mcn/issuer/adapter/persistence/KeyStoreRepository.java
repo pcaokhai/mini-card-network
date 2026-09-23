@@ -4,13 +4,19 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import javax.sql.DataSource;
 
 /** Reads/writes {@code key_store}; keys are always cryptograms under LMK, never clear. */
 public class KeyStoreRepository {
+
+  /** Dual-key acceptance window (docs/03 §9's "Reversal grace for new key (DE 70 = 161)"). */
+  public static final Duration DUAL_KEY_WINDOW = Duration.ofMinutes(5);
+
   private final DataSource dataSource;
 
   public KeyStoreRepository(DataSource dataSource) {
@@ -66,6 +72,34 @@ public class KeyStoreRepository {
     }
   }
 
+  /**
+   * Dual-key acceptance window (MCN-504-AC2): the most recently {@code RETIRED} row for {@code
+   * (keyType, counterparty)}, if it retired within {@code within} of now - a time-boxed read, not a
+   * second {@code ACTIVE} row, per {@code MCN-504-GW.md}'s Ruling 2.
+   */
+  public Optional<KeyStoreRow> findRecentlyRetired(
+      String keyType, String counterparty, Duration within) {
+    String sql =
+        """
+        SELECT id, key_type, counterparty, key_under_lmk, kcv, status, activated_at, retired_at,
+               created_at
+        FROM key_store
+        WHERE key_type = ? AND COALESCE(counterparty, '') = ? AND status = 'RETIRED'
+          AND retired_at > now() - (? || ' seconds')::interval
+        ORDER BY retired_at DESC LIMIT 1""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, keyType);
+      stmt.setString(2, counterparty == null ? "" : counterparty);
+      stmt.setLong(3, within.toSeconds());
+      try (ResultSet rs = stmt.executeQuery()) {
+        return rs.next() ? Optional.of(mapRow(rs)) : Optional.empty();
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException("find recently retired key_store row failed", e);
+    }
+  }
+
   public List<KeyStoreRow> findAll() {
     String sql =
         "SELECT id, key_type, counterparty, key_under_lmk, kcv, status, activated_at, retired_at, "
@@ -75,22 +109,25 @@ public class KeyStoreRepository {
         var rs = stmt.executeQuery()) {
       List<KeyStoreRow> rows = new ArrayList<>();
       while (rs.next()) {
-        rows.add(
-            new KeyStoreRow(
-                rs.getLong("id"),
-                rs.getString("key_type"),
-                rs.getString("counterparty"),
-                rs.getString("key_under_lmk"),
-                rs.getString("kcv"),
-                rs.getString("status"),
-                toInstant(rs.getTimestamp("activated_at")),
-                toInstant(rs.getTimestamp("retired_at")),
-                toInstant(rs.getTimestamp("created_at"))));
+        rows.add(mapRow(rs));
       }
       return rows;
     } catch (SQLException e) {
       throw new IllegalStateException("find key_store failed", e);
     }
+  }
+
+  private static KeyStoreRow mapRow(ResultSet rs) throws SQLException {
+    return new KeyStoreRow(
+        rs.getLong("id"),
+        rs.getString("key_type"),
+        rs.getString("counterparty"),
+        rs.getString("key_under_lmk"),
+        rs.getString("kcv"),
+        rs.getString("status"),
+        toInstant(rs.getTimestamp("activated_at")),
+        toInstant(rs.getTimestamp("retired_at")),
+        toInstant(rs.getTimestamp("created_at")));
   }
 
   private static Instant toInstant(Timestamp ts) {

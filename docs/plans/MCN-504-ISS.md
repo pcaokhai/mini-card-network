@@ -38,7 +38,7 @@
 
 **Interfaces:** add `Optional<KeyStoreRow> findRecentlyRetired(String keyType, String counterparty, Duration within)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```java
 package io.mcn.issuer.adapter.persistence;
@@ -72,7 +72,7 @@ class KeyStoreRepositoryRecentlyRetiredTest extends AbstractRepositoryTest {
 
 Run: `./gradlew test --tests KeyStoreRepositoryRecentlyRetiredTest` → fails.
 
-- [ ] **Step 2: Implement**: `SELECT * FROM key_store WHERE key_type=? AND counterparty=? AND status='RETIRED' AND retired_at > now() - ?::interval ORDER BY retired_at DESC LIMIT 1`, bind `within` as a Postgres interval string (e.g. `"5 minutes"` built from `within.toMinutes()`), map to `KeyStoreRow`, `Optional.empty()` on no rows.
+- [x] **Step 2: Implement**: `SELECT * FROM key_store WHERE key_type=? AND counterparty=? AND status='RETIRED' AND retired_at > now() - ?::interval ORDER BY retired_at DESC LIMIT 1`, bind `within` as a Postgres interval string (e.g. `"5 minutes"` built from `within.toMinutes()`), map to `KeyStoreRow`, `Optional.empty()` on no rows.
 
 Run: `./gradlew test --tests KeyStoreRepositoryRecentlyRetiredTest` → PASS. Commit: `feat(iss): KeyStoreRepository.findRecentlyRetired - dual-key acceptance window read (MCN-504)`.
 
@@ -84,7 +84,7 @@ Run: `./gradlew test --tests KeyStoreRepositoryRecentlyRetiredTest` → PASS. Co
 
 **Interfaces:** `ReceiveKeyChange(SecurityModule securityModule, KeyStoreRepository keyStoreRepository, byte[] zmk)`; jPOS `TransactionParticipant.prepare(long, Serializable)`. Consumes `ctx.get(TxnContextKeys.REQUEST)` (an `ISOMsg` with DE 70=`161`, DE 48=key cryptogram under ZMK, DE 53=key index) and `TxnContextKeys.ACQUIRER_ID` (the acquirer id, already available on other participants per `VerifySecurity`'s precedent — confirm exact key name in `TxnContextKeys` before use). Produces: sets `ctx.put(TxnContextKeys.RESPONSE_CODE, "00")` on success, an audit write, and (unlike other participants) directly triggers `keyStoreRepository.activate` within the same `prepare` call rather than deferring to `commit` — a rotation's activation is not something later participants need to see mid-transaction, so no new context key is introduced for it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```java
 package io.mcn.issuer.adapter.txn;
@@ -139,11 +139,11 @@ Check: `TransactionParticipantResult.PREPARED` is a placeholder name — replace
 
 Run: `./gradlew test --tests ReceiveKeyChangeTest` → fails.
 
-- [ ] **Step 2: Implement**: `prepare` reads DE 70; if not `"161"`, returns `PREPARED` immediately (a no-op for every other 0800 — echo/sign-on keep their existing participants unaffected, per `docs/03` §7.3 treating `161` as one specific business-code branch of 0800, not a new MTI). If `"161"`: reads DE 48 (hex-decode), DE 53 (key index — stored for completeness though not yet used for multi-key-per-type selection), `keyType` from... (the request needs a way to say `ZPK` vs `ZAK` — since DE 48/53 alone don't carry it, add DE 70's businesscode-adjacent convention: reuse the existing acquirer-scoped `counterparty` context and a new private DE (or a fixed test convention documented here as a Ruling-worthy deviation) — **decision for this plan**: key type is carried in DE 123 (a private-use field already reserved but unused per `docs/03` §3's private-field range, confirmed unused by grepping `spec_gen`/packager files before use) as `"ZPK"` or `"ZAK"` literal; this is the smallest addition that avoids inventing a new MTI variant). `securityModule.unwrap(newKeyUnderZmk, zmk)` → clear key; `securityModule.wrapUnderLmk(clearKey)` → cryptogram under LMK; `securityModule.computeKcv(clearKey)`; `keyStoreRepository.insert(new KeyStoreRow(0, keyType, counterpartyId, hex(wrapped), kcv, "PENDING", null, null, null))` → id; set RC `00` (this response, once packed and sent as 0810 by the existing send-response path, **is** `PARTNER_CONFIRM` — no extra step); `keyStoreRepository.activate(id)`; `finally { request.unset(48); }` (DE 48 never survives past this participant, mirroring DE 52's existing boundary in `VerifySecurity`).
+- [x] **Step 2: Implement**: `prepare` reads DE 70; if not `"161"`, returns `PREPARED` immediately (a no-op for every other 0800 — echo/sign-on keep their existing participants unaffected, per `docs/03` §7.3 treating `161` as one specific business-code branch of 0800, not a new MTI). If `"161"`: reads DE 48 (hex-decode), DE 53 (key index — stored for completeness though not yet used for multi-key-per-type selection), `keyType` from... (the request needs a way to say `ZPK` vs `ZAK` — since DE 48/53 alone don't carry it, add DE 70's businesscode-adjacent convention: reuse the existing acquirer-scoped `counterparty` context and a new private DE (or a fixed test convention documented here as a Ruling-worthy deviation) — **decision for this plan**: key type is carried in DE 123 (a private-use field already reserved but unused per `docs/03` §3's private-field range, confirmed unused by grepping `spec_gen`/packager files before use) as `"ZPK"` or `"ZAK"` literal; this is the smallest addition that avoids inventing a new MTI variant). `securityModule.unwrap(newKeyUnderZmk, zmk)` → clear key; `securityModule.wrapUnderLmk(clearKey)` → cryptogram under LMK; `securityModule.computeKcv(clearKey)`; `keyStoreRepository.insert(new KeyStoreRow(0, keyType, counterpartyId, hex(wrapped), kcv, "PENDING", null, null, null))` → id; set RC `00` (this response, once packed and sent as 0810 by the existing send-response path, **is** `PARTNER_CONFIRM` — no extra step); `keyStoreRepository.activate(id)`; `finally { request.unset(48); }` (DE 48 never survives past this participant, mirroring DE 52's existing boundary in `VerifySecurity`).
 
 Run: `./gradlew test --tests ReceiveKeyChangeTest` → PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add issuer-jpos/src/main/java/io/mcn/issuer/adapter/txn/ReceiveKeyChange.java issuer-jpos/src/test/java/io/mcn/issuer/adapter/txn/ReceiveKeyChangeTest.java
@@ -156,13 +156,13 @@ git commit -m "feat(iss): ReceiveKeyChange - receive/confirm/activate key change
 
 **Files:** `src/dist/deploy/*.xml` (confirm exact 0800 chain descriptor), `adapter/txn/ReceiveKeyChange.java` (extend for audit)
 
-- [ ] **Step 1:** Confirm the real 0800 participant chain descriptor (`grep -rl "0800\|echo\|NetworkManagement" issuer-jpos/src/dist/deploy/*.xml`) — the sign-on/echo participants from MCN-201/203 already register a chain; add `ReceiveKeyChange` to it, ordered after any existing DE-70 dispatch/routing participant and before the response-send participant.
-- [ ] **Step 2:** Extend `ReceiveKeyChange.prepare` to call an injected `AuditWriter` (or the same `dataSource`-backed `audit_log` insert `issuer.audit_log` already supports per `docs/05-data-model.md` §2's "outbox_event, audit_log | Events to Kafka; append-only audit") once per successful key change: `event_type = "key_change.activated"`, `detail` JSON `{keyType, counterparty, newKcv}` — no clear key or cryptogram in the audit detail (PCI DSS boundary, same as everywhere else in this plan).
-- [ ] **Step 3:** Extend `ReceiveKeyChangeTest` with an audit-write assertion (`verify(auditWriter).write(eq("key_change.activated"), any()))`.
+- [x] **Step 1:** Confirm the real 0800 participant chain descriptor (`grep -rl "0800\|echo\|NetworkManagement" issuer-jpos/src/dist/deploy/*.xml`) — the sign-on/echo participants from MCN-201/203 already register a chain; add `ReceiveKeyChange` to it, ordered after any existing DE-70 dispatch/routing participant and before the response-send participant.
+- [x] **Step 2:** Extend `ReceiveKeyChange.prepare` to call an injected `AuditWriter` (or the same `dataSource`-backed `audit_log` insert `issuer.audit_log` already supports per `docs/05-data-model.md` §2's "outbox_event, audit_log | Events to Kafka; append-only audit") once per successful key change: `event_type = "key_change.activated"`, `detail` JSON `{keyType, counterparty, newKcv}` — no clear key or cryptogram in the audit detail (PCI DSS boundary, same as everywhere else in this plan).
+- [x] **Step 3:** Extend `ReceiveKeyChangeTest` with an audit-write assertion (`verify(auditWriter).write(eq("key_change.activated"), any()))`.
 
 Run: `./gradlew test --tests ReceiveKeyChangeTest` → PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add issuer-jpos/src/dist/deploy/ issuer-jpos/src/main/java/io/mcn/issuer/adapter/txn/ReceiveKeyChange.java issuer-jpos/src/test/java/io/mcn/issuer/adapter/txn/ReceiveKeyChangeTest.java
@@ -175,7 +175,7 @@ git commit -m "feat(iss): wire ReceiveKeyChange into 0800 chain, audit write on 
 
 **Files:** `adapter/txn/VerifySecurity.java` (extend), test
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```java
   @Test
@@ -209,11 +209,11 @@ git commit -m "feat(iss): wire ReceiveKeyChange into 0800 chain, audit write on 
 
 Run: `./gradlew test --tests VerifySecurityTest` → fails.
 
-- [ ] **Step 2: Implement**: `VerifySecurity` gains a `KeyStoreRepository keyStoreRepository` field/constructor param (also wired in `setConfiguration`). In `verifyMac`, on the initial mismatch against `zak`, call `keyStoreRepository.findRecentlyRetired("ZAK", counterpartyId, DUAL_KEY_WINDOW)` (a new `private static final Duration DUAL_KEY_WINDOW = Duration.ofMinutes(5);` constant, matching `docs/03` §9's timer exactly); if present, `securityModule.unwrap` its `keyUnderLmk`, recompute the MAC, and treat a match as verified. No match (or no recently-retired row): existing RC 96 behavior unchanged. Same retry pattern applied to the PVV `zpk` lookup used in `verifyPin`.
+- [x] **Step 2: Implement**: `VerifySecurity` gains a `KeyStoreRepository keyStoreRepository` field/constructor param (also wired in `setConfiguration`). In `verifyMac`, on the initial mismatch against `zak`, call `keyStoreRepository.findRecentlyRetired("ZAK", counterpartyId, DUAL_KEY_WINDOW)` (a new `private static final Duration DUAL_KEY_WINDOW = Duration.ofMinutes(5);` constant, matching `docs/03` §9's timer exactly); if present, `securityModule.unwrap` its `keyUnderLmk`, recompute the MAC, and treat a match as verified. No match (or no recently-retired row): existing RC 96 behavior unchanged. Same retry pattern applied to the PVV `zpk` lookup used in `verifyPin`.
 
 Run: `./gradlew test --tests VerifySecurityTest` → PASS.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add issuer-jpos/src/main/java/io/mcn/issuer/adapter/txn/VerifySecurity.java issuer-jpos/src/test/java/io/mcn/issuer/adapter/txn/VerifySecurityTest.java
@@ -226,7 +226,7 @@ git commit -m "feat(iss): dual-key acceptance retry in VerifySecurity MAC/PVV ch
 
 **Files:** none (verification-only)
 
-- [ ] **Step 1:** `./gradlew test spotlessCheck` clean. AC → test table:
+- [x] **Step 1:** `./gradlew test spotlessCheck` clean. AC → test table:
 
 | AC | Test(s) |
 | --- | --- |
@@ -234,11 +234,11 @@ git commit -m "feat(iss): dual-key acceptance retry in VerifySecurity MAC/PVV ch
 | MCN-504-AC2 (issuer half) | `KeyStoreRepositoryRecentlyRetiredTest`, `VerifySecurityTest`'s dual-key MAC retry test |
 | MCN-504-AC3 (issuer half) | `ReceiveKeyChangeTest`'s audit-write assertion (Task 3) |
 
-- [ ] **Step 2:** Push, open PR `feat(iss): key rotation - receive/confirm/activate, dual-key window (MCN-504)`.
+- [x] **Step 2:** Push, open PR `feat(iss): key rotation - receive/confirm/activate, dual-key window (MCN-504)`.
 
 ## Self-review
 
-- [ ] `ReceiveKeyChange` never returns, logs, or persists the clear new key — verified by reading the implementation, not just the round-trip test.
-- [ ] DE 48 is `unset` in a `finally` block on every code path, mirroring DE 52's existing boundary in `VerifySecurity` (`SPRINT-6.md`'s DE 52 Ruling, extended here to DE 48).
-- [ ] Ruling 1's step-vocabulary scoping (issuer never emits a `KeyRotation` JSON, never runs `GENERATE`) is reflected in the actual code — no dead code path attempting to serialize `contracts/openapi.yaml`'s `KeyRotation` schema from the issuer side.
-- [ ] `DUAL_KEY_WINDOW` in `VerifySecurity` and the window used in `ReceiveKeyChange`/`findRecentlyRetired` calls are the same 5-minute value — confirmed identical to `MCN-504-GW.md`'s `dualKeyWindow` constant.
+- [x] `ReceiveKeyChange` never returns, logs, or persists the clear new key — verified by reading the implementation, not just the round-trip test.
+- [x] DE 48 is `unset` in a `finally` block on every code path, mirroring DE 52's existing boundary in `VerifySecurity` (`SPRINT-6.md`'s DE 52 Ruling, extended here to DE 48).
+- [x] Ruling 1's step-vocabulary scoping (issuer never emits a `KeyRotation` JSON, never runs `GENERATE`) is reflected in the actual code — no dead code path attempting to serialize `contracts/openapi.yaml`'s `KeyRotation` schema from the issuer side.
+- [x] `DUAL_KEY_WINDOW` in `VerifySecurity` and the window used in `ReceiveKeyChange`/`findRecentlyRetired` calls are the same 5-minute value — confirmed identical to `MCN-504-GW.md`'s `dualKeyWindow` constant.

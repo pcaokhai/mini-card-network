@@ -92,6 +92,7 @@ class PurchaseDeclineIntegrationTest {
     System.setProperty("LMK_TEST_VALUE_HEX", LMK_HEX);
     System.setProperty("ZAK_HEX", HexFormat.of().formatHex(ZAK));
     System.setProperty("ZPK_HEX", HexFormat.of().formatHex(ZPK));
+    System.setProperty("ZMK_HEX", "00".repeat(16));
 
     packager = new GenericPackager("src/dist/cfg/iso87ascii.xml");
 
