@@ -77,18 +77,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 
-	var toxiproxyOpts []chaos.ToxiproxyClientOption
-	var fakeIssuer *fakeissuer.Listener
-	if cfg.ChaosFakeIssuerAddr != "" {
-		fakeIssuer, err = fakeissuer.NewListener(cfg.ChaosFakeIssuerAddr)
-		if err != nil {
-			return fmt.Errorf("listen chaos fake issuer %s: %w", cfg.ChaosFakeIssuerAddr, err)
-		}
-		// cfg.ChaosFakeIssuerAddr (not fakeIssuer.Addr()) is what Toxiproxy - a different
-		// container - must dial, e.g. "gateway:19999"; fakeIssuer.Addr() is only the local bind
-		// address (e.g. "[::]:19999") once net.Listen resolves it, which isn't dialable from
-		// another container.
-		toxiproxyOpts = append(toxiproxyOpts, chaos.WithDropResponseAddr(cfg.ChaosFakeIssuerAddr))
+	fakeIssuer, toxiproxyOpts, err := setupFakeIssuer(cfg)
+	if err != nil {
+		return err
 	}
 	toxiproxyClient := chaos.NewToxiproxyClient(cfg.ToxiproxyAdminAddr, cfg.IssuerProxyName, toxiproxyOpts...)
 	if err := toxiproxyClient.DisableAll(ctx); err != nil {
@@ -156,6 +147,24 @@ func serve(s *http.Server, ln net.Listener) error {
 		return err
 	}
 	return nil
+}
+
+// setupFakeIssuer starts the MCN-407 DROP_RESPONSE fake-issuer listener when
+// cfg.ChaosFakeIssuerAddr is set, and returns the ToxiproxyClientOption that repoints the issuer
+// proxy at it during that scenario. Returns a nil listener and no options when unset (off by
+// default).
+func setupFakeIssuer(cfg config.Config) (*fakeissuer.Listener, []chaos.ToxiproxyClientOption, error) {
+	if cfg.ChaosFakeIssuerAddr == "" {
+		return nil, nil, nil
+	}
+	fakeIssuer, err := fakeissuer.NewListener(cfg.ChaosFakeIssuerAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen chaos fake issuer %s: %w", cfg.ChaosFakeIssuerAddr, err)
+	}
+	// cfg.ChaosFakeIssuerAddr (not fakeIssuer.Addr()) is what Toxiproxy - a different container -
+	// must dial, e.g. "gateway:19999"; fakeIssuer.Addr() is only the local bind address (e.g.
+	// "[::]:19999") once net.Listen resolves it, which isn't dialable from another container.
+	return fakeIssuer, []chaos.ToxiproxyClientOption{chaos.WithDropResponseAddr(cfg.ChaosFakeIssuerAddr)}, nil
 }
 
 // newLateResponseHandler builds the isonet.Supervisor callback (MCN-403) that persists a 0210
