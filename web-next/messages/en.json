@@ -187,6 +187,60 @@
       "staleCard": "Someone changed this card. Reload to continue."
     }
   },
+  "security": {
+    "title": "Security and keys",
+    "keys": {
+      "heading": "Keys",
+      "keyType": "Key type",
+      "counterparty": "Counterparty",
+      "kcv": "KCV",
+      "status": "Status",
+      "lifetime": "Lifetime",
+      "expiryWarning": "Expires in {days} days — rotate soon",
+      "status_PENDING": "Pending",
+      "status_ACTIVE": "Active",
+      "status_RETIRED": "Retired",
+      "source_acquirer": "Acquirer",
+      "source_issuer": "Issuer"
+    },
+    "rotation": {
+      "rotate": "Rotate key",
+      "rotating": "Rotating…",
+      "step_GENERATE": "Generate",
+      "step_SEND_0800_161": "Send to partner",
+      "step_PARTNER_CONFIRM": "Partner confirms",
+      "step_ACTIVATE": "Activate",
+      "stepStatus_PENDING": "Pending",
+      "stepStatus_DONE": "Done",
+      "stepStatus_FAILED": "Failed"
+    },
+    "pinBlock": {
+      "heading": "PIN block (illustration only — not real encryption)",
+      "pinLabel": "PIN",
+      "pinError": "PIN must be 4 to 12 digits",
+      "testCard": "Test card: {maskedPan}",
+      "breakdown": "PIN-length nibble, PIN digits, F padding, XOR'd with PAN"
+    },
+    "pciNeverDo": {
+      "heading": "Never do this",
+      "logPan": {
+        "easy": "Never write down or show a customer's full card number.",
+        "expert": "Never log or persist the full PAN."
+      },
+      "logKey": {
+        "easy": "Never write down a secret key in plain text.",
+        "expert": "Never log or persist clear key material."
+      },
+      "persistPinBlock": {
+        "easy": "Never save a customer's PIN anywhere.",
+        "expert": "Never persist a clear PIN block."
+      },
+      "panInUrl": {
+        "easy": "Never put a card number in a web address.",
+        "expert": "Never put a PAN in a URL."
+      }
+    }
+  },
   "chaos": {
     "heading": "Chaos lab",
     "activeCount": "{count} active",

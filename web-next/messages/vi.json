@@ -187,6 +187,60 @@
       "staleCard": "Someone changed this card. Reload to continue."
     }
   },
+  "security": {
+    "title": "Bảo mật và khóa",
+    "keys": {
+      "heading": "Khóa",
+      "keyType": "Loại khóa",
+      "counterparty": "Đối tác",
+      "kcv": "KCV",
+      "status": "Trạng thái",
+      "lifetime": "Vòng đời",
+      "expiryWarning": "Hết hạn sau {days} ngày — nên xoay khóa sớm",
+      "status_PENDING": "Đang chờ",
+      "status_ACTIVE": "Đang dùng",
+      "status_RETIRED": "Đã thu hồi",
+      "source_acquirer": "Bên chấp nhận",
+      "source_issuer": "Bên phát hành"
+    },
+    "rotation": {
+      "rotate": "Xoay khóa",
+      "rotating": "Đang xoay…",
+      "step_GENERATE": "Tạo khóa",
+      "step_SEND_0800_161": "Gửi cho đối tác",
+      "step_PARTNER_CONFIRM": "Đối tác xác nhận",
+      "step_ACTIVATE": "Kích hoạt",
+      "stepStatus_PENDING": "Đang chờ",
+      "stepStatus_DONE": "Xong",
+      "stepStatus_FAILED": "Thất bại"
+    },
+    "pinBlock": {
+      "heading": "Khối PIN (chỉ minh họa — không phải mã hóa thật)",
+      "pinLabel": "PIN",
+      "pinError": "PIN phải có từ 4 đến 12 chữ số",
+      "testCard": "Thẻ thử nghiệm: {maskedPan}",
+      "breakdown": "Nibble độ dài PIN, các chữ số PIN, đệm F, XOR với PAN"
+    },
+    "pciNeverDo": {
+      "heading": "Không bao giờ làm điều này",
+      "logPan": {
+        "easy": "Không bao giờ ghi lại hoặc hiển thị đầy đủ số thẻ của khách hàng.",
+        "expert": "Không bao giờ ghi log hoặc lưu trữ toàn bộ PAN."
+      },
+      "logKey": {
+        "easy": "Không bao giờ ghi lại khóa bí mật dưới dạng văn bản thô.",
+        "expert": "Không bao giờ ghi log hoặc lưu trữ khóa ở dạng rõ."
+      },
+      "persistPinBlock": {
+        "easy": "Không bao giờ lưu PIN của khách hàng ở bất kỳ đâu.",
+        "expert": "Không bao giờ lưu trữ khối PIN ở dạng rõ."
+      },
+      "panInUrl": {
+        "easy": "Không bao giờ đưa số thẻ vào địa chỉ web.",
+        "expert": "Không bao giờ đặt PAN trong URL."
+      }
+    }
+  },
   "chaos": {
     "heading": "Phòng thí nghiệm sự cố",
     "activeCount": "{count} đang bật",
