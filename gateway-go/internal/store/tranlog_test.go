@@ -45,6 +45,23 @@ func TestIdempotencyRepository_storeAndReplay__MCN_303_AC1(t *testing.T) {
 	require.Equal(t, 201, stored.Status)
 }
 
+func TestTranLogRepository_updateLateResponseSetsCodeAndTimestamp__MCN_403_AC1(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewTranLogRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.Insert(ctx, TranLogRow{RRN: "626514000999", Type: tranTypePurchase, Status: "TIMED_OUT", Amount: 5000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.UpdateLateResponse(ctx, "626514000999", "00"))
+
+	got, err := repo.Get(ctx, "626514000999")
+	require.NoError(t, err)
+	require.Equal(t, "TIMED_OUT", got.Status) // status unchanged - only the late-response columns move
+	require.Equal(t, "00", got.LateResponseCode)
+	require.NotNil(t, got.LateResponseAt)
+}
+
 func TestTranLogRepository_listFiltersAndPaginates__MCN_304_AC1(t *testing.T) {
 	pool := newTestPool(t)
 	repo := NewTranLogRepository(pool)

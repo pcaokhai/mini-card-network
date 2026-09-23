@@ -54,6 +54,8 @@ type Supervisor struct {
 	store LinkStore
 	hub   Hub
 
+	onLateResponse func(mti string, fields map[int]string)
+
 	// triggerMu guards mux so a manual trigger (TriggerEcho/TriggerSignOn/TriggerSignOff)
 	// and the automatic echo ticker never send on the same Mux concurrently.
 	triggerMu sync.Mutex
@@ -73,6 +75,13 @@ func NewSupervisor(cfg Config, store LinkStore) *Supervisor {
 
 // SetHub wires a Hub so every status/event transition is also broadcast over WebSocket.
 func (s *Supervisor) SetHub(hub Hub) { s.hub = hub }
+
+// SetLateResponseHandler registers fn to be called (in addition to incrementing
+// obs.LateResponseTotal, which always happens) whenever the connection's Mux detects a response
+// with no matching pending request (MCN-403-AC1).
+func (s *Supervisor) SetLateResponseHandler(fn func(mti string, fields map[int]string)) {
+	s.onLateResponse = fn
+}
 
 // TriggerEcho sends an out-of-band echo now, using the live connection's Mux.
 // If the link is not currently signed on, it reports OK=false rather than an error.
@@ -206,7 +215,12 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	s.setStatus(ctx, "CONNECTED")
 
 	mux := NewMux(conn)
-	mux.OnLateResponse(func(string, map[int]string) { obs.LateResponseTotal.Inc() })
+	mux.OnLateResponse(func(mti string, fields map[int]string) {
+		obs.LateResponseTotal.Inc()
+		if s.onLateResponse != nil {
+			s.onLateResponse(mti, fields)
+		}
+	})
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
 	serveErr := make(chan error, 1)

@@ -66,6 +66,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer)
+	supervisor.SetLateResponseHandler(func(_ string, fields map[int]string) {
+		if err := purchaseService.RecordLateResponse(ctx, fields[37], fields[39]); err != nil {
+			logger.Error("record late response", "error", err.Error())
+		}
+	})
 	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 	health := api.NewHealth()
 	r := chi.NewRouter()

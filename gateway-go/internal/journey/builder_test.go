@@ -12,6 +12,7 @@ import (
 const (
 	statusApproved   = "APPROVED"
 	statusSent       = "SENT"
+	statusTimedOut   = "TIMED_OUT"
 	tranTypePurchase = "PURCHASE"
 )
 
@@ -61,8 +62,8 @@ func TestBuildJourney_offsetMsIsRelativeToFirstStep__MCN_304_AC2(t *testing.T) {
 func TestBuildJourney_reversalPendingIsWarnReversedIsReversalKind__MCN_401_AC1(t *testing.T) {
 	txn := store.TranLogRow{RRN: "z", Type: tranTypePurchase, Status: "REVERSED", ResponseCode: "68", Amount: 10000, Currency: "704", CreatedAt: time.Now()}
 	history := []store.StateTransition{
-		{FromStatus: "SENT", ToStatus: "TIMED_OUT", At: txn.CreatedAt},
-		{FromStatus: "TIMED_OUT", ToStatus: "REVERSAL_PENDING", At: txn.CreatedAt.Add(10 * time.Millisecond)},
+		{FromStatus: "SENT", ToStatus: statusTimedOut, At: txn.CreatedAt},
+		{FromStatus: statusTimedOut, ToStatus: "REVERSAL_PENDING", At: txn.CreatedAt.Add(10 * time.Millisecond)},
 		{FromStatus: "REVERSAL_PENDING", ToStatus: "REVERSED", At: txn.CreatedAt.Add(500 * time.Millisecond)},
 	}
 
@@ -73,6 +74,33 @@ func TestBuildJourney_reversalPendingIsWarnReversedIsReversalKind__MCN_401_AC1(t
 	require.Equal(t, "SAF", string(j.Steps[2].Actor))
 	require.Len(t, j.Money, 2)                       // debit at TIMED_OUT step, refund at REVERSED step
 	require.Equal(t, int64(10000), j.Money[1].Delta) // positive: money returned
+}
+
+func TestBuildJourney_lateResponseAddsWarnStep__MCN_403_AC2(t *testing.T) {
+	base := time.Now()
+	at := base.Add(2 * time.Second)
+	txn := store.TranLogRow{
+		RRN: "z", Type: tranTypePurchase, Status: statusTimedOut, Amount: 10000, Currency: "704", CreatedAt: base,
+		LateResponseCode: "00", LateResponseAt: &at,
+	}
+	history := []store.StateTransition{{FromStatus: statusSent, ToStatus: statusTimedOut, At: base}}
+
+	j := BuildJourney(txn, history)
+
+	require.Len(t, j.Steps, 2)
+	last := j.Steps[len(j.Steps)-1]
+	require.Equal(t, "WARN", string(last.Kind))
+	require.Contains(t, last.EasyText, "too late")
+	require.Equal(t, 2000, last.OffsetMs)
+}
+
+func TestBuildJourney_noLateResponseAddsNoExtraStep__MCN_403_AC2(t *testing.T) {
+	txn := store.TranLogRow{RRN: "z", Type: tranTypePurchase, Status: statusTimedOut, Amount: 10000, Currency: "704", CreatedAt: time.Now()}
+	history := []store.StateTransition{{FromStatus: statusSent, ToStatus: statusTimedOut, At: txn.CreatedAt}}
+
+	j := BuildJourney(txn, history)
+
+	require.Len(t, j.Steps, 1)
 }
 
 func TestEasyTextForRC_coversEveryDocumentedCode(t *testing.T) {

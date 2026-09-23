@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -45,6 +46,18 @@ func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, response
 }
 func (f *fakeTranLog) RecordStateTransition(context.Context, int64, string, string) error { return nil }
 
+func (f *fakeTranLog) UpdateLateResponse(_ context.Context, rrn, responseCode string) error {
+	for i := range f.rows {
+		if f.rows[i].RRN == rrn {
+			f.rows[i].LateResponseCode = responseCode
+			at := time.Now().UTC()
+			f.rows[i].LateResponseAt = &at
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
 func (f *fakeTranLog) Get(_ context.Context, rrn string) (store.TranLogRow, error) {
 	for _, row := range f.rows {
 		if row.RRN == rrn {
@@ -85,9 +98,16 @@ func (f *fakeIdempotency) Store(_ context.Context, key, route, _ string, status 
 	return nil
 }
 
-type fakeHub struct{ broadcasts int }
+type fakeHub struct {
+	broadcasts    int
+	networkEvents []store.NetworkEvent
+}
 
 func (f *fakeHub) BroadcastTransaction(string, Transaction) { f.broadcasts++ }
+
+func (f *fakeHub) BroadcastNetworkEvent(evt store.NetworkEvent) {
+	f.networkEvents = append(f.networkEvents, evt)
+}
 
 func newTestRequest() PurchaseRequest {
 	return PurchaseRequest{
@@ -178,7 +198,7 @@ func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC
 }
 
 func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Status: "SENT", Amount: 5000, Currency: "704"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Status: statusSent, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), tranLog, &fakeIdempotency{}, &fakeHub{}, reversal)
 
@@ -190,7 +210,7 @@ func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testin
 }
 
 func TestCancelPurchase_replaysIdempotentRequest__MCN_401_AC5(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Status: "SENT", Amount: 5000, Currency: "704"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Status: statusSent, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	idem := &fakeIdempotency{}
 	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), tranLog, idem, &fakeHub{}, reversal)
@@ -202,4 +222,30 @@ func TestCancelPurchase_replaysIdempotentRequest__MCN_401_AC5(t *testing.T) {
 
 	require.Equal(t, first, second)
 	require.Len(t, reversal.calls, 1) // second call was a replay, not a re-queue
+}
+
+func TestRecordLateResponse_setsColumnsWithoutChangingStatus__MCN_403_AC1(t *testing.T) {
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "z", Status: "TIMED_OUT"}}}
+	hub := &fakeHub{}
+	svc := NewService(&fakeMux{}, DefaultCardTokens(), tranLog, &fakeIdempotency{}, hub, &fakeReversal{})
+
+	err := svc.RecordLateResponse(context.Background(), "z", "00")
+
+	require.NoError(t, err)
+	require.Equal(t, "TIMED_OUT", tranLog.rows[0].Status)
+	require.Equal(t, "00", tranLog.rows[0].LateResponseCode)
+	require.Len(t, hub.networkEvents, 1)
+	require.Equal(t, "WARN", hub.networkEvents[0].Severity)
+}
+
+func TestRecordLateResponse_leavesOnTimeResponseAlone__MCN_403_AC1(t *testing.T) {
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "w", Status: statusSent}}}
+	hub := &fakeHub{}
+	svc := NewService(&fakeMux{}, DefaultCardTokens(), tranLog, &fakeIdempotency{}, hub, &fakeReversal{})
+
+	err := svc.RecordLateResponse(context.Background(), "w", "00")
+
+	require.NoError(t, err)
+	require.Empty(t, tranLog.rows[0].LateResponseCode)
+	require.Empty(t, hub.networkEvents)
 }

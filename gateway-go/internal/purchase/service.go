@@ -119,6 +119,7 @@ type TranLogPort interface {
 	Insert(ctx context.Context, row store.TranLogRow) (int64, error)
 	UpdateStatus(ctx context.Context, id int64, status, responseCode, authCode string) error
 	RecordStateTransition(ctx context.Context, id int64, fromStatus, toStatus string) error
+	UpdateLateResponse(ctx context.Context, rrn, responseCode string) error
 }
 
 // IdempotencyPort persists idempotency_record. *store.IdempotencyRepository satisfies it.
@@ -131,6 +132,7 @@ type IdempotencyPort interface {
 // satisfies it.
 type HubPort interface {
 	BroadcastTransaction(eventType string, txn Transaction)
+	BroadcastNetworkEvent(evt store.NetworkEvent)
 }
 
 // ReversalQueuer atomically moves a transaction to REVERSAL_PENDING and enqueues its 0420
@@ -381,6 +383,30 @@ func (s *Service) CancelPurchase(ctx context.Context, rrn string, idempotencyKey
 		return Transaction{}, fmt.Errorf("store idempotent response: %w", err)
 	}
 	return txn, nil
+}
+
+// RecordLateResponse records a 0210 that arrived for rrn after its transaction already left
+// SENT (timed out, reversed, ...). It never changes tran_log.state - the transaction is already
+// final - only the late-response columns, a metric (incremented by the isonet.Mux late-response
+// hook, not here) and a WARN network event (MCN-403-AC1). A response that is still on time
+// (status == SENT) is not this story's path and is left alone.
+func (s *Service) RecordLateResponse(ctx context.Context, rrn, responseCode string) error {
+	row, err := s.tranLogGet.Get(ctx, rrn)
+	if err != nil {
+		return fmt.Errorf("look up transaction %s: %w", rrn, err)
+	}
+	if row.Status == statusSent {
+		return nil
+	}
+	if err := s.tranLog.UpdateLateResponse(ctx, rrn, responseCode); err != nil {
+		return fmt.Errorf("update late response for %s: %w", rrn, err)
+	}
+	s.hub.BroadcastNetworkEvent(store.NetworkEvent{
+		Severity:      "WARN",
+		EasyText:      "A response arrived too late for a transaction",
+		TechnicalText: fmt.Sprintf("late 0210 for RRN %s, RC %s", rrn, responseCode),
+	})
+	return nil
 }
 
 func hashRequest(req PurchaseRequest) string {
