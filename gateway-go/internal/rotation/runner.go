@@ -102,11 +102,18 @@ func (r *Runner) runGenerate(ctx context.Context, id int64, keyType, ownerRef st
 	return clearKey, newRowID, kcv, nil
 }
 
-// runSend0800161 sends the new key as a cryptogram under the ZMK in DE 48, key index in DE 53
-// (docs/03 §7.3). Reuses hsm.WrapUnderLMK with the ZMK in place of the LMK - the same wrap
-// primitive, a different wrapping key, no new crypto primitive added.
+// runSend0800161 sends the new key as a cryptogram under the ZMK in DE 48. Key type travels as a
+// literal "ZPK:"/"ZAK:" prefix inside DE 48's own value, not a separate field: MCN-504-ISS's
+// Ruling correction (PR #60) found the plan's assumed DE 123 key-type carrier does not exist in
+// this project's packager (cfg/iso87ascii.xml has no field 123), and adding one is a contracts/
+// change out of scope for a feature branch. This must match issuer-jpos's ReceiveKeyChange
+// parsing byte-for-byte: prefix + ":" + lowercase hex of the cryptogram, no DE 53.
+//
+// store.EncryptBytes (not hsm.WrapUnderLMK, which is bound to the module's own LMK) wraps the
+// clear key under the ZMK directly - the same AES-256-GCM primitive Unwrap/WrapUnderLMK already
+// use internally, just keyed by r.zmk instead of the module's LMK.
 func (r *Runner) runSend0800161(ctx context.Context, id int64, keyType string, clearKey []byte) (map[int]string, error) {
-	wrappedUnderZMK, err := r.hsm.WrapUnderLMK(clearKey)
+	wrappedUnderZMK, err := store.EncryptBytes(r.zmk, clearKey)
 	if err != nil {
 		return nil, fmt.Errorf("wrap under ZMK: %w", err)
 	}
@@ -116,8 +123,7 @@ func (r *Runner) runSend0800161(ctx context.Context, id int64, keyType string, c
 	}
 	resp, err := r.mux.Send(ctx, "0800", map[int]string{
 		7: nowDE7(), 11: stan, 70: keyChangeDE70,
-		48: strings.ToUpper(hex.EncodeToString(wrappedUnderZMK)),
-		53: keyType,
+		48: keyType + ":" + hex.EncodeToString(wrappedUnderZMK),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("send 0800: %w", err)

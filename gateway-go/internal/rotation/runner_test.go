@@ -2,7 +2,9 @@ package rotation
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,14 +21,16 @@ func (fakeHSM) ComputeMAC([]byte, []byte) ([]byte, error)   { return make([]byte
 func (fakeHSM) TranslatePIN(p, _, _ []byte) ([]byte, error) { return p, nil }
 
 type fakeMux struct {
-	confirmed bool
-	sendErr   error
-	rc        string
+	confirmed  bool
+	sendErr    error
+	rc         string
+	sentFields map[int]string
 }
 
 func (f *fakeMux) NextSTAN() (string, bool) { return "000001", true }
 
-func (f *fakeMux) Send(_ context.Context, _ string, _ map[int]string) (map[int]string, error) {
+func (f *fakeMux) Send(_ context.Context, _ string, fields map[int]string) (map[int]string, error) {
+	f.sentFields = fields
 	if f.sendErr != nil {
 		return nil, f.sendErr
 	}
@@ -89,6 +93,31 @@ func TestRunner_run_marksFailedWhenSendErrors__MCN_504_AC1(t *testing.T) {
 	require.Equal(t, "FAILED", row.Status)
 	require.Equal(t, StatusDone, stepStatus(row.Steps, StepGenerate))
 	require.Equal(t, StatusFailed, stepStatus(row.Steps, StepSend0800161))
+}
+
+// TestRunner_run_emitsDE48AsKeyTypePrefixPlusHexCryptogram__MCN_504_AC1 verifies the wire shape
+// matches issuer-jpos's ReceiveKeyChange parsing byte-for-byte (PR #60's Ruling correction):
+// DE 48 = "ZPK:"/"ZAK:" + lowercase hex of the cryptogram under the ZMK, no DE 53.
+func TestRunner_run_emitsDE48AsKeyTypePrefixPlusHexCryptogram__MCN_504_AC1(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewRepository(pool)
+	keyStore := store.NewKeyStoreRepository(pool)
+	mux := &fakeMux{}
+	zmk := []byte("zmk-test-key-32-bytes-----------")
+	runner := NewRunner(repo, keyStore, fakeHSM{}, mux, zmk)
+
+	_, err := runner.Run(context.Background(), "ZAK", "gw-link-01")
+	require.NoError(t, err)
+
+	require.NotContains(t, mux.sentFields, 53)
+	field48 := mux.sentFields[48]
+	require.True(t, strings.HasPrefix(field48, "ZAK:"), "DE 48 = %q, want ZAK: prefix", field48)
+	cryptogramHex := strings.TrimPrefix(field48, "ZAK:")
+	cryptogram, err := hex.DecodeString(cryptogramHex)
+	require.NoError(t, err, "DE 48's cryptogram must be valid hex")
+	clearKey, err := store.DecryptBytes(zmk, cryptogram)
+	require.NoError(t, err, "DE 48's cryptogram must decrypt under the ZMK")
+	require.Len(t, clearKey, clearKeyLenBytes)
 }
 
 func activeStatusesFor(keys []store.KeyRow, keyType string) []string {
