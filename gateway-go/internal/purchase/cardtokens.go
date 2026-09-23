@@ -9,8 +9,10 @@ package purchase
 // simulator cardToken. The real PAN never crosses the wire beyond DE 2 of the outbound 0200 and
 // is never logged, persisted, or returned — only its masked form (obs.MaskPAN) is.
 type CardFixture struct {
+	CardToken  string
 	PAN        string
 	ExpiryYYMM string
+	Balance    int64
 }
 
 // CardTokenRegistry resolves a simulator cardToken to its CardFixture.
@@ -27,4 +29,15 @@ func (r *CardTokenRegistry) Resolve(token string) (CardFixture, bool) {
 // DefaultCardTokens returns the registry generated from contracts/fixtures/cards.json.
 func DefaultCardTokens() *CardTokenRegistry {
 	return &CardTokenRegistry{byToken: defaultCards}
+}
+
+// Seeds returns every seed card fixture (contracts/fixtures/cards.json), for chaos.Runner to pick
+// cardTokens from and sum opening/closing balances.
+func (r *CardTokenRegistry) Seeds() []CardFixture {
+	seeds := make([]CardFixture, 0, len(r.byToken))
+	for token, c := range r.byToken {
+		c.CardToken = token
+		seeds = append(seeds, c)
+	}
+	return seeds
 }

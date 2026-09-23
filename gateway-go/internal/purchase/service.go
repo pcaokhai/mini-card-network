@@ -150,15 +150,22 @@ type TranLogGetter interface {
 
 // Service builds and sends purchase transactions.
 type Service struct {
-	mux         MuxSender
-	linkStatus  LinkStatusPort
-	cardTokens  *CardTokenRegistry
-	tranLog     TranLogPort
-	tranLogGet  TranLogGetter
-	idempotency IdempotencyPort
-	hub         HubPort
-	reversal    ReversalQueuer
+	mux           MuxSender
+	linkStatus    LinkStatusPort
+	cardTokens    *CardTokenRegistry
+	tranLog       TranLogPort
+	tranLogGet    TranLogGetter
+	idempotency   IdempotencyPort
+	hub           HubPort
+	reversal      ReversalQueuer
+	duplicateHook func() bool
 }
+
+// SetChaosDuplicateHook installs fn, checked once per purchase send: when it returns true, the
+// same 0200 (same STAN) is fired twice before the response is processed, exercising the issuer's
+// Deduplicate participant end-to-end (MCN-404's DUPLICATE_REQUEST scenario). A nil hook (the
+// default) never duplicates.
+func (s *Service) SetChaosDuplicateHook(fn func() bool) { s.duplicateHook = fn }
 
 // NewService builds a Service. mux also serves as the LinkStatusPort (e.g. *isonet.Supervisor
 // implements both). tranLog also serves as the TranLogGetter (*store.TranLogRepository
@@ -254,6 +261,8 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 		return Transaction{}, fmt.Errorf("record %s->%s: %w", statusCreated, statusSent, err)
 	}
 
+	s.sendDuplicateIfActive(ctx, fields)
+
 	sendCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	resp, err := s.mux.Send(sendCtx, "0200", fields)
@@ -274,23 +283,43 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 		}
 	}
 
+	return s.finalizeSendResult(ctx, id, row, txn, now)
+}
+
+// sendDuplicateIfActive fires a blocking duplicate with the same STAN/DE37 before the "real"
+// send in sendPurchase, when the MCN-404 chaos DUPLICATE_REQUEST scenario is active: the
+// issuer's Deduplicate participant should recognize the repeat and never double-post the ledger
+// entry. Its response is discarded - only the send in sendPurchase drives txn.Status. Sequential
+// (not fire-and-forget) per gateway-go/CLAUDE.md's goroutine-ownership rule.
+func (s *Service) sendDuplicateIfActive(ctx context.Context, fields map[int]string) {
+	if s.duplicateHook == nil || !s.duplicateHook() {
+		return
+	}
+	dupCtx, dupCancel := context.WithTimeout(ctx, requestTimeout)
+	defer dupCancel()
+	_, _ = s.mux.Send(dupCtx, "0200", fields)
+}
+
+// finalizeSendResult persists the post-send status and, on a timeout, queues the reversal -
+// unknown outcome -> reversal (root CLAUDE.md §6.4): never resend the 0200, queue a 0420 in SAF
+// instead. The reversal->REVERSAL_PENDING transition happens inside Queue, so txn.Status here
+// stays TIMED_OUT for this response (the caller sees the queue-time state, not the tran_log row
+// after Queue).
+func (s *Service) finalizeSendResult(ctx context.Context, id int64, row store.TranLogRow, txn Transaction, now time.Time) (Transaction, error) {
 	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
 		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
 	}
 	_ = s.tranLog.RecordStateTransition(ctx, id, statusSent, txn.Status)
 
-	if txn.Status == statusTimedOut {
-		// Unknown outcome -> reversal (root CLAUDE.md §6.4): never resend the 0200, queue a 0420
-		// in SAF instead. The reversal->REVERSAL_PENDING transition happens inside Queue, so
-		// txn.Status here stays TIMED_OUT for this response (the caller sees the queue-time
-		// state, not the tran_log row after Queue).
-		reversalRow := row
-		reversalRow.ID = id
-		reversalRow.Status = statusTimedOut
-		reversalRow.CreatedAt = now
-		if err := s.reversal.Queue(ctx, reversalRow, reasonTimeout); err != nil {
-			return Transaction{}, fmt.Errorf("queue reversal for timeout: %w", err)
-		}
+	if txn.Status != statusTimedOut {
+		return txn, nil
+	}
+	reversalRow := row
+	reversalRow.ID = id
+	reversalRow.Status = statusTimedOut
+	reversalRow.CreatedAt = now
+	if err := s.reversal.Queue(ctx, reversalRow, reasonTimeout); err != nil {
+		return Transaction{}, fmt.Errorf("queue reversal for timeout: %w", err)
 	}
 	return txn, nil
 }
