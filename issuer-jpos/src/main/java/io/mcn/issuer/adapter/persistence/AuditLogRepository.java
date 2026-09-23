@@ -51,6 +51,21 @@ public class AuditLogRepository {
     }
   }
 
+  /** Convenience overload for callers with no in-flight {@link Connection} of their own. */
+  public long record(
+      String actor,
+      String action,
+      String entityType,
+      String entityId,
+      String beforeStateJson,
+      String afterStateJson) {
+    try (Connection conn = dataSource.getConnection()) {
+      return record(conn, actor, action, entityType, entityId, beforeStateJson, afterStateJson);
+    } catch (SQLException e) {
+      throw new IllegalStateException("record audit_log failed", e);
+    }
+  }
+
   public List<AuditLogEntry> findByEntity(String entityType, String entityId) {
     String sql =
         "SELECT id, actor, action, entity_type, entity_id, before_state, after_state, created_at "

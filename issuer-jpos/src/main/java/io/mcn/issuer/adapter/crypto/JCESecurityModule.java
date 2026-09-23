@@ -49,11 +49,20 @@ public class JCESecurityModule implements SecurityModule {
 
   @Override
   public byte[] unwrap(byte[] keyUnderLmk) {
+    return unwrapUnder(keyUnderLmk, lmk);
+  }
+
+  @Override
+  public byte[] unwrapUnderKey(byte[] cryptogram, byte[] key) {
+    return unwrapUnder(cryptogram, new SecretKeySpec(key, "AES"));
+  }
+
+  private static byte[] unwrapUnder(byte[] cryptogram, SecretKeySpec key) {
     try {
-      byte[] nonce = Arrays.copyOfRange(keyUnderLmk, 0, NONCE_BYTES);
-      byte[] ciphertext = Arrays.copyOfRange(keyUnderLmk, NONCE_BYTES, keyUnderLmk.length);
+      byte[] nonce = Arrays.copyOfRange(cryptogram, 0, NONCE_BYTES);
+      byte[] ciphertext = Arrays.copyOfRange(cryptogram, NONCE_BYTES, cryptogram.length);
       Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-      cipher.init(Cipher.DECRYPT_MODE, lmk, new GCMParameterSpec(GCM_TAG_BITS, nonce));
+      cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, nonce));
       return cipher.doFinal(ciphertext);
     } catch (Exception e) {
       throw new IllegalStateException("key unwrap failed", e);
