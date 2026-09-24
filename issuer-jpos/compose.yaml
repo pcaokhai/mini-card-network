@@ -13,6 +13,25 @@ services:
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_METRICS_EXPORTER: none
       OTEL_LOGS_EXPORTER: none
+      # Without these, NetworkManagementListener/VerifySecurity/HttpEndpoints fail their
+      # jPOS setConfiguration() at boot - Q2 logs the error per-QBean and keeps the JVM up
+      # (unlike gateway-go's fail-fast main()), so the container reports healthy while the
+      # ISO 8583 listener is silently dead. Lab-only test values, same ones the test suites
+      # already use (PurchaseDeclineIntegrationTest, issuer-jpos/Makefile's `seed` target).
+      DATABASE_URL: jdbc:postgresql://postgres:5432/issuer
+      DB_USER: issuer
+      DB_PASSWORD: ${ISSUER_DB_PASSWORD}
+      PAN_ENCRYPTION_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+      PAN_HMAC_KEY_HEX: "1111111111111111111111111111111111111111111111111111111111111111"
+      # A fresh 32-byte lab-only value - NOT the test suites' LMK_HEX constant, which is only
+      # 31 bytes (an invalid AES key length, dormant because no test path there exercises
+      # real crypto.wrapUnderLmk with it).
+      LMK_TEST_VALUE_HEX: "8b87b6f6da742489647ce5940a450af6711ada15da9c7fb6a2f0a419cd885dd1" #gitleaks:allow
+      # ZMK/ZAK/ZPK must match the values in gateway-go/compose.yaml's environment block -
+      # both sides need the identical key material to interoperate (MCN-504's DE 48 lesson).
+      ZMK_HEX: "0000000000000000000000000000000000000000000000000000000000000000" #gitleaks:allow
+      ZAK_HEX: "3132333435363738393a3b3c3d3e3f40" #gitleaks:allow
+      ZPK_HEX: "2132333435363738393a3b3c3d3e3f41" #gitleaks:allow
     ports: ["8081:8081", "9465:9465"]
     stop_grace_period: 35s
     depends_on: [otel-collector, postgres]

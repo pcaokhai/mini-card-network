@@ -8,6 +8,14 @@ services:
       METRICS_ADDR: ":9464"
       DATABASE_URL: postgres://acquirer:${ACQUIRER_DB_PASSWORD}@postgres:5432/acquirer
       CHAOS_FAKE_ISSUER_ADDR: ${CHAOS_FAKE_ISSUER_ADDR:-} # opt-in: set for chaos runs only (MCN-407)
+      # Without these, config.Load fails fast and the gateway never starts (MCN-501/504).
+      # LMK_TEST_VALUE_HEX is a fresh 32-byte lab-only value - NOT gateway-go/internal/config/
+      # config_test.go's testLMKHex, which is only 31 bytes (an invalid AES key length,
+      # dormant because no test path there exercises real crypto.WrapUnderLMK with it).
+      # ZMK_HEX must match issuer-jpos/compose.yaml's value exactly - both sides need
+      # identical key material to interoperate (MCN-504's DE 48 lesson).
+      LMK_TEST_VALUE_HEX: "7efceea1547be94806b5cbf318eab4065aa4c7ba5cf875a12d7cc613d8d18141" #gitleaks:allow
+      ZMK_HEX: "0000000000000000000000000000000000000000000000000000000000000000" #gitleaks:allow
     ports: ["8080:8080", "9464:9464"]
     stop_grace_period: 35s
     depends_on: [otel-collector, postgres]
