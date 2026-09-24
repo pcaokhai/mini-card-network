@@ -32,7 +32,13 @@ export function useWsEvents(eventTypes: string[], onEvent: (event: WsEnvelope) =
 
     function connect() {
       if (closed) return;
-      const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/v1/stream`;
+      // NEXT_PUBLIC_WS_URL is a workaround for web-next's missing BFF proxy layer (CLAUDE.md
+      // documents Route Handlers under src/app/api/ that were never built) - it points the
+      // browser directly at the gateway. Falls back to same-origin, the intended topology
+      // once the proxy exists.
+      const url =
+        process.env.NEXT_PUBLIC_WS_URL ??
+        `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/v1/stream`;
       socket = new WebSocket(url);
       socket.onopen = () => {
         attempt = 0;
