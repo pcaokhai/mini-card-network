@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Health endpoints plus the /v1/cards* Admin API (MCN-308) and /v1/keys/issuer (MCN-501)
+  (docs/09-risk-register.md R-11: HttpEndpoints existed in source since MCN-005/308/501 but this
+  deploy descriptor was never written, so it never actually started in a real deployed Q2 - only
+  ever exercised through HealthServer/CardAdminController's own in-process tests). Port defaults
+  to 8081 to match issuer-jpos/compose.yaml's port mapping and root CLAUDE.md §1's port table.
+-->
+<admin-api class="io.mcn.issuer.adapter.http.HttpEndpoints" logger="Q2" name="admin-api">
+  <property name="jdbc-url" value="${DATABASE_URL}" />
+  <property name="jdbc-user" value="${DB_USER}" />
+  <property name="jdbc-password" value="${DB_PASSWORD}" />
+  <property name="port" value="${ADMIN_API_PORT:8081}" />
+  <property name="drain-ms" value="2000" />
+</admin-api>
