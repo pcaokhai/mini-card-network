@@ -23,6 +23,9 @@ public final class SeedMain {
 
     CardCrypto crypto =
         new CardCrypto(System.getenv("PAN_ENCRYPTION_KEY_HEX"), System.getenv("PAN_HMAC_KEY_HEX"));
-    new SeedLoader().load(dataSource, crypto, Path.of("../contracts/fixtures/cards.json"));
+    // build.gradle.kts's `run` task sets workingDir = "src/dist" (for the real Q2 server's own
+    // deploy-relative lookups), so from here the repo root is three levels up: src/dist ->
+    // src -> issuer-jpos -> repo root.
+    new SeedLoader().load(dataSource, crypto, Path.of("../../../contracts/fixtures/cards.json"));
   }
 }
