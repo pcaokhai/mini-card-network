@@ -1,6 +1,12 @@
 services:
   issuer:
-    build: { context: ./issuer-jpos }
+    # context is the repo root: `make up` combines this file with others via
+    # --project-directory ., and docker compose resolves a relative build.context against
+    # that project directory (not this file's own directory) once multiple -f files are
+    # merged - confirmed with `docker compose ... config`. `.` here IS the repo root, not
+    # ./issuer-jpos: the Gradle build reads ../contracts/iso8583/packager-spec.yaml, which
+    # must be visible inside the build.
+    build: { context: ., dockerfile: issuer-jpos/Dockerfile }
     environment:
       OTEL_SERVICE_NAME: issuer
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
