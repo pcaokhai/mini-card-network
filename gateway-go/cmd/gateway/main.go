@@ -106,6 +106,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.MountPurchases(r, purchaseService)
 	api.MountAdvancedTransactions(r, advtxnService)
 	api.MountTransactionsQuery(r, tranLogRepo)
+	api.MountOverview(r, tranLogRepo)
 	api.MountKeys(r, keyStoreRepo)
 	api.MountRotations(r, rotationAdapter{runner: rotationRunner, repo: rotationRepo})
 	api.MountChaos(r, toxiproxyClient, chaosRunner, hub)
