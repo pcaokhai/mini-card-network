@@ -21,6 +21,8 @@ import (
 const (
 	claimBatchSize = 50
 	acknowledged   = "00"
+	// issuerNotSignedOn is the issuer's RC for a message on a link it has not signed on yet.
+	issuerNotSignedOn = "91"
 	// sendTimeout bounds the wait for one 0430, the same 30 s a purchase waits for its 0210
 	// (docs/03 §9): the mux never fails a pending send when its connection drops.
 	sendTimeout = 30 * time.Second
@@ -139,11 +141,18 @@ func (w *Worker) deliverRow(ctx context.Context, row store.SafRow) error {
 	sendCtx, cancel := context.WithTimeout(ctx, w.sendTimeout)
 	defer cancel()
 	resp, err := w.mux.Send(sendCtx, mti, frame)
+	if errors.Is(err, isonet.ErrNotSignedOn) {
+		return w.waitForLink(ctx, row, err)
+	}
 	if err != nil {
 		return w.retryLater(ctx, row, err)
 	}
 	// Advices are never declined, so anything but "00" (91 link not signed on, 30 rejected frame)
-	// means the issuer has not recorded the reversal yet (docs/03 §7.3).
+	// means the issuer has not recorded the reversal yet (docs/03 §7.3). 91 is the link, not the
+	// advice, so like a refused send it waits without counting an attempt.
+	if resp[39] == issuerNotSignedOn {
+		return w.waitForLink(ctx, row, fmt.Errorf("%s not acknowledged: DE 39 %q", mti[:3]+"0", issuerNotSignedOn))
+	}
 	if rc := resp[39]; rc != acknowledged {
 		return w.retryLater(ctx, row, fmt.Errorf("%s not acknowledged: DE 39 %q", mti[:3]+"0", rc))
 	}
@@ -196,8 +205,8 @@ func (w *Worker) frame(mti string, adv advice) (map[int]string, error) {
 	return frame, nil
 }
 
-// waitForLink reschedules row without counting an attempt: nothing was sent, so the link being
-// down can never dead-letter an advice.
+// waitForLink reschedules row without counting an attempt: the link was down (nothing sent, or
+// the issuer not signed on), so an outage can never dead-letter an advice.
 func (w *Worker) waitForLink(ctx context.Context, row store.SafRow, why error) error {
 	nextRetryAt := time.Now().Add(w.backoff.Delay(max(row.Attempts, 1)))
 	return w.saf.MarkInFlight(ctx, row.ID, row.Attempts, nextRetryAt, why.Error())

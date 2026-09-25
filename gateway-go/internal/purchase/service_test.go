@@ -238,7 +238,7 @@ func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC
 }
 
 func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Status: statusApproved, Amount: 5000, Currency: "704"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Type: tranTypePurchase, Status: statusApproved, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
 
@@ -250,7 +250,7 @@ func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testin
 }
 
 func TestCancelPurchase_replaysIdempotentRequest__MCN_401_AC5(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Status: statusApproved, Amount: 5000, Currency: "704"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Type: tranTypePurchase, Status: statusApproved, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	idem := &fakeIdempotency{}
 	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, idem, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
@@ -277,6 +277,19 @@ func TestCancelPurchase_onlyAnApprovedPurchaseCanBeCancelled__MCN_401(t *testing
 		require.ErrorIs(t, err, store.ErrNotReversible, status)
 		require.Empty(t, reversal.calls, status)
 	}
+}
+
+// A pre-auth or completion is reversed by its own flow: a 0420 naming a 0200 original would find
+// nothing at the issuer, be acknowledged anyway, and leave the hold in place.
+func TestCancelPurchase_refusesAnApprovedNonPurchase__MCN_401(t *testing.T) {
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "p", Type: "PREAUTH", Status: statusApproved}}}
+	reversal := &fakeReversal{}
+	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+	_, err := svc.CancelPurchase(context.Background(), "p", "cancel-preauth")
+
+	require.ErrorIs(t, err, store.ErrNotReversible)
+	require.Empty(t, reversal.calls)
 }
 
 func TestRecordLateResponse_setsColumnsWithoutChangingStatus__MCN_403_AC1(t *testing.T) {

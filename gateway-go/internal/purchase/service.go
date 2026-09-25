@@ -563,7 +563,8 @@ func (s *Service) CancelPurchase(ctx context.Context, rrn string, idempotencyKey
 	}
 	// Only an approval holds the cardholder's money. Declines (link-down ones were never even
 	// sent) have nothing to return; timeouts and MAC failures already queued their own reversal.
-	if row.Status != statusApproved {
+	// Pre-auths and completions are not 0200s, so a 0420 naming a 0200 original would miss them.
+	if row.Type != tranTypePurchase || row.Status != statusApproved {
 		return Transaction{}, fmt.Errorf("cancel %s (%s): %w", rrn, row.Status, store.ErrNotReversible)
 	}
 	if err := s.reversal.Queue(ctx, row, reasonCancellation); err != nil {

@@ -303,7 +303,7 @@ func (r *IdempotencyRepository) Store(ctx context.Context, key, route, requestHa
 func (r *TranLogRepository) LastSTANInRRNPrefix(ctx context.Context, prefix string) (int64, error) {
 	var last int64
 	err := r.pool.QueryRow(ctx,
-		`SELECT coalesce(max(substring(rrn FROM 7 FOR 6)::int), 0) FROM tran_log WHERE rrn LIKE $1 || '%'`,
+		`SELECT coalesce(max(substring(rrn FROM 7 FOR 6)::int), 0) FROM tran_log WHERE rrn LIKE $1 || '%' AND rrn ~ '^[0-9]{12}$'`,
 		prefix).Scan(&last)
 	return last, err
 }

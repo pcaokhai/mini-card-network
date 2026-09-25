@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -309,4 +310,20 @@ func TestWorker_claimsWithALeaseLongerThanASend__MCN_401(t *testing.T) {
 	require.NoError(t, w.deliverOnce(context.Background()))
 
 	require.Greater(t, safPort.lease, w.sendTimeout)
+}
+
+// Not signed on (no send, or the issuer answering 91 on a link still signing on) is the link being
+// down, not a delivery attempt: a long outage must never dead-letter a reversal that is owed.
+func TestWorker_notSignedOnNeverCountsAsAnAttempt__MCN_401(t *testing.T) {
+	for name, mux := range map[string]*fakeMux{
+		"send refused": {err: fmt.Errorf("send: %w", isonet.ErrNotSignedOn)},
+		"issuer 91":    {response: map[int]string{39: "91"}},
+	} {
+		safPort := &fakeSaf{rows: []store.SafRow{queuedRow(t, 11, 19)}}
+
+		require.NoError(t, newTestWorker(mux, safPort, &recordingHSM{}).deliverOnce(context.Background()), name)
+
+		require.Empty(t, safPort.dead, name)
+		require.Equal(t, []int{19}, safPort.inFlights, name)
+	}
 }
