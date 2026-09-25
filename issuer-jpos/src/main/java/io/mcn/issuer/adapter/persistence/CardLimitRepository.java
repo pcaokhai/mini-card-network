@@ -30,14 +30,7 @@ public class CardLimitRepository {
       stmt.setString(2, tranType);
       var rs = stmt.executeQuery();
       List<CardLimit> limits = new ArrayList<>();
-      while (rs.next()) {
-        long rawMaxAmount = rs.getLong("max_amount");
-        Long maxAmount = rs.wasNull() ? null : rawMaxAmount;
-        int rawMaxCount = rs.getInt("max_count");
-        Integer maxCount = rs.wasNull() ? null : rawMaxCount;
-        limits.add(
-            new CardLimit(rs.getString("tran_type"), rs.getString("period"), maxAmount, maxCount));
-      }
+      while (rs.next()) limits.add(toLimit(rs));
       return limits;
     } catch (SQLException e) {
       throw new IllegalStateException("find card_limit failed", e);
@@ -61,14 +54,15 @@ public class CardLimitRepository {
     }
   }
 
-  public long amountToday(long cardId) {
+  /** Today's spend, keyed by the ISO business date rather than the JVM's calendar (CARDS-G12). */
+  public long amountToday(long cardId, LocalDate businessDate) {
     String sql =
         "SELECT COALESCE(SUM(txn_amount), 0) AS total FROM velocity_counter "
             + "WHERE card_id = ? AND period = 'DAILY' AND period_key = ?";
     try (var conn = dataSource.getConnection();
         var stmt = conn.prepareStatement(sql)) {
       stmt.setLong(1, cardId);
-      stmt.setString(2, LocalDate.now().toString());
+      stmt.setString(2, businessDate.toString());
       var rs = stmt.executeQuery();
       rs.next();
       return rs.getLong("total");
@@ -79,7 +73,27 @@ public class CardLimitRepository {
 
   /** Admin-API view of a card's ceilings: the {@code ALL} PER_TXN and DAILY rows. */
   public List<CardLimit> findAllForCard(long cardId) {
-    return findApplicableLimits(cardId, "ALL");
+    try (var conn = dataSource.getConnection()) {
+      return findAllForCard(conn, cardId);
+    } catch (SQLException e) {
+      throw new IllegalStateException("find card_limit failed", e);
+    }
+  }
+
+  /** Same read inside the caller's transaction (after it locked the card row). */
+  public List<CardLimit> findAllForCard(Connection conn, long cardId) {
+    String sql =
+        "SELECT tran_type, period, max_amount, max_count FROM card_limit "
+            + "WHERE card_id = ? AND tran_type = 'ALL'";
+    try (var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, cardId);
+      var rs = stmt.executeQuery();
+      List<CardLimit> limits = new ArrayList<>();
+      while (rs.next()) limits.add(toLimit(rs));
+      return limits;
+    } catch (SQLException e) {
+      throw new IllegalStateException("find card_limit failed", e);
+    }
   }
 
   /**
@@ -117,5 +131,13 @@ public class CardLimitRepository {
     } catch (SQLException e) {
       throw new IllegalStateException("upsert card_limit failed", e);
     }
+  }
+
+  private static CardLimit toLimit(java.sql.ResultSet rs) throws SQLException {
+    long rawMaxAmount = rs.getLong("max_amount");
+    Long maxAmount = rs.wasNull() ? null : rawMaxAmount;
+    int rawMaxCount = rs.getInt("max_count");
+    Integer maxCount = rs.wasNull() ? null : rawMaxCount;
+    return new CardLimit(rs.getString("tran_type"), rs.getString("period"), maxAmount, maxCount);
   }
 }

@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.crypto.JCESecurityModule;
 import io.mcn.issuer.adapter.persistence.AccountRepository;
 import io.mcn.issuer.adapter.persistence.AuditLogRepository;
+import io.mcn.issuer.adapter.persistence.BusinessDateRepository;
 import io.mcn.issuer.adapter.persistence.CardLimitRepository;
 import io.mcn.issuer.adapter.persistence.CardRepository;
 import io.mcn.issuer.adapter.persistence.IdempotencyRepository;
@@ -44,7 +45,8 @@ public final class HttpEndpoints extends QBeanSupport {
             new CardLimitRepository(dataSource),
             new AuditLogRepository(dataSource),
             new IdempotencyRepository(dataSource),
-            new LedgerRepository());
+            new LedgerRepository(),
+            new BusinessDateRepository(dataSource));
     var keyStore = new KeyStoreRepository(dataSource);
     var keys = new KeysController(keyStore::findAll);
     server = new HealthServer(readiness, cardAdmin, keys);

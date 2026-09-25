@@ -87,6 +87,22 @@ public class CardRepository {
     }
   }
 
+  /**
+   * Reads and row-locks ({@code FOR UPDATE}) the card inside the caller's transaction, so an admin
+   * write's precondition check and its update can't interleave with another writer's (CARDS-G6).
+   */
+  public Optional<Card> lockByCardRef(java.sql.Connection conn, String cardRef) {
+    String sql = "SELECT " + SELECT_COLUMNS + " FROM card WHERE card_ref = ? FOR UPDATE";
+    try (var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, cardRef);
+      var rs = stmt.executeQuery();
+      if (!rs.next()) return Optional.empty();
+      return Optional.of(toCard(rs));
+    } catch (SQLException e) {
+      throw new IllegalStateException("lock card by card_ref failed", e);
+    }
+  }
+
   public List<Card> findAll() {
     String sql = "SELECT " + SELECT_COLUMNS + " FROM card ORDER BY id";
     try (var conn = dataSource.getConnection();

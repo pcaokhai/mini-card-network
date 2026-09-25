@@ -4,9 +4,9 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.crypto.CardCrypto;
 import io.mcn.issuer.adapter.persistence.Card;
 import io.mcn.issuer.adapter.persistence.CardRepository;
+import io.mcn.issuer.domain.CardLifecycle;
 import java.io.Serializable;
 import java.time.LocalDate;
-import java.time.YearMonth;
 import org.jpos.core.Configurable;
 import org.jpos.core.Configuration;
 import org.jpos.core.ConfigurationException;
@@ -77,7 +77,7 @@ public class CheckCard implements TransactionParticipant, Configurable, Destroya
     }
 
     LocalDate businessDate = ctx.get(TxnContextKeys.BUSINESS_DATE);
-    if (businessDate != null && isExpired(card.expiryYymm(), businessDate)) {
+    if (businessDate != null && CardLifecycle.isExpired(card.expiryYymm(), businessDate)) {
       ctx.put(TxnContextKeys.RESPONSE_CODE, "54");
       return ABORTED;
     }
@@ -89,12 +89,5 @@ public class CheckCard implements TransactionParticipant, Configurable, Destroya
 
   private static boolean isNonActive(String status) {
     return "BLOCKED".equals(status) || "LOST".equals(status) || "STOLEN".equals(status);
-  }
-
-  private static boolean isExpired(String expiryYymm, LocalDate businessDate) {
-    int year = 2000 + Integer.parseInt(expiryYymm.substring(0, 2));
-    int month = Integer.parseInt(expiryYymm.substring(2, 4));
-    YearMonth expiry = YearMonth.of(year, month);
-    return YearMonth.from(businessDate).isAfter(expiry);
   }
 }
