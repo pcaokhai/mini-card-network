@@ -114,3 +114,27 @@ func TestReversal_cancellationIsDeliveredAndCompletes__MCN_401(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "REVERSED", got.Status)
 }
+
+// Queue moves the transaction only from the state its caller read: a second cancellation racing
+// the first, or one arriving after the reversal completed, queues nothing.
+func TestReversalQueuer_refusesATransactionWhoseStateMovedOn__MCN_401(t *testing.T) {
+	pool := newTestPool(t)
+	tranLog := store.NewTranLogRepository(pool)
+	safRepo := store.NewSafRepository(pool)
+	ctx := context.Background()
+	sentAt := time.Now().UTC()
+	_, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000654", Type: tranTypePurchase, Status: "APPROVED", Amount: 5000, Currency: "704",
+		TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000654", ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: testCardToken})
+	require.NoError(t, err)
+	original, err := tranLog.Get(ctx, "626514000654")
+	require.NoError(t, err)
+	q := NewReversalQueuer(pool, nil)
+
+	require.NoError(t, q.Queue(ctx, original, "17"))
+	err = q.Queue(ctx, original, "17") // still reads APPROVED; the row is REVERSAL_PENDING now
+
+	require.ErrorIs(t, err, store.ErrNotReversible)
+	pending, _, err := safRepo.ListPending(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+}

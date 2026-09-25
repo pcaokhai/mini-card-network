@@ -51,9 +51,15 @@ func (q *ReversalQueuer) Queue(ctx context.Context, txn store.TranLogRow, reason
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx,
-		`UPDATE tran_log SET state = $2 WHERE id = $1`, txn.ID, statusReversalPending); err != nil {
+	// Only from the state the caller read: a racing second cancellation, or one after the
+	// reversal already went out, must not queue a second 0420.
+	moved, err := tx.Exec(ctx,
+		`UPDATE tran_log SET state = $2 WHERE id = $1 AND state = $3`, txn.ID, statusReversalPending, txn.Status)
+	if err != nil {
 		return fmt.Errorf("update tran_log to %s: %w", statusReversalPending, err)
+	}
+	if moved.RowsAffected() == 0 {
+		return fmt.Errorf("%s from %s: %w", txn.RRN, txn.Status, store.ErrNotReversible)
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO tran_state_history (tran_id, from_state, to_state) VALUES ($1, $2, $3)`,

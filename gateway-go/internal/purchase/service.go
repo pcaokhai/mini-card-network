@@ -561,6 +561,11 @@ func (s *Service) CancelPurchase(ctx context.Context, rrn string, idempotencyKey
 	if err != nil {
 		return Transaction{}, fmt.Errorf("look up transaction %s: %w", rrn, err)
 	}
+	// Only an approval holds the cardholder's money. Declines (link-down ones were never even
+	// sent) have nothing to return; timeouts and MAC failures already queued their own reversal.
+	if row.Status != statusApproved {
+		return Transaction{}, fmt.Errorf("cancel %s (%s): %w", rrn, row.Status, store.ErrNotReversible)
+	}
 	if err := s.reversal.Queue(ctx, row, reasonCancellation); err != nil {
 		return Transaction{}, fmt.Errorf("queue reversal for cancellation: %w", err)
 	}

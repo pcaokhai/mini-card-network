@@ -15,6 +15,10 @@ import (
 // ErrNotFound is returned when a lookup by RRN finds no row.
 var ErrNotFound = errors.New("not found")
 
+// ErrNotReversible means the transaction is not in a state a reversal can start from: it holds no
+// money (a decline), or a reversal is already queued or done.
+var ErrNotReversible = errors.New("transaction cannot be reversed from its current state")
+
 // TranLogRow is one tran_log row (docs/05-data-model.md). RRN and MaskedPAN are never the real
 // PAN; the caller resolves cardToken->PAN only long enough to build DE 2 and never persists it.
 type TranLogRow struct {

@@ -238,7 +238,7 @@ func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC
 }
 
 func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Status: statusSent, Amount: 5000, Currency: "704"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Status: statusApproved, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
 
@@ -250,7 +250,7 @@ func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testin
 }
 
 func TestCancelPurchase_replaysIdempotentRequest__MCN_401_AC5(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Status: statusSent, Amount: 5000, Currency: "704"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Status: statusApproved, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	idem := &fakeIdempotency{}
 	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, idem, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
@@ -262,6 +262,21 @@ func TestCancelPurchase_replaysIdempotentRequest__MCN_401_AC5(t *testing.T) {
 
 	require.Equal(t, first, second)
 	require.Len(t, reversal.calls, 1) // second call was a replay, not a re-queue
+}
+
+// Only an approved purchase holds the cardholder's money; a decline (including a link-down one
+// that was never sent) or a purchase already being reversed has nothing to cancel.
+func TestCancelPurchase_onlyAnApprovedPurchaseCanBeCancelled__MCN_401(t *testing.T) {
+	for _, status := range []string{statusDeclined, statusTimedOut, statusReversalPending, "REVERSED", statusSent} {
+		tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "v", Status: status}}}
+		reversal := &fakeReversal{}
+		svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+		_, err := svc.CancelPurchase(context.Background(), "v", "cancel-"+status)
+
+		require.ErrorIs(t, err, store.ErrNotReversible, status)
+		require.Empty(t, reversal.calls, status)
+	}
 }
 
 func TestRecordLateResponse_setsColumnsWithoutChangingStatus__MCN_403_AC1(t *testing.T) {
