@@ -1,0 +1,365 @@
+/* Message Lab, from the design canvas (MessageLab.dc.html). Motion animates transform/opacity only;
+   the global prefers-reduced-motion rule in globals.css collapses every duration and delay. */
+/* The canvas sets no line-height, so text sits on the fonts' normal metrics, not Tailwind's 1.5. */
+.lab-root {
+  line-height: normal;
+  --lab-seg-track: #efede6;
+  --lab-well: #faf9f6;
+  --lab-divider: #f0eee8;
+  --lab-body: #4a4c54;
+  --lab-head: #6b6d75;
+  --lab-bit-off: #6b6d75; /* canvas #8A8C94 is 3.2:1 on the well; Ruling R3 */
+  --lab-mti-ink: #3c3290;
+  --lab-bmp-ink: #7a4506;
+  --lab-field-bg: #e7f1f1;
+  --lab-dark-2: #24262d;
+  --lab-dark-3: #2e3038;
+  --lab-dark-ink: #c9cbd2;
+  --lab-dark-label: #9ea1aa;
+  --lab-dark-key: #cfe9e9;
+  --lab-on-bg: #1e4d3a;
+  --lab-on-ink: #bde5cc;
+  --lab-off-bg: #3a3c43;
+}
+
+.lab-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  padding: 18px 22px;
+}
+.lab-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.lab-card__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* ---- Segmented controls (sample tabs, bitmap pages) ------------------------------------------ */
+.lab-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--lab-seg-track);
+}
+.lab-seg__btn {
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-muted);
+  background: transparent;
+  white-space: nowrap;
+}
+.lab-seg__btn[aria-pressed="true"] {
+  font-weight: 600;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgb(23 24 28 / 0.14);
+}
+.lab-seg__btn:disabled {
+  cursor: default;
+}
+
+/* ---- Raw message ------------------------------------------------------------------------------ */
+.lab-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.lab-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lab-legend__swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+.lab-raw {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 2.1;
+  word-break: break-all;
+  background: var(--lab-well);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.lab-raw__seg {
+  display: inline;
+  border: none;
+  margin: 0 3px 0 0;
+  padding: 2px 4px;
+  border-radius: 5px;
+  font: inherit;
+  /* DE 43 pads with runs of spaces; the wire view keeps them. */
+  white-space: pre-wrap;
+}
+[data-kind="mti"] { --seg-bg: var(--color-rev-soft); --seg-ink: var(--lab-mti-ink); }
+[data-kind="bmp"] { --seg-bg: var(--color-warn-soft); --seg-ink: var(--lab-bmp-ink); }
+[data-kind="field"] { --seg-bg: var(--lab-field-bg); --seg-ink: var(--color-ink); }
+.lab-raw__seg,
+.lab-legend__swatch {
+  background: var(--seg-bg);
+  color: var(--seg-ink);
+}
+.lab-raw__seg[aria-pressed="true"] {
+  background: var(--color-accent);
+  color: #ffffff;
+}
+.lab-note {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+/* ---- Bitmap grid ------------------------------------------------------------------------------ */
+.lab-columns {
+  display: grid;
+  grid-template-columns: 500px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.lab-grid-note {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--lab-body);
+}
+.lab-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lab-grid__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lab-bit {
+  width: 46px;
+  height: 40px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  background: var(--lab-well);
+  color: var(--lab-bit-off);
+  /* §7.9 "bitmap diagonal flip on message change": the grid remounts per message and page. */
+  animation: lab-flip 0.36s var(--ease-out-design) both;
+}
+.lab-bit[data-on="true"] {
+  border: none;
+  background: var(--color-accent);
+  color: #ffffff;
+  font-weight: 500;
+}
+.lab-bit[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 0 0 4px var(--color-ink);
+}
+@keyframes lab-flip {
+  from { transform: perspective(300px) rotateX(90deg); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes lab-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* MCN-104-AC5: reduced motion swaps the flip for a fade (globals.css then shortens it). */
+@media (prefers-reduced-motion: reduce) {
+  .lab-bit { animation-name: lab-fade; }
+}
+.lab-grid__byte {
+  margin-left: 8px;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  line-height: 1.2;
+}
+.lab-grid__hex {
+  font-size: 14px;
+  font-weight: 500;
+}
+.lab-grid__bin {
+  font-size: 11px;
+  color: var(--color-muted);
+}
+.lab-grid__total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  padding-top: 10px;
+  border-top: 1px solid var(--lab-divider);
+}
+
+/* ---- Detail panel ----------------------------------------------------------------------------- */
+.lab-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: 14px;
+  padding: 20px 22px;
+  background: var(--color-ink);
+  color: #ffffff;
+}
+.lab-detail__tag {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--lab-dark-3);
+  color: var(--lab-dark-key);
+}
+.lab-detail__status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--lab-off-bg);
+  color: var(--lab-dark-ink);
+}
+.lab-detail__status[data-on="true"] {
+  background: var(--lab-on-bg);
+  color: var(--lab-on-ink);
+}
+.lab-detail__why {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--lab-dark-ink);
+}
+.lab-detail__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 4px 0 0;
+}
+.lab-detail__fact {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--lab-dark-2);
+}
+.lab-detail__fact dt {
+  font-size: 12px;
+  color: var(--lab-dark-label);
+}
+.lab-detail__fact dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+.lab-detail__fact dd[data-mono="true"] {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lab-detail__parts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.lab-detail__part {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+}
+.lab-detail__part-k {
+  min-width: 110px;
+  font-family: var(--font-mono);
+  color: var(--lab-dark-key);
+}
+.lab-detail__part-v {
+  color: var(--lab-dark-ink);
+}
+
+/* ---- Field list ------------------------------------------------------------------------------- */
+.lab-fields {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  padding: 16px;
+}
+.lab-fields__head,
+.lab-fields__row {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) 220px;
+  gap: 10px;
+}
+.lab-fields[data-expert="true"] .lab-fields__head,
+.lab-fields[data-expert="true"] .lab-fields__row {
+  grid-template-columns: 56px minmax(0, 1fr) 130px 190px;
+}
+/* Below the canvas's 1440px frame the expert columns (376px fixed) would crush the name column
+   to zero; narrow the format and value columns instead (Ruling R5). */
+@container (max-width: 560px) {
+  .lab-fields[data-expert="true"] .lab-fields__head,
+  .lab-fields[data-expert="true"] .lab-fields__row {
+    grid-template-columns: 44px minmax(0, 1fr) 104px 120px;
+  }
+}
+.lab-fields__head {
+  padding: 4px 10px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--lab-head);
+  border-bottom: 1px solid var(--color-border);
+}
+.lab-fields__row {
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  color: var(--color-ink);
+  background: transparent;
+}
+.lab-fields__row:nth-of-type(even) {
+  background: var(--lab-well);
+}
+.lab-fields__row[aria-pressed="true"] {
+  background: var(--color-accent-soft);
+}
+.lab-fields__n {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+}
+.lab-fields__name {
+  font-size: 13px;
+  text-align: left;
+}
+.lab-fields__fmt {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-muted);
+  text-align: left;
+}
+.lab-fields__value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
