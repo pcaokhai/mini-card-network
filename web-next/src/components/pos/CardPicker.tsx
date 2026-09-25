@@ -7,6 +7,8 @@ const DISPLAY_CARDS = [
   { cardToken: "tok_low", last4: "9021", holderName: "Tran Thu Ha", status: "ACTIVE" },
   { cardToken: "tok_blocked", last4: "3310", holderName: "Le Quoc Bao", status: "BLOCKED" },
   { cardToken: "tok_expired", last4: "7765", holderName: "Pham Gia Huy", status: "ACTIVE" },
+  { cardToken: "tok_limit", last4: "1208", holderName: "Vo Thanh Tam", status: "ACTIVE" },
+  { cardToken: "tok_second", last4: "5540", holderName: "Dang Ngoc Linh", status: "ACTIVE" },
 ] as const;
 
 interface CardPickerProps {

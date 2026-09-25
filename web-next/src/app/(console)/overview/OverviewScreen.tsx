@@ -64,7 +64,8 @@ export function OverviewScreen() {
 
       <KpiCards overview={overviewQuery.data} />
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
+      {/* Two columns only once the expert feed (664px of fixed columns) fits beside the 380px rail. */}
+      <div className="grid gap-5 min-[1400px]:grid-cols-[minmax(0,1fr)_380px]">
         <LiveFeed expertMode={expertMode} throughput={overviewQuery.data.throughput} />
         <div className="flex flex-col gap-5">
           <SystemHealthList

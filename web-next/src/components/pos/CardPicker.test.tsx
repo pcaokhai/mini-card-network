@@ -7,7 +7,7 @@ describe("CardPicker", () => {
   it("renders exactly 4 selectable test cards with masked PANs, never raw PANs", () => {
     render(<CardPicker selected={null} onSelect={vi.fn()} />);
     const cards = screen.getAllByRole("radio");
-    expect(cards).toHaveLength(4);
+    expect(cards).toHaveLength(6);
     for (const card of cards) {
       expect(card.textContent).not.toMatch(/9704360000/);
     }

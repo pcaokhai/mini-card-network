@@ -45,4 +45,13 @@ describe("KpiCards", () => {
     renderWithIntl(<KpiCards overview={base} />);
     expect(screen.getByText("128")).toHaveClass("sr-only");
   });
+
+  it("shows the peak rate rounded for reading, not as a raw float", () => {
+    useDisplayMode.setState({ mode: "expert" });
+    renderWithIntl(
+      <KpiCards overview={{ ...base, throughput: [{ at: "2026-09-21T05:06:00Z", tps: 0.04666666666666667 }] }} />,
+    );
+    expect(screen.getByText(/TPS đỉnh 0,05 lúc/)).toBeInTheDocument();
+    useDisplayMode.setState({ mode: "easy" });
+  });
 });
