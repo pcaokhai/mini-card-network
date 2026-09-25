@@ -15,6 +15,7 @@ import (
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/iso8583"
 	"github.com/mcn/gateway-go/internal/isonet"
+	"github.com/mcn/gateway-go/internal/journey"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -40,8 +41,15 @@ const (
 	reasonCancellation = "17" // docs/03 §7.3 DE 39: cancelled by customer
 	reasonMacFailure   = "06" // docs/03 §7.3 DE 39: error (reused for a bad incoming MAC)
 
-	rcMacFailure = "96" // docs/03 §11: MAC verification failed
-	responseMTI  = "0210"
+	rcMacFailure  = "96" // docs/03 §11: MAC verification failed
+	rcFormatError = "30" // docs/03 §8: a response without DE 39 is malformed
+	responseMTI   = "0210"
+
+	eventCreated = "transaction.created"
+	eventUpdated = "transaction.updated"
+
+	statusCreatedHTTP  = 201
+	statusAcceptedHTTP = 202
 )
 
 // MerchantResolver maps a terminal to the merchant it belongs to (contracts/fixtures/cards.json
@@ -93,19 +101,52 @@ type PurchaseRequest struct {
 
 // Transaction mirrors contracts/openapi.yaml's Transaction schema.
 type Transaction struct {
-	RRN          string    `json:"rrn"`
-	STAN         string    `json:"stan,omitempty"`
-	Type         string    `json:"type"`
-	Status       string    `json:"status"`
-	ResponseCode string    `json:"responseCode,omitempty"`
-	Amount       Money     `json:"amount"`
-	MaskedPAN    string    `json:"maskedPan"`
-	TerminalID   string    `json:"terminalId"`
-	MerchantName string    `json:"merchantName"`
-	CreatedAt    time.Time `json:"createdAt"`
-	AuthCode     string    `json:"authCode,omitempty"`
-	BusinessDate string    `json:"businessDate"`
-	TraceID      string    `json:"traceId"`
+	RRN            string    `json:"rrn"`
+	STAN           string    `json:"stan,omitempty"`
+	Type           string    `json:"type"`
+	Status         string    `json:"status"`
+	ResponseCode   string    `json:"responseCode,omitempty"`
+	ResponseLabel  *string   `json:"responseLabel"`
+	Amount         Money     `json:"amount"`
+	MaskedPAN      string    `json:"maskedPan"`
+	TerminalID     string    `json:"terminalId"`
+	MerchantName   string    `json:"merchantName"`
+	LatencyMs      *int      `json:"latencyMs"`
+	CreatedAt      time.Time `json:"createdAt"`
+	ReversalReason string    `json:"reversalReason,omitempty"`
+	AuthCode       string    `json:"authCode,omitempty"`
+	BusinessDate   string    `json:"businessDate"`
+	TraceID        string    `json:"traceId,omitempty"`
+}
+
+// ResponseLabel is the plain-language label of rc (docs/04 §2 display modes), nil when there is
+// no RC yet.
+func ResponseLabel(rc string) *string {
+	if rc == "" {
+		return nil
+	}
+	label := journey.EasyTextForRC(rc)
+	return &label
+}
+
+// ResponseCodeOf reads DE 39 of an issuer response. A response without one is malformed, so it is
+// declined as a format error rather than recorded with no RC (OVW-G11).
+func ResponseCodeOf(resp map[int]string) string {
+	if rc := resp[39]; rc != "" {
+		return rc
+	}
+	return rcFormatError
+}
+
+// transactionFromRow is the Transaction a stored row reports, for events after creation.
+func transactionFromRow(row store.TranLogRow) Transaction {
+	return Transaction{
+		RRN: row.RRN, STAN: row.NetworkSTAN, Type: row.Type, Status: row.Status, ResponseCode: row.ResponseCode,
+		ResponseLabel: ResponseLabel(row.ResponseCode), Amount: Money{Amount: row.Amount, Currency: row.Currency},
+		MaskedPAN: row.MaskedPAN, TerminalID: row.TerminalID, MerchantName: row.MerchantName,
+		LatencyMs: journey.LatencyMs(row), CreatedAt: row.CreatedAt, ReversalReason: store.ReversalReasonOf(row.ReversalReasonCode),
+		AuthCode: row.AuthCode, BusinessDate: row.CreatedAt.UTC().Format("2006-01-02"), TraceID: row.TraceID,
+	}
 }
 
 // MuxSender sends a request on the acquirer's live issuer connection. *isonet.Supervisor
@@ -129,10 +170,9 @@ type TranLogPort interface {
 	UpdateLateResponse(ctx context.Context, rrn, responseCode string) error
 }
 
-// IdempotencyPort persists idempotency_record. *store.IdempotencyRepository satisfies it.
-type IdempotencyPort interface {
-	Find(ctx context.Context, key, route string) (*store.StoredResponse, error)
-	Store(ctx context.Context, key, route, requestHash string, status int, body []byte) error
+// NetworkEventRecorder persists a network_event row. *store.LinkRepository satisfies it.
+type NetworkEventRecorder interface {
+	RecordEvent(ctx context.Context, severity, easyText, technicalText string) error
 }
 
 // HubPort broadcasts a transaction event. internal/ws.Hub (extended with BroadcastTransaction)
@@ -169,6 +209,7 @@ type Service struct {
 	hsm           hsm.Module
 	zak           []byte
 	mac           MACVerifier
+	events        NetworkEventRecorder
 	duplicateHook func() bool
 }
 
@@ -183,33 +224,28 @@ func (s *Service) SetChaosDuplicateHook(fn func() bool) { s.duplicateHook = fn }
 // implements both). zak is the clear ZAK used for the Retail MAC (MCN-502-AC1/AC2), unwrapped
 // once at construction - not per-request, matching how Service already holds its other
 // long-lived dependencies. keyStore backs the dual-key acceptance retry (MCN-504-AC2); a nil
-// keyStore simply disables the retry (existing single-key MAC verification, unchanged).
+// keyStore simply disables the retry (existing single-key MAC verification, unchanged). events
+// persists the late-response network event.
 func NewService(mux interface {
 	MuxSender
 	LinkStatusPort
 }, cardTokens *CardTokenRegistry, merchants MerchantResolver, tranLog interface {
 	TranLogPort
 	TranLogGetter
-}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder) *Service {
-	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, mac: NewMACVerifier(hsmModule, zak, keyStore)}
+}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder, events NetworkEventRecorder) *Service {
+	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, mac: NewMACVerifier(hsmModule, zak, keyStore), events: events}
 }
 
 // CreatePurchase builds a 0200, sends it through the live issuer connection, persists every
 // state transition, and returns the resulting Transaction. A replayed idempotencyKey with the
 // same route returns the previously stored Transaction unchanged, without resending anything.
 func (s *Service) CreatePurchase(ctx context.Context, req PurchaseRequest, idempotencyKey string) (Transaction, error) {
-	requestHash := hashRequest(req)
+	return Idempotent(ctx, s.idempotency, idempotencyKey, purchaseRoute, hashRequest(req), statusCreatedHTTP, func() (Transaction, error) {
+		return s.createPurchase(ctx, req)
+	})
+}
 
-	if stored, err := s.idempotency.Find(ctx, idempotencyKey, purchaseRoute); err != nil {
-		return Transaction{}, fmt.Errorf("check idempotency: %w", err)
-	} else if stored != nil {
-		var txn Transaction
-		if err := json.Unmarshal(stored.Body, &txn); err != nil {
-			return Transaction{}, fmt.Errorf("decode stored transaction: %w", err)
-		}
-		return txn, nil
-	}
-
+func (s *Service) createPurchase(ctx context.Context, req PurchaseRequest) (Transaction, error) {
 	card, merchant, err := s.resolveCardAndMerchant(ctx, req)
 	if err != nil {
 		return Transaction{}, err
@@ -218,22 +254,22 @@ func (s *Service) CreatePurchase(ctx context.Context, req PurchaseRequest, idemp
 
 	stan, ok := s.mux.NextSTAN()
 	if !s.linkStatus.IsSignedOn() || !ok {
-		txn := s.declinedTransaction(req, merchant, maskedPAN, rcLinkDown)
+		txn := s.declinedTransaction(ctx, req, merchant, maskedPAN, rcLinkDown)
 		if err := s.recordLinkDown(ctx, txn, req, merchant); err != nil {
 			return Transaction{}, err
 		}
-		return txn, s.publish(ctx, txn, idempotencyKey, requestHash)
+		s.hub.BroadcastTransaction(eventCreated, txn)
+		return txn, nil
 	}
 
+	// Idempotent stores the response on a detached context, so a caller that gives up once the 0200
+	// may be at the issuer can't make a retry with the same key send a second 0200.
 	txn, err := s.sendPurchase(ctx, req, card, merchant, maskedPAN, stan)
-	// The 0200 may be at the issuer: the idempotent response must be stored even if the caller has
-	// given up, or a retry with the same key would send a second 0200.
-	ctx, cancel := Detach(ctx)
-	defer cancel()
 	if err != nil {
 		return Transaction{}, err
 	}
-	return txn, s.publish(ctx, txn, idempotencyKey, requestHash)
+	s.hub.BroadcastTransaction(eventCreated, txn)
+	return txn, nil
 }
 
 // persistTimeout bounds the work a request finishes after its send on a detached context (root
@@ -288,7 +324,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	row := store.TranLogRow{
 		RRN: rrn, Type: tranTypePurchase, Status: statusCreated, Amount: req.Amount.Amount, Currency: req.Amount.Currency,
 		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: merchant.MID, NetworkSTAN: stan, MTI: "0200",
-		ProcessingCode: fields[3], POSEntryMode: fields[22], SentAt: &now, CardToken: req.CardToken,
+		ProcessingCode: fields[3], POSEntryMode: fields[22], SentAt: &now, CardToken: req.CardToken, TraceID: obs.TraceID(ctx),
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {
@@ -309,17 +345,24 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 
 	sendCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
+	sendStart := time.Now()
 	resp, err := s.mux.Send(sendCtx, "0200", fields)
+	latencyMs := int(time.Since(sendStart).Milliseconds())
 
 	// The request may already be at the issuer: whatever happened to the caller's request, the
 	// outcome must be recorded, so nothing after the send may be cancelled with it.
 	ctx, cancelPersist := Detach(ctx)
 	defer cancelPersist()
-	txn := s.baseTransaction(req, merchant, rrn, stan, maskedPAN)
+	txn := s.baseTransaction(ctx, req, merchant, rrn, stan, maskedPAN)
 	macFailed := s.mapSendOutcome(ctx, &txn, resp, err)
+	if err == nil {
+		txn.LatencyMs = &latencyMs
+	}
+	txn.ResponseLabel = ResponseLabel(txn.ResponseCode)
 
 	row.ID, row.CreatedAt = id, now
-	return s.finalizeSendResult(ctx, row, txn, macFailed)
+	finalized, err := s.finalizeSendResult(ctx, row, txn, macFailed)
+	return finalized, afterSend(err)
 }
 
 // mapSendOutcome maps mux.Send's (resp, sendErr) onto txn's Status/ResponseCode/AuthCode -
@@ -332,7 +375,7 @@ func (s *Service) mapSendOutcome(ctx context.Context, txn *Transaction, resp map
 		return false
 	}
 
-	txn.ResponseCode = resp[39]
+	txn.ResponseCode = ResponseCodeOf(resp)
 	txn.AuthCode = resp[38]
 	if txn.ResponseCode == "00" {
 		txn.Status = statusApproved
@@ -434,12 +477,12 @@ func reversalReasonFor(status string, macFailed bool) string {
 	return ""
 }
 
-func (s *Service) baseTransaction(req PurchaseRequest, merchant store.Merchant, rrn, stan, maskedPAN string) Transaction {
+func (s *Service) baseTransaction(ctx context.Context, req PurchaseRequest, merchant store.Merchant, rrn, stan, maskedPAN string) Transaction {
 	now := time.Now().UTC()
 	return Transaction{
 		RRN: rrn, STAN: stan, Type: tranTypePurchase, Amount: req.Amount, MaskedPAN: maskedPAN,
 		TerminalID: req.TerminalID, MerchantName: merchant.Name, CreatedAt: now,
-		BusinessDate: now.Format("2006-01-02"),
+		BusinessDate: now.Format("2006-01-02"), TraceID: obs.TraceID(ctx),
 	}
 }
 
@@ -448,12 +491,13 @@ func (s *Service) baseTransaction(req PurchaseRequest, merchant store.Merchant, 
 // docs/03 §5's format - ponytail: collisions are possible if two link-down declines land in the
 // same UTC second, acceptable for this lab; a real deployment would reserve a STAN even for
 // link-down declines.
-func (s *Service) declinedTransaction(req PurchaseRequest, merchant store.Merchant, maskedPAN, responseCode string) Transaction {
+func (s *Service) declinedTransaction(ctx context.Context, req PurchaseRequest, merchant store.Merchant, maskedPAN, responseCode string) Transaction {
 	const noStan = "000000"
 	rrn := BuildRRN(time.Now().UTC(), noStan)
-	txn := s.baseTransaction(req, merchant, rrn, noStan, maskedPAN)
+	txn := s.baseTransaction(ctx, req, merchant, rrn, noStan, maskedPAN)
 	txn.Status = statusDeclined
 	txn.ResponseCode = responseCode
+	txn.ResponseLabel = ResponseLabel(responseCode)
 	return txn
 }
 
@@ -463,7 +507,7 @@ func (s *Service) recordLinkDown(ctx context.Context, txn Transaction, req Purch
 	row := store.TranLogRow{
 		RRN: txn.RRN, Type: tranTypePurchase, Status: statusDeclined, MTI: "0200",
 		Amount: req.Amount.Amount, Currency: req.Amount.Currency, MaskedPAN: txn.MaskedPAN,
-		TerminalID: req.TerminalID, MerchantID: merchant.MID, ResponseCode: txn.ResponseCode,
+		TerminalID: req.TerminalID, MerchantID: merchant.MID, ResponseCode: txn.ResponseCode, TraceID: txn.TraceID,
 	}
 	if _, err := s.tranLog.Insert(ctx, row); err != nil {
 		return fmt.Errorf("insert tran_log for link-down decline: %w", err)
@@ -471,32 +515,15 @@ func (s *Service) recordLinkDown(ctx context.Context, txn Transaction, req Purch
 	return nil
 }
 
-// publish broadcasts the transaction and stores the idempotent response so a replay never resends.
-func (s *Service) publish(ctx context.Context, txn Transaction, idempotencyKey, requestHash string) error {
-	s.hub.BroadcastTransaction("transaction.created", txn)
-	body, err := json.Marshal(txn)
-	if err != nil {
-		return fmt.Errorf("encode transaction for idempotency store: %w", err)
-	}
-	if err := s.idempotency.Store(ctx, idempotencyKey, purchaseRoute, requestHash, 201, body); err != nil {
-		return fmt.Errorf("store idempotent response: %w", err)
-	}
-	return nil
-}
-
 // CancelPurchase queues a POS-initiated reversal (DE 39 = "17") for the transaction identified
 // by rrn, through the same atomic path CreatePurchase's timeout branch uses.
 func (s *Service) CancelPurchase(ctx context.Context, rrn string, idempotencyKey string) (Transaction, error) {
-	if stored, err := s.idempotency.Find(ctx, idempotencyKey, cancelRoute); err != nil {
-		return Transaction{}, fmt.Errorf("check idempotency: %w", err)
-	} else if stored != nil {
-		var txn Transaction
-		if err := json.Unmarshal(stored.Body, &txn); err != nil {
-			return Transaction{}, fmt.Errorf("decode stored transaction: %w", err)
-		}
-		return txn, nil
-	}
+	return Idempotent(ctx, s.idempotency, idempotencyKey, cancelRoute, sha256Hex(rrn), statusAcceptedHTTP, func() (Transaction, error) {
+		return s.cancelPurchase(ctx, rrn)
+	})
+}
 
+func (s *Service) cancelPurchase(ctx context.Context, rrn string) (Transaction, error) {
 	row, err := s.tranLogGet.Get(ctx, rrn)
 	if err != nil {
 		return Transaction{}, fmt.Errorf("look up transaction %s: %w", rrn, err)
@@ -511,22 +538,22 @@ func (s *Service) CancelPurchase(ctx context.Context, rrn string, idempotencyKey
 		return Transaction{}, fmt.Errorf("queue reversal for cancellation: %w", err)
 	}
 
-	txn := Transaction{
-		RRN: row.RRN, Type: row.Type, Status: statusReversalPending,
-		Amount: Money{Amount: row.Amount, Currency: row.Currency}, MaskedPAN: row.MaskedPAN,
-		TerminalID: row.TerminalID, MerchantName: row.MerchantName, CreatedAt: time.Now().UTC(),
-		BusinessDate: time.Now().UTC().Format("2006-01-02"),
-	}
-
-	body, err := json.Marshal(txn)
-	if err != nil {
-		return Transaction{}, fmt.Errorf("encode transaction for idempotency store: %w", err)
-	}
-	requestHash := sha256Hex(rrn)
-	if err := s.idempotency.Store(ctx, idempotencyKey, cancelRoute, requestHash, 202, body); err != nil {
-		return Transaction{}, fmt.Errorf("store idempotent response: %w", err)
-	}
+	row.Status = statusReversalPending
+	row.ReversalReasonCode = reasonCancellation
+	txn := transactionFromRow(row)
+	s.hub.BroadcastTransaction(eventUpdated, txn)
 	return txn, nil
+}
+
+// BroadcastUpdate announces rrn's current state as transaction.updated (OVW-G3): every status
+// change after creation that isn't made by this service, such as the SAF acknowledging a reversal.
+func (s *Service) BroadcastUpdate(ctx context.Context, rrn string) error {
+	row, err := s.tranLogGet.Get(ctx, rrn)
+	if err != nil {
+		return fmt.Errorf("look up transaction %s: %w", rrn, err)
+	}
+	s.hub.BroadcastTransaction(eventUpdated, transactionFromRow(row))
+	return nil
 }
 
 // RecordLateResponse records a 0210 that arrived for rrn after its transaction already left
@@ -545,12 +572,16 @@ func (s *Service) RecordLateResponse(ctx context.Context, rrn, responseCode stri
 	if err := s.tranLog.UpdateLateResponse(ctx, rrn, responseCode); err != nil {
 		return fmt.Errorf("update late response for %s: %w", rrn, err)
 	}
-	s.hub.BroadcastNetworkEvent(store.NetworkEvent{
+	evt := store.NetworkEvent{
 		Severity:      "WARN",
 		EasyText:      "A response arrived too late for a transaction",
 		TechnicalText: fmt.Sprintf("late 0210 for RRN %s, RC %s", rrn, responseCode),
-	})
-	return nil
+	}
+	if err := s.events.RecordEvent(ctx, evt.Severity, evt.EasyText, evt.TechnicalText); err != nil {
+		return fmt.Errorf("record late-response event for %s: %w", rrn, err)
+	}
+	s.hub.BroadcastNetworkEvent(evt)
+	return s.BroadcastUpdate(ctx, rrn)
 }
 
 func hashRequest(req PurchaseRequest) string {

@@ -35,12 +35,13 @@ func TestTranLogRepository_overview_countsApprovalRateAndDeclineReasons__MCN_306
 	decline("626514000004", "51")
 	decline("626514000005", "51")
 	decline("626514000006", "62")
+	decline("626514000007", "") // a legacy row with no RC (OVW-G11)
 
 	stats, err := repo.Overview(ctx, now)
 	require.NoError(t, err)
 
-	require.Equal(t, int64(6), stats.TransactionsToday)
-	require.InDelta(t, 0.5, stats.ApprovalRate, 0.001) // 3 approved / 6 (3 approved + 3 declined)
+	require.Equal(t, int64(7), stats.TransactionsToday)
+	require.InDelta(t, 3.0/7, stats.ApprovalRate, 0.001) // 3 approved / 7 (3 approved + 4 declined)
 	require.GreaterOrEqual(t, stats.P99LatencyMs, int64(0))
 
 	byRC := map[string]int64{}
@@ -48,6 +49,8 @@ func TestTranLogRepository_overview_countsApprovalRateAndDeclineReasons__MCN_306
 		byRC[dr.ResponseCode] = dr.Count
 	}
 	require.Equal(t, int64(2), byRC["51"])
+	_, hasBlank := byRC[""]
+	require.False(t, hasBlank, "OVW-G11: a declined row without an RC is never a blank bucket")
 	require.Equal(t, int64(1), byRC["62"])
 }
 

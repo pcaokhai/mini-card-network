@@ -87,13 +87,14 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// A response MAC is retried under a PENDING key of unknown outcome, else the recently retired
 	// key (review S2 of #121).
 	macFallback := keyStoreRepo.MACFallback()
-	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, macFallback)
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, macFallback, linkRepo)
 	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, reversalQueuer, hsmModule, zak, macFallback)
 	rotationRepo := rotation.NewRepository(pool)
 	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK,
 		rotation.WithActivationHook(reloadOnActivate(activeKeys, logger)), rotation.WithSendAttempts(cfg.RotationSendAttempts), rotation.WithSendTimeout(cfg.EchoTimeout))
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
-	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, zak, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
+	ackAnnouncer := reversalAckAnnouncer{Port: safRepo, rrnOf: safRepo.TranRRN, announce: purchaseService.BroadcastUpdate, logger: logger}
+	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, zak, ackAnnouncer, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 	safWorker.SetLogger(logger)
 
 	fakeIssuer, toxiproxyOpts, err := setupFakeIssuer(cfg)
@@ -244,6 +245,30 @@ type advtxnHubAdapter struct{ hub *ws.Hub }
 
 func (a advtxnHubAdapter) BroadcastTransaction(eventType string, txn advtxn.Transaction) {
 	a.hub.BroadcastChaos(eventType, txn)
+}
+
+// reversalAckAnnouncer broadcasts transaction.updated once the SAF worker's acknowledgement has
+// moved a transaction to REVERSED (OVW-G3). The acknowledgement is already committed, so a failed
+// announcement is only logged.
+type reversalAckAnnouncer struct {
+	saf.Port
+	rrnOf    func(ctx context.Context, safID int64) (string, error)
+	announce func(ctx context.Context, rrn string) error
+	logger   *slog.Logger
+}
+
+func (a reversalAckAnnouncer) MarkAcked(ctx context.Context, id int64) error {
+	if err := a.Port.MarkAcked(ctx, id); err != nil {
+		return err
+	}
+	rrn, err := a.rrnOf(ctx, id)
+	if err == nil {
+		err = a.announce(ctx, rrn)
+	}
+	if err != nil {
+		a.logger.ErrorContext(ctx, "announce acknowledged reversal", "saf_id", id, "error", err.Error())
+	}
+	return nil
 }
 
 // rotationAdapter adapts rotation.Runner/rotation.Repository to api.Rotator. Rotation initiation

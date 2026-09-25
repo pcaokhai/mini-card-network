@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -156,6 +157,17 @@ func finishOnAck(ctx context.Context, tx pgx.Tx, tranID int64, from, to, update 
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO tran_state_history (tran_id, from_state, to_state) VALUES ($1, $2, $3)`, tranID, from, to)
 	return err
+}
+
+// TranRRN is the RRN of the transaction saf_queue row id belongs to.
+func (r *SafRepository) TranRRN(ctx context.Context, id int64) (string, error) {
+	var rrn string
+	err := r.pool.QueryRow(ctx,
+		`SELECT t.rrn FROM saf_queue s JOIN tran_log t ON t.id = s.tran_id WHERE s.id = $1`, id).Scan(&rrn)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return strings.TrimSpace(rrn), err
 }
 
 // MarkDead marks id DEAD after max_attempts were exhausted without an ACK (MCN-401-AC3).

@@ -13,6 +13,9 @@ const (
 	statusReversed        = "REVERSED"
 	labelPurchase         = "Purchase"
 	labelRefund           = "Refund"
+	labelHold             = "Hold"
+	labelCompletion       = "Completion"
+	labelReversal         = "Reversal"
 )
 
 // Actor mirrors contracts/openapi.yaml's Actor enum.
@@ -172,13 +175,14 @@ func insertAtOffset(steps []Step, s Step) []Step {
 // moneyRows keeps delta semantics; balanceAfter stays nil because the web reads balances from
 // the issuer ledger.
 func moneyRows(txn store.TranLogRow, steps []Step) []MoneyRow {
+	sign := moneySign(txn.Type)
 	debitAt := debitStep(steps)
-	if debitAt == 0 {
+	if debitAt == 0 || sign == 0 {
 		return nil
 	}
-	rows := []MoneyRow{{Label: moneyLabel(txn.Type), Delta: -txn.Amount, AtStep: debitAt}}
-	if refundAt := seqOf(steps, CodeReversalConfirmed); refundAt > 0 {
-		rows = append(rows, MoneyRow{Label: labelRefund, Delta: txn.Amount, AtStep: refundAt})
+	rows := []MoneyRow{{Label: moneyLabel(txn.Type), Delta: sign * txn.Amount, AtStep: debitAt}}
+	if reversedAt := seqOf(steps, CodeReversalConfirmed); reversedAt > 0 {
+		rows = append(rows, MoneyRow{Label: reversalLabel(txn.Type), Delta: -sign * txn.Amount, AtStep: reversedAt})
 	}
 	return rows
 }
@@ -210,11 +214,24 @@ func seqOf(steps []Step, code StepCode) int {
 
 func moneyLabel(tranType string) string {
 	switch tranType {
-	case "REFUND":
+	case tranTypeRefund:
 		return labelRefund
+	case tranTypePreAuth:
+		return labelHold
+	case tranTypeCompletion:
+		return labelCompletion
 	default:
 		return labelPurchase
 	}
+}
+
+// reversalLabel names the money a confirmed reversal moves: back to the cardholder, or, for a
+// refund, back to the merchant.
+func reversalLabel(tranType string) string {
+	if tranType == tranTypeRefund {
+		return labelReversal
+	}
+	return labelRefund
 }
 
 // LatencyMs is request sent -> issuer response, nil when the issuer never answered (timeout,

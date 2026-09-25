@@ -26,14 +26,17 @@ const (
 )
 
 type fakeTranLogReader struct {
+	filter     store.TransactionFilter
+	listErr    error
 	page       []store.TranLogRow
 	nextCursor string
 	byRRN      map[string]store.TranLogRow
 	history    []store.StateTransition
 }
 
-func (f *fakeTranLogReader) List(context.Context, store.TransactionFilter) ([]store.TranLogRow, string, error) {
-	return f.page, f.nextCursor, nil
+func (f *fakeTranLogReader) List(_ context.Context, filter store.TransactionFilter) ([]store.TranLogRow, string, error) {
+	f.filter = filter
+	return f.page, f.nextCursor, f.listErr
 }
 
 func (f *fakeTranLogReader) Get(_ context.Context, rrn string) (store.TranLogRow, error) {
@@ -73,7 +76,7 @@ func TestGetTransaction_returns404ForUnknownRrn__MCN_304_AC1(t *testing.T) {
 	r := chi.NewRouter()
 	MountTransactionsQuery(r, &fakeTranLogReader{byRRN: map[string]store.TranLogRow{}}, fakeReversals{})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/transactions/nope", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/transactions/626514999999", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -83,11 +86,11 @@ func TestGetTransaction_returns404ForUnknownRrn__MCN_304_AC1(t *testing.T) {
 func TestGetTransaction_returnsTransaction__MCN_304_AC1(t *testing.T) {
 	r := chi.NewRouter()
 	reader := &fakeTranLogReader{byRRN: map[string]store.TranLogRow{
-		"x": {RRN: "x", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", AuthCode: "123456", Amount: 5000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: time.Now()},
+		"626514000001": {RRN: "626514000001", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", AuthCode: "123456", Amount: 5000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: time.Now()},
 	}}
 	MountTransactionsQuery(r, reader, fakeReversals{})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/transactions/x", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/transactions/626514000001", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -100,7 +103,7 @@ func TestGetTransactionJourney_returnsStepsAndMoney__MCN_304_AC2(t *testing.T) {
 	r := chi.NewRouter()
 	reader := &fakeTranLogReader{
 		byRRN: map[string]store.TranLogRow{
-			"x": {ID: 1, RRN: "x", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", Amount: 10000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: now},
+			"626514000001": {ID: 1, RRN: "626514000001", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", Amount: 10000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: now},
 		},
 		history: []store.StateTransition{
 			{FromStatus: "CREATED", ToStatus: statusSent, At: now},
@@ -109,7 +112,7 @@ func TestGetTransactionJourney_returnsStepsAndMoney__MCN_304_AC2(t *testing.T) {
 	}
 	MountTransactionsQuery(r, reader, fakeReversals{})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/transactions/x/journey", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/transactions/626514000001/journey", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -123,7 +126,7 @@ func TestGetTransactionJourney_returns404ForUnknownRrn__MCN_304_AC2(t *testing.T
 	r := chi.NewRouter()
 	MountTransactionsQuery(r, &fakeTranLogReader{byRRN: map[string]store.TranLogRow{}}, fakeReversals{})
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/transactions/nope/journey", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/transactions/626514999999/journey", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -133,7 +136,7 @@ func TestGetTransactionJourney_returns404ForUnknownRrn__MCN_304_AC2(t *testing.T
 func reversedTimeout(now time.Time) (store.TranLogRow, []store.StateTransition, *journey.Reversal) {
 	sent, responded, acked := now, now.Add(30*time.Second), now.Add(30090*time.Millisecond)
 	row := store.TranLogRow{
-		ID: 1, RRN: "626514000124", Type: tranTypePurchase, Status: "REVERSED", Amount: 600000, Currency: "704",
+		ID: 1, RRN: "626514000124", Type: tranTypePurchase, Status: statusReversed, Amount: 600000, Currency: "704",
 		MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: fixtureMID, MerchantName: testMerchantName,
 		NetworkSTAN: "000124", ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sent, RespondedAt: &responded, CreatedAt: now,
 	}
@@ -172,11 +175,11 @@ func TestGetTransactionJourney_embedsCodesAndMessages__MCN_304(t *testing.T) {
 func TestGetTransactions_fillsLatencyMs__MCN_304(t *testing.T) {
 	now := time.Now()
 	sent, responded := now, now.Add(162*time.Millisecond)
-	row := store.TranLogRow{RRN: "a", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: now, SentAt: &sent, RespondedAt: &responded}
+	row := store.TranLogRow{RRN: "626514000002", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: now, SentAt: &sent, RespondedAt: &responded}
 	r := chi.NewRouter()
-	MountTransactionsQuery(r, &fakeTranLogReader{page: []store.TranLogRow{row}, byRRN: map[string]store.TranLogRow{"a": row}}, fakeReversals{})
+	MountTransactionsQuery(r, &fakeTranLogReader{page: []store.TranLogRow{row}, byRRN: map[string]store.TranLogRow{"626514000002": row}}, fakeReversals{})
 
-	for _, path := range []string{"/v1/transactions", "/v1/transactions/a"} {
+	for _, path := range []string{"/v1/transactions", "/v1/transactions/626514000002"} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 

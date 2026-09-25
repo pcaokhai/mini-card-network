@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/mcn/gateway-go/internal/advtxn"
+	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
@@ -14,10 +16,18 @@ func transactionProblem(w http.ResponseWriter, err error, fallbackType string) {
 	switch {
 	case errors.Is(err, store.ErrUnknownTerminal):
 		problem(w, http.StatusUnprocessableEntity, "unknown-terminal", err.Error())
+	case errors.Is(err, purchase.ErrUnknownCardToken):
+		problem(w, http.StatusUnprocessableEntity, "unknown-card-token", "cardToken is not a simulator card")
+	case errors.Is(err, store.ErrIdempotencyKeyMismatch):
+		problem(w, http.StatusUnprocessableEntity, "idempotency-key-mismatch", "Idempotency-Key was used for a different request")
+	case errors.Is(err, store.ErrIdempotencyInProgress):
+		problem(w, http.StatusConflict, "conflict", "A request with this Idempotency-Key is still in progress")
+	case errors.Is(err, advtxn.ErrNotCompletable):
+		problem(w, http.StatusConflict, "conflict", err.Error())
 	case errors.Is(err, store.ErrNotReversible):
 		problem(w, http.StatusConflict, "not-reversible", err.Error())
 	case errors.Is(err, store.ErrNotFound):
-		problem(w, http.StatusNotFound, "unknown-transaction", err.Error())
+		problem(w, http.StatusNotFound, "not-found", err.Error())
 	default:
 		problem(w, http.StatusInternalServerError, fallbackType, err.Error())
 	}

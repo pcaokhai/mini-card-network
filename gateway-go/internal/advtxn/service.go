@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -49,7 +50,13 @@ const (
 	// noSTAN names a request that never got a network STAN because the link was down, as
 	// purchase.Service does (docs/03 §5 RRN format).
 	noSTAN = "000000"
+
+	eventCreated = "transaction.created"
 )
+
+// ErrNotCompletable means a completion names a transaction that is not an approved
+// pre-authorization (POS-G13).
+var ErrNotCompletable = errors.New("only an approved pre-authorization can be completed")
 
 // Money mirrors contracts/openapi.yaml's Money schema; reused directly from purchase per DRY
 // (docs/plans/MCN-603.md Task 1) since the shape is identical.
@@ -104,6 +111,9 @@ type Transaction struct {
 	OriginalRRN    string    `json:"originalRrn,omitempty"`
 	BusinessDate   string    `json:"businessDate"`
 	CreatedAt      time.Time `json:"createdAt"`
+	ResponseLabel  *string   `json:"responseLabel"`
+	LatencyMs      *int      `json:"latencyMs"`
+	TraceID        string    `json:"traceId,omitempty"`
 }
 
 // MuxSender sends a request on the acquirer's live issuer connection; *isonet.Supervisor
@@ -120,13 +130,8 @@ type TranLogPort interface {
 	Insert(ctx context.Context, row store.TranLogRow) (int64, error)
 	Get(ctx context.Context, rrn string) (store.TranLogRow, error)
 	UpdateStatus(ctx context.Context, id int64, status, responseCode, authCode string) error
+	UpdateAmounts(ctx context.Context, id int64, approvedAmount *int64, balance *store.Money) error
 	RecordStateTransition(ctx context.Context, id int64, fromStatus, toStatus string) error
-}
-
-// IdempotencyPort persists idempotency_record; *store.IdempotencyRepository satisfies it.
-type IdempotencyPort interface {
-	Find(ctx context.Context, key, route string) (*store.StoredResponse, error)
-	Store(ctx context.Context, key, route, requestHash string, status int, body []byte) error
 }
 
 // HubPort broadcasts a transaction event; internal/ws.Hub (extended for purchase.Service)
@@ -148,7 +153,7 @@ type Service struct {
 	cardTokens  *purchase.CardTokenRegistry
 	merchants   purchase.MerchantResolver
 	tranLog     TranLogPort
-	idempotency IdempotencyPort
+	idempotency purchase.IdempotencyPort
 	hub         HubPort
 	saf         SAFQueuer
 	hsm         hsm.Module
@@ -158,8 +163,8 @@ type Service struct {
 
 // NewService builds a Service, reusing the same dependency shapes purchase.NewService takes -
 // Ruling 2: a sibling service, not a re-derivation of purchase.Service's already-proven wiring.
-// reversal and keyStore are the same SAF queue and dual-key MAC lookup purchases use.
-func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency IdempotencyPort, hub HubPort, safQueuer SAFQueuer, hsmModule hsm.Module, zak []byte, keyStore purchase.RetiredKeyFinder) *Service {
+// safQueuer and keyStore are the same SAF queue and dual-key MAC lookup purchases use.
+func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency purchase.IdempotencyPort, hub HubPort, safQueuer SAFQueuer, hsmModule hsm.Module, zak []byte, keyStore purchase.RetiredKeyFinder) *Service {
 	return &Service{
 		mux: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, idempotency: idempotency, hub: hub,
 		saf: safQueuer, hsm: hsmModule, zak: zak, mac: purchase.NewMACVerifier(hsmModule, zak, keyStore),
@@ -168,21 +173,19 @@ func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants
 
 // sendParams carries what each flow-specific Create* method fills in before calling send.
 type sendParams struct {
-	mti            string
-	txnType        string
-	route          string
-	fields         map[int]string
-	rrn, stan      string
-	linkUp         bool
-	sentAt         time.Time // the moment DE 7 was built from
-	maskedPAN      string
-	cardToken      string
-	posEntryMode   string
-	terminalID     string
-	requestedAmt   Money
-	originalRRN    string
-	idempotencyKey string
-	requestHash    string
+	mti          string
+	txnType      string
+	route        string
+	fields       map[int]string
+	rrn, stan    string
+	linkUp       bool
+	sentAt       time.Time // the moment DE 7 was built from
+	maskedPAN    string
+	cardToken    string
+	posEntryMode string
+	terminalID   string
+	requestedAmt Money
+	originalRRN  string
 }
 
 // nextSTAN allocates the network STAN. linkUp is false when the issuer link can't carry the
@@ -212,39 +215,35 @@ func (s *Service) finalizeFields(ctx context.Context, p sendParams) (store.Merch
 	return merchant, nil
 }
 
-// send MACs and sends p.fields, persists the outcome, broadcasts it, and stores the idempotent
-// response - the one place every flow's send path runs (Global Constraints: every outgoing
-// message is MAC'd, no new path bypasses it).
-func (s *Service) send(ctx context.Context, p sendParams) (Transaction, error) {
-	if stored, err := s.idempotency.Find(ctx, p.idempotencyKey, p.route); err != nil {
-		return Transaction{}, fmt.Errorf("check idempotency: %w", err)
-	} else if stored != nil {
-		var txn Transaction
-		if err := json.Unmarshal(stored.Body, &txn); err != nil {
-			return Transaction{}, fmt.Errorf("decode stored transaction: %w", err)
-		}
-		return txn, nil
-	}
+// idempotent runs create once per (key, route), before any STAN is allocated, so a replay never
+// consumes one (POS-G3).
+func (s *Service) idempotent(ctx context.Context, route, key string, req any, create func() (Transaction, error)) (Transaction, error) {
+	return purchase.Idempotent(ctx, s.idempotency, key, route, hashRequest(req), http.StatusCreated, create)
+}
 
+// send MACs and sends p.fields, persists the outcome and broadcasts it - the one place every
+// flow's send path runs (Global Constraints: every outgoing message is MAC'd, no new path
+// bypasses it).
+func (s *Service) send(ctx context.Context, p sendParams) (Transaction, error) {
 	merchant, err := s.finalizeFields(ctx, p)
 	if err != nil {
 		return Transaction{}, err
 	}
 
-	var txn Transaction
-	if p.linkUp {
-		txn, err = s.sendAndRecord(ctx, p, merchant)
-	} else {
-		txn, err = s.recordLinkDown(ctx, p, merchant)
+	if !p.linkUp {
+		txn, err := s.recordLinkDown(ctx, p, merchant)
+		if err != nil {
+			return Transaction{}, err
+		}
+		s.hub.BroadcastTransaction(eventCreated, txn)
+		return txn, nil
 	}
+	txn, err := s.sendAndRecord(ctx, p, merchant)
 	if err != nil {
 		return Transaction{}, err
 	}
-	// The outcome is already recorded; a caller that went away must not stop it being replayable,
-	// or a retry with the same key would send the request again.
-	ctx, cancel := purchase.Detach(ctx)
-	defer cancel()
-	return txn, s.publish(ctx, p, txn)
+	s.hub.BroadcastTransaction(eventCreated, txn)
+	return txn, nil
 }
 
 // sendAndRecord logs the row as SENT, sends it, and records the outcome. Every failure after the
@@ -255,6 +254,7 @@ func (s *Service) sendAndRecord(ctx context.Context, p sendParams, merchant stor
 		RRN: p.rrn, Type: p.txnType, Status: statusCreated, Amount: p.requestedAmt.Amount, Currency: p.requestedAmt.Currency,
 		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: merchant.MID, NetworkSTAN: p.stan, MTI: p.mti,
 		ProcessingCode: p.fields[3], POSEntryMode: p.posEntryMode, SentAt: &p.sentAt, CardToken: p.cardToken,
+		OriginalRRN: p.originalRRN, TraceID: obs.TraceID(ctx),
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {
@@ -266,16 +266,46 @@ func (s *Service) sendAndRecord(ctx context.Context, p sendParams, merchant stor
 
 	sendCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
+	sendStart := time.Now()
 	resp, sendErr := s.mux.Send(sendCtx, p.mti, p.fields)
+	latencyMs := int(time.Since(sendStart).Milliseconds())
 	// The request may already be at the issuer: the outcome must be recorded whatever happened to
 	// the caller's request.
 	ctx, cancelPersist := purchase.Detach(ctx)
 	defer cancelPersist()
 
 	txn, macFailed := s.outcome(ctx, p, resp, sendErr)
-	txn = s.describe(txn, p, merchant)
+	txn = s.describe(ctx, txn, p, merchant)
+	if sendErr == nil {
+		txn.LatencyMs = &latencyMs
+	}
 	row.ID = id
-	return s.finalize(ctx, p, row, txn, macFailed)
+	finalized, err := s.finalize(ctx, p, row, txn, macFailed)
+	return finalized, afterSend(err)
+}
+
+// recordAmounts stores what the response reported beyond its RC (JRN-G3).
+func (s *Service) recordAmounts(ctx context.Context, id int64, txn Transaction) error {
+	if txn.ApprovedAmount == nil && txn.Balance == nil {
+		return nil
+	}
+	var approved *int64
+	if txn.ApprovedAmount != nil {
+		approved = &txn.ApprovedAmount.Amount
+	}
+	if err := s.tranLog.UpdateAmounts(ctx, id, approved, (*store.Money)(txn.Balance)); err != nil {
+		return fmt.Errorf("update tran_log amounts: %w", err)
+	}
+	return nil
+}
+
+// afterSend marks err as raised once the request may be at the issuer, so its idempotency key is
+// never released for a resend (nil stays nil).
+func afterSend(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %w", purchase.ErrAfterSend, err)
 }
 
 // outcome maps mux.Send's result onto a Transaction, verifying the response's MAC. A completion's
@@ -308,6 +338,7 @@ func (s *Service) outcome(ctx context.Context, p sendParams, resp map[int]string
 // holds, so a database hiccup never leaves it undone.
 func (s *Service) finalize(ctx context.Context, p sendParams, row store.TranLogRow, txn Transaction, macFailed bool) (Transaction, error) {
 	current, recordErr := s.recordStatus(ctx, row.ID, txn)
+	recordErr = errors.Join(recordErr, s.recordAmounts(ctx, row.ID, txn))
 	switch {
 	case p.txnType == tranTypeBalance:
 		return txn, recordErr
@@ -358,10 +389,11 @@ func reversalReason(status string, macFailed bool) string {
 // recordLinkDown logs a request the link could not carry as DECLINED RC 91: nothing was sent, so
 // there is nothing to reverse (MCN-303-AC4).
 func (s *Service) recordLinkDown(ctx context.Context, p sendParams, merchant store.Merchant) (Transaction, error) {
-	txn := s.describe(Transaction{Type: p.txnType, Amount: p.requestedAmt, Status: statusDeclined, ResponseCode: rcLinkDown}, p, merchant)
+	txn := s.describe(ctx, Transaction{Type: p.txnType, Amount: p.requestedAmt, Status: statusDeclined, ResponseCode: rcLinkDown}, p, merchant)
 	row := store.TranLogRow{
 		RRN: p.rrn, Type: p.txnType, Status: statusDeclined, Amount: p.requestedAmt.Amount, Currency: p.requestedAmt.Currency,
 		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: merchant.MID, ResponseCode: rcLinkDown, MTI: p.mti,
+		OriginalRRN: p.originalRRN, TraceID: txn.TraceID,
 	}
 	if _, err := s.tranLog.Insert(ctx, row); err != nil {
 		return Transaction{}, fmt.Errorf("insert tran_log for link-down decline: %w", err)
@@ -380,26 +412,15 @@ func (s *Service) transition(ctx context.Context, id int64, from, to, responseCo
 }
 
 // describe fills the fields every response carries, whatever the outcome.
-func (s *Service) describe(txn Transaction, p sendParams, merchant store.Merchant) Transaction {
+func (s *Service) describe(ctx context.Context, txn Transaction, p sendParams, merchant store.Merchant) Transaction {
 	txn.RRN, txn.STAN, txn.MaskedPAN, txn.TerminalID, txn.OriginalRRN = p.rrn, p.stan, p.maskedPAN, p.terminalID, p.originalRRN
 	txn.MerchantName = merchant.Name
+	txn.ResponseLabel = purchase.ResponseLabel(txn.ResponseCode)
+	txn.TraceID = obs.TraceID(ctx)
 	now := time.Now().UTC()
 	txn.CreatedAt = now
 	txn.BusinessDate = now.Format("2006-01-02")
 	return txn
-}
-
-// publish broadcasts txn and stores it as the idempotent response.
-func (s *Service) publish(ctx context.Context, p sendParams, txn Transaction) error {
-	s.hub.BroadcastTransaction("transaction.created", txn)
-	body, err := json.Marshal(txn)
-	if err != nil {
-		return fmt.Errorf("encode transaction for idempotency store: %w", err)
-	}
-	if err := s.idempotency.Store(ctx, p.idempotencyKey, p.route, p.requestHash, 201, body); err != nil {
-		return fmt.Errorf("store idempotent response: %w", err)
-	}
-	return nil
 }
 
 // responseMTI is the response to request mti: the function digit plus one (0100 -> 0110).
@@ -411,7 +432,7 @@ func responseMTI(mti string) string {
 // place partial-approval mapping happens (docs/plans/MCN-603.md Task 2: RC 10 sets
 // ApprovedAmount, distinct from requestedAmount, not duplicated per flow).
 func mapResponseToTransaction(txnType string, requestedAmount Money, resp map[int]string) Transaction {
-	txn := Transaction{Type: txnType, Amount: requestedAmount, ResponseCode: resp[39], AuthCode: resp[38]}
+	txn := Transaction{Type: txnType, Amount: requestedAmount, ResponseCode: purchase.ResponseCodeOf(resp), AuthCode: resp[38]}
 	switch txn.ResponseCode {
 	case "00":
 		txn.Status = statusApproved

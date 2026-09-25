@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// ErrInvalidCursor means a network events cursor is not one ListEvents issued.
+// ErrInvalidCursor means a cursor (network events, transactions) is not one this store issued.
 var ErrInvalidCursor = errors.New("invalid cursor")
 
 // Link is one row of link_state. JSON shape matches contracts/openapi.yaml's Link schema

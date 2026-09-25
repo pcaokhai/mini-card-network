@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // SetupTracing installs W3C propagation and a tracer provider. With enabled=false spans are created
@@ -31,4 +32,12 @@ func SetupTracing(ctx context.Context, service string, enabled bool) (func(conte
 	tp := sdktrace.NewTracerProvider(opts...)
 	otel.SetTracerProvider(tp)
 	return tp.Shutdown, nil
+}
+
+// TraceID is the W3C trace id of ctx's span, empty when ctx carries none.
+func TraceID(ctx context.Context) string {
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		return sc.TraceID().String()
+	}
+	return ""
 }

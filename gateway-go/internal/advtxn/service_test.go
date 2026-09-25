@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/isonet"
@@ -51,6 +52,12 @@ type fakeTranLog struct {
 	failStatus  string // UpdateStatus to this status fails, leaving the row as it was
 }
 
+func (f *fakeTranLog) UpdateAmounts(_ context.Context, id int64, approved *int64, balance *store.Money) error {
+	f.rows[id-1].ApprovedAmount = approved
+	f.rows[id-1].Balance = balance
+	return nil
+}
+
 func (f *fakeTranLog) RecordStateTransition(_ context.Context, _ int64, from, to string) error {
 	f.transitions = append(f.transitions, from+"->"+to)
 	return nil
@@ -80,28 +87,52 @@ func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, response
 	return nil
 }
 
+// fakeIdempotency mirrors store.IdempotencyRepository's reserve/store/release contract.
 type fakeIdempotency struct {
 	stored   map[string]store.StoredResponse
 	storeCtx context.Context // the context the last Store ran on
+	hashes   map[string]string
+	pending  map[string]bool
+	released []string
 }
 
-func (f *fakeIdempotency) Find(_ context.Context, key, route string) (*store.StoredResponse, error) {
-	stored, ok := f.stored[key+route]
-	if !ok {
-		return nil, nil
+func (f *fakeIdempotency) Reserve(_ context.Context, key, route, hash string) (*store.StoredResponse, error) {
+	if f.hashes == nil {
+		f.stored, f.hashes, f.pending = map[string]store.StoredResponse{}, map[string]string{}, map[string]bool{}
 	}
-	return &stored, nil
+	k := key + route
+	if h, ok := f.hashes[k]; ok {
+		switch {
+		case h != hash:
+			return nil, store.ErrIdempotencyKeyMismatch
+		case f.pending[k]:
+			return nil, store.ErrIdempotencyInProgress
+		}
+		stored := f.stored[k]
+		return &stored, nil
+	}
+	f.hashes[k], f.pending[k] = hash, true
+	return nil, nil
 }
 
-func (f *fakeIdempotency) Store(ctx context.Context, key, route, _ string, status int, body []byte) error {
+func (f *fakeIdempotency) Store(ctx context.Context, key, route, hash string, status int, body []byte) error {
 	f.storeCtx = ctx
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if f.stored == nil {
-		f.stored = map[string]store.StoredResponse{}
+	k := key + route
+	f.stored[k], f.hashes[k] = store.StoredResponse{Status: status, Body: body}, hash
+	delete(f.pending, k)
+	return nil
+}
+
+func (f *fakeIdempotency) Release(_ context.Context, key, route string) error {
+	k := key + route
+	if f.pending[k] {
+		delete(f.pending, k)
+		delete(f.hashes, k)
+		f.released = append(f.released, key)
 	}
-	f.stored[key+route] = store.StoredResponse{Status: status, Body: body}
 	return nil
 }
 
@@ -205,7 +236,7 @@ func TestCreatePreAuth_sendsMTI0100WithDE25_06__MCN_603_AC1(t *testing.T) {
 func TestCreateCompletion_sendsMTI0220ReferencingOriginalRRN__MCN_603_AC1(t *testing.T) {
 	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
 	svc, tranLog, _, _ := newTestService(mux)
-	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "123456789012", Type: tranTypePreAuth, TerminalID: "00000042", MaskedPAN: "970436******4417"})
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "123456789012", Type: tranTypePreAuth, Status: statusApproved, TerminalID: "00000042", MaskedPAN: "970436******4417"})
 
 	txn, err := svc.CreateCompletion(context.Background(), "123456789012", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "idem-completion-1")
 
@@ -304,7 +335,7 @@ func TestCreateRefund_unknownTerminalSendsNothing__MCN_002(t *testing.T) {
 func TestCreateCompletion_inheritsPreAuthsTerminalAndMerchant__MCN_002(t *testing.T) {
 	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
 	svc, tranLog, _, _ := newTestService(mux)
-	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, TerminalID: "00000047", MaskedPAN: "970436******5540"})
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, Status: statusApproved, TerminalID: "00000047", MaskedPAN: "970436******5540"})
 
 	txn, err := svc.CreateCompletion(context.Background(), "626514000300", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "idem-completion-merchant")
 
@@ -512,3 +543,96 @@ func TestResponseMTI(t *testing.T) {
 
 // badMACHex never matches the fake HSM's MAC.
 const badMACHex = "FFFFFFFFFFFFFFFF"
+
+func TestCreatePreAuth_replayNeverAllocatesASTAN__POS_G3(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, _, _, _ := newTestService(mux)
+	_, err := svc.CreatePreAuth(context.Background(), samplePreAuthRequest(), "key-replay")
+	require.NoError(t, err)
+
+	_, err = svc.CreatePreAuth(context.Background(), samplePreAuthRequest(), "key-replay")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, mux.stanCounter)
+}
+
+func TestCreateRefund_sameKeyDifferentRequestIsAMismatch__POS_G3(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, _, _, _ := newTestService(mux)
+	_, err := svc.CreateRefund(context.Background(), sampleRefundRequest(), "key-refund")
+	require.NoError(t, err)
+
+	other := sampleRefundRequest()
+	other.Amount.Amount = 1
+	_, err = svc.CreateRefund(context.Background(), other, "key-refund")
+
+	require.ErrorIs(t, err, store.ErrIdempotencyKeyMismatch)
+	require.Equal(t, 1, mux.stanCounter)
+}
+
+func TestCreateBalanceInquiry_amountCarriesTheCardCurrency__POS_G7(t *testing.T) {
+	svc, tranLog, _, _ := newTestService(&fakeMux{response: map[int]string{39: "00", 64: stdMACHex, 54: "704C000000012345"}})
+
+	txn, err := svc.CreateBalanceInquiry(context.Background(), sampleBalanceRequest(), "key-balance")
+
+	require.NoError(t, err)
+	require.Equal(t, Money{Amount: 0, Currency: "704"}, txn.Amount)
+	require.Equal(t, "704", tranLog.rows[0].Currency)
+	require.Equal(t, &store.Money{Amount: 12345, Currency: "704"}, tranLog.rows[0].Balance, "JRN-G3")
+}
+
+func TestCreateCompletion_requiresAnApprovedPreAuth__POS_G13(t *testing.T) {
+	for name, original := range map[string]store.TranLogRow{
+		"a purchase":           {RRN: "626514000301", Type: "PURCHASE", Status: statusApproved, TerminalID: "00000042"},
+		"a declined pre-auth":  {RRN: "626514000301", Type: tranTypePreAuth, Status: statusDeclined, TerminalID: "00000042"},
+		"a reversing pre-auth": {RRN: "626514000301", Type: tranTypePreAuth, Status: statusReversalPending, TerminalID: "00000042"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+			svc, tranLog, idem, _ := newTestService(mux)
+			tranLog.rows = append(tranLog.rows, original)
+
+			_, err := svc.CreateCompletion(context.Background(), "626514000301", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "key-completion")
+
+			require.ErrorIs(t, err, ErrNotCompletable)
+			require.Nil(t, mux.lastFields)
+			require.Equal(t, []string{"key-completion"}, idem.released)
+		})
+	}
+}
+
+func TestCreateCompletion_persistsTheOriginalRRNAndApprovedAmount__JRN_G3(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "10", 4: "000000004000", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000302", Type: tranTypePreAuth, Status: statusApproved, TerminalID: "00000042", CardToken: testCardToken})
+
+	txn, err := svc.CreateCompletion(tracedContext(), "626514000302", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "key-completion-10")
+
+	require.NoError(t, err)
+	row := tranLog.rows[1]
+	require.Equal(t, "626514000302", row.OriginalRRN)
+	require.Equal(t, int64(4000), *row.ApprovedAmount)
+	require.Equal(t, testTraceID, row.TraceID)
+	require.Equal(t, testTraceID, txn.TraceID, "POS-G8")
+	require.NotNil(t, txn.ResponseLabel, "POS-G8")
+	require.NotNil(t, txn.LatencyMs, "POS-G8")
+}
+
+func TestSend_responseWithoutRCIsDeclinedFormatError__OVW_G11(t *testing.T) {
+	svc, tranLog, _, _ := newTestService(&fakeMux{response: map[int]string{64: stdMACHex}})
+
+	txn, err := svc.CreateRefund(context.Background(), sampleRefundRequest(), "key-no-rc")
+
+	require.NoError(t, err)
+	require.Equal(t, statusDeclined, txn.Status)
+	require.Equal(t, "30", txn.ResponseCode)
+	require.Equal(t, "30", tranLog.rows[0].ResponseCode)
+}
+
+const testTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+
+func tracedContext() context.Context {
+	traceID, _ := trace.TraceIDFromHex(testTraceID)
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	return trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID}))
+}

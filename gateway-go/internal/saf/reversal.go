@@ -54,7 +54,7 @@ func (q *ReversalQueuer) Queue(ctx context.Context, txn store.TranLogRow, reason
 	// Only from the state the caller read: a racing second cancellation, or one after the
 	// reversal already went out, must not queue a second 0420.
 	moved, err := tx.Exec(ctx,
-		`UPDATE tran_log SET state = $2 WHERE id = $1 AND state = $3`, txn.ID, statusReversalPending, txn.Status)
+		`UPDATE tran_log SET state = $2, reversal_reason = $4 WHERE id = $1 AND state = $3`, txn.ID, statusReversalPending, txn.Status, reasonCode)
 	if err != nil {
 		return fmt.Errorf("update tran_log to %s: %w", statusReversalPending, err)
 	}

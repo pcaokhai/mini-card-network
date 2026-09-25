@@ -19,20 +19,20 @@ func (b builder) requestSteps() []timedStep {
 	steps := []timedStep{{start, Step{
 		Code: CodePOSRequest, Actor: ActorPOS, Kind: KindOK,
 		Title: "POS sends the request", EasyText: "The card was read and the terminal asked for payment.",
-		TechnicalText: fmt.Sprintf("POST /v1/purchases · TID %s · entry mode %s", b.txn.TerminalID, orDash(b.txn.POSEntryMode)),
+		TechnicalText: fmt.Sprintf("POST %s · TID %s · entry mode %s", b.requestPath(), b.txn.TerminalID, orDash(b.txn.POSEntryMode)),
 	}}}
 	sentAt, sent := b.sentAt()
 	if !sent {
 		return append(steps, timedStep{start, Step{
 			Code: CodeLocalDecline, Actor: ActorAcquirer, Kind: KindBad,
 			Title: "Declined before reaching the issuer", EasyText: EasyTextForRC(b.txn.ResponseCode),
-			TechnicalText: fmt.Sprintf("Link not signed on · RC %s · no 0200 sent", b.txn.ResponseCode),
+			TechnicalText: fmt.Sprintf("Link not signed on · RC %s · no %s sent", b.txn.ResponseCode, b.requestMTI()),
 		}})
 	}
 	return append(steps, timedStep{sentAt, Step{
 		Code: CodeRequestSent, Actor: ActorAcquirer, Kind: KindOK,
 		Title: "Request sent to the issuer", EasyText: "The acquirer packed the request and sent it to the card's bank.",
-		TechnicalText: fmt.Sprintf("0200 · STAN %s · RRN %s · amount %d %s", b.txn.NetworkSTAN, b.txn.RRN, b.txn.Amount, b.txn.Currency),
+		TechnicalText: fmt.Sprintf("%s · STAN %s · RRN %s · amount %d %s", b.requestMTI(), b.txn.NetworkSTAN, b.txn.RRN, b.txn.Amount, b.txn.Currency),
 		Message:       b.request(),
 	}})
 }
@@ -73,15 +73,15 @@ func (b builder) issuerResponse(status string, elapsedMs int) Step {
 	if status == statusApproved {
 		return Step{
 			Code: CodeIssuerApproved, Actor: ActorIssuer, Kind: KindOK,
-			Title: "Issuer approved", EasyText: "The card's bank approved and took the money.",
-			TechnicalText: fmt.Sprintf("0210 · RC %s · DE 38 %s · %d ms after the 0200", rc, orDash(b.txn.AuthCode), elapsedMs),
+			Title: "Issuer approved", EasyText: b.approvedText(),
+			TechnicalText: fmt.Sprintf("%s · RC %s · DE 38 %s · %d ms after the %s", b.responseMTI(), rc, orDash(b.txn.AuthCode), elapsedMs, b.requestMTI()),
 			Message:       b.response(),
 		}
 	}
 	return Step{
 		Code: CodeIssuerDeclined, Actor: ActorIssuer, Kind: KindBad,
 		Title: "Issuer declined", EasyText: EasyTextForRC(rc),
-		TechnicalText: fmt.Sprintf("0210 · RC %s · %d ms after the 0200", rc, elapsedMs),
+		TechnicalText: fmt.Sprintf("%s · RC %s · %d ms after the %s", b.responseMTI(), rc, elapsedMs, b.requestMTI()),
 		Message:       b.response(),
 	}
 }
@@ -91,7 +91,7 @@ func (b builder) noResponse(elapsedMs int) Step {
 		Code: CodeNoResponse, Actor: ActorAcquirer, Kind: KindWarn,
 		Title:         "No response from the issuer",
 		EasyText:      "The card's bank did not answer in time, so the acquirer assumes the money was taken.",
-		TechnicalText: fmt.Sprintf("No 0210 for STAN %s within %d ms · SENT → TIMED_OUT", b.txn.NetworkSTAN, elapsedMs),
+		TechnicalText: fmt.Sprintf("No %s for STAN %s within %d ms · SENT → TIMED_OUT", b.responseMTI(), b.txn.NetworkSTAN, elapsedMs),
 	}
 }
 
@@ -142,8 +142,8 @@ func (b builder) reversalSent() Step {
 	return Step{
 		Code: CodeReversalSent, Actor: ActorAcquirer, Kind: KindReversal,
 		Title: "Reversal sent", EasyText: "The cancel order went out, naming the original payment.",
-		TechnicalText: fmt.Sprintf("%s · STAN %s · DE 90 → 0200 STAN %s · attempts %d · SAF %s",
-			mti, orDash(b.reversalField(11)), b.txn.NetworkSTAN, b.reversalSends(), b.reversalStatus()),
+		TechnicalText: fmt.Sprintf("%s · STAN %s · DE 90 → %s STAN %s · attempts %d · SAF %s",
+			mti, orDash(b.reversalField(11)), b.requestMTI(), b.txn.NetworkSTAN, b.reversalSends(), b.reversalStatus()),
 		Message: b.advice(mti),
 	}
 }
@@ -210,7 +210,7 @@ func (b builder) lateResponse() (Step, bool) {
 		Code: CodeLateResponse, Actor: ActorIssuer, Kind: KindWarn,
 		OffsetMs: msBetween(b.start(), *b.txn.LateResponseAt),
 		Title:    "Late response", EasyText: "The bank's answer arrived after the acquirer had given up. It is only recorded.",
-		TechnicalText: fmt.Sprintf("0210 received after timeout, RC %s · state unchanged", b.txn.LateResponseCode),
+		TechnicalText: fmt.Sprintf("%s received after timeout, RC %s · state unchanged", b.responseMTI(), b.txn.LateResponseCode),
 	}, true
 }
 

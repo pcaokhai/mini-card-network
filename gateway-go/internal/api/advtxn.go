@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -29,17 +28,15 @@ func MountAdvancedTransactions(r chi.Router, svc AdvancedTransactor) {
 
 func handleCreatePreAuth(svc AdvancedTransactor) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		idempotencyKey := req.Header.Get("Idempotency-Key")
-		if idempotencyKey == "" {
-			problem(w, http.StatusBadRequest, "idempotency-key-required", "Idempotency-Key header is required")
+		key, ok := idempotencyKey(w, req)
+		if !ok {
 			return
 		}
 		var body advtxn.PreAuthRequest
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			problem(w, http.StatusBadRequest, "invalid-request", err.Error())
+		if !decodeBody(w, req, &body, checkCardPresentWithAmount) {
 			return
 		}
-		txn, err := svc.CreatePreAuth(req.Context(), body, idempotencyKey)
+		txn, err := svc.CreatePreAuth(req.Context(), body, key)
 		if err != nil {
 			transactionProblem(w, err, "pre-authorization-failed")
 			return
@@ -50,18 +47,19 @@ func handleCreatePreAuth(svc AdvancedTransactor) http.HandlerFunc {
 
 func handleCreateCompletion(svc AdvancedTransactor) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		idempotencyKey := req.Header.Get("Idempotency-Key")
-		if idempotencyKey == "" {
-			problem(w, http.StatusBadRequest, "idempotency-key-required", "Idempotency-Key header is required")
+		key, ok := idempotencyKey(w, req)
+		if !ok {
+			return
+		}
+		rrn, ok := pathRRN(w, req)
+		if !ok {
 			return
 		}
 		var body advtxn.CompletionRequest
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			problem(w, http.StatusBadRequest, "invalid-request", err.Error())
+		if !decodeBody(w, req, &body, func(c advtxn.CompletionRequest) fieldErrors { return checkAmount(c.Amount) }) {
 			return
 		}
-		rrn := chi.URLParam(req, "rrn")
-		txn, err := svc.CreateCompletion(req.Context(), rrn, body, idempotencyKey)
+		txn, err := svc.CreateCompletion(req.Context(), rrn, body, key)
 		if err != nil {
 			transactionProblem(w, err, "completion-failed")
 			return
@@ -72,17 +70,15 @@ func handleCreateCompletion(svc AdvancedTransactor) http.HandlerFunc {
 
 func handleCreateRefund(svc AdvancedTransactor) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		idempotencyKey := req.Header.Get("Idempotency-Key")
-		if idempotencyKey == "" {
-			problem(w, http.StatusBadRequest, "idempotency-key-required", "Idempotency-Key header is required")
+		key, ok := idempotencyKey(w, req)
+		if !ok {
 			return
 		}
 		var body advtxn.RefundRequest
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			problem(w, http.StatusBadRequest, "invalid-request", err.Error())
+		if !decodeBody(w, req, &body, checkCardPresentWithAmount) {
 			return
 		}
-		txn, err := svc.CreateRefund(req.Context(), body, idempotencyKey)
+		txn, err := svc.CreateRefund(req.Context(), body, key)
 		if err != nil {
 			transactionProblem(w, err, "refund-failed")
 			return
@@ -93,21 +89,32 @@ func handleCreateRefund(svc AdvancedTransactor) http.HandlerFunc {
 
 func handleCreateBalanceInquiry(svc AdvancedTransactor) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		idempotencyKey := req.Header.Get("Idempotency-Key")
-		if idempotencyKey == "" {
-			problem(w, http.StatusBadRequest, "idempotency-key-required", "Idempotency-Key header is required")
+		key, ok := idempotencyKey(w, req)
+		if !ok {
 			return
 		}
 		var body advtxn.BalanceInquiryRequest
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			problem(w, http.StatusBadRequest, "invalid-request", err.Error())
+		if !decodeBody(w, req, &body, checkBalanceInquiry) {
 			return
 		}
-		txn, err := svc.CreateBalanceInquiry(req.Context(), body, idempotencyKey)
+		txn, err := svc.CreateBalanceInquiry(req.Context(), body, key)
 		if err != nil {
 			transactionProblem(w, err, "balance-inquiry-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)
 	}
+}
+
+func checkCardPresentWithAmount(r advtxn.PreAuthRequest) fieldErrors {
+	var errs fieldErrors
+	checkCardPresent(&errs, r.TerminalID, r.CardToken, r.EntryMode)
+	checkMoney(&errs, r.Amount)
+	return errs
+}
+
+func checkBalanceInquiry(r advtxn.BalanceInquiryRequest) fieldErrors {
+	var errs fieldErrors
+	checkCardPresent(&errs, r.TerminalID, r.CardToken, r.EntryMode)
+	return errs
 }

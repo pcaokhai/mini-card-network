@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -24,17 +23,15 @@ func MountPurchases(r chi.Router, svc PurchaseCreator) {
 
 func handleCreatePurchase(svc PurchaseCreator) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		idempotencyKey := req.Header.Get("Idempotency-Key")
-		if idempotencyKey == "" {
-			problem(w, http.StatusBadRequest, "idempotency-key-required", "Idempotency-Key header is required")
+		key, ok := idempotencyKey(w, req)
+		if !ok {
 			return
 		}
 		var body purchase.PurchaseRequest
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			problem(w, http.StatusBadRequest, "invalid-request", err.Error())
+		if !decodeBody(w, req, &body, checkPurchase) {
 			return
 		}
-		txn, err := svc.CreatePurchase(req.Context(), body, idempotencyKey)
+		txn, err := svc.CreatePurchase(req.Context(), body, key)
 		if err != nil {
 			transactionProblem(w, err, "purchase-failed")
 			return
@@ -46,17 +43,26 @@ func handleCreatePurchase(svc PurchaseCreator) http.HandlerFunc {
 
 func handleCancelPurchase(svc PurchaseCreator) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		idempotencyKey := req.Header.Get("Idempotency-Key")
-		if idempotencyKey == "" {
-			problem(w, http.StatusBadRequest, "idempotency-key-required", "Idempotency-Key header is required")
+		key, ok := idempotencyKey(w, req)
+		if !ok {
 			return
 		}
-		rrn := chi.URLParam(req, "rrn")
-		txn, err := svc.CancelPurchase(req.Context(), rrn, idempotencyKey)
+		rrn, ok := pathRRN(w, req)
+		if !ok {
+			return
+		}
+		txn, err := svc.CancelPurchase(req.Context(), rrn, key)
 		if err != nil {
 			transactionProblem(w, err, "cancellation-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusAccepted, txn)
 	}
+}
+
+func checkPurchase(r purchase.PurchaseRequest) fieldErrors {
+	var errs fieldErrors
+	checkCardPresent(&errs, r.TerminalID, r.CardToken, r.EntryMode)
+	checkMoney(&errs, r.Amount)
+	return errs
 }

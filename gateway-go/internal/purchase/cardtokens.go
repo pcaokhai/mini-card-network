@@ -13,6 +13,7 @@ type CardFixture struct {
 	PAN        string
 	ExpiryYYMM string
 	Balance    int64
+	Currency   string // ISO 4217 numeric, the card account's currency
 }
 
 // CardTokenRegistry resolves a simulator cardToken to its CardFixture.

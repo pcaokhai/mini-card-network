@@ -53,6 +53,7 @@ func TestReversalQueuer_queuesTimeoutAsReasonSixtyEightAtomically__MCN_401_AC1(t
 	got, err := tranLog.Get(ctx, "626514000123")
 	require.NoError(t, err)
 	require.Equal(t, "REVERSAL_PENDING", got.Status)
+	require.Equal(t, "68", got.ReversalReasonCode, "JRN-G7: the row records why it was reversed")
 
 	pending, _, err := safRepo.ListPending(ctx)
 	require.NoError(t, err)

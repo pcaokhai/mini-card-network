@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/store"
@@ -133,36 +134,73 @@ const stdMACHex = "0102030405060708"
 
 func stdHSM() *fakeHSM { return &fakeHSM{macToReturn: []byte{1, 2, 3, 4, 5, 6, 7, 8}} }
 
+// fakeIdempotency mirrors store.IdempotencyRepository's reserve/store/release contract.
 type fakeIdempotency struct {
 	stored   map[string]store.StoredResponse
 	storeCtx context.Context // the context the last Store ran on
+	hashes   map[string]string
+	pending  map[string]bool
+	released []string
 }
 
-func (f *fakeIdempotency) Find(_ context.Context, key, route string) (*store.StoredResponse, error) {
-	stored, ok := f.stored[key+route]
-	if !ok {
-		return nil, nil
+func (f *fakeIdempotency) Reserve(_ context.Context, key, route, hash string) (*store.StoredResponse, error) {
+	if f.hashes == nil {
+		f.stored, f.hashes, f.pending = map[string]store.StoredResponse{}, map[string]string{}, map[string]bool{}
 	}
-	return &stored, nil
+	k := key + route
+	if h, ok := f.hashes[k]; ok {
+		switch {
+		case h != hash:
+			return nil, store.ErrIdempotencyKeyMismatch
+		case f.pending[k]:
+			return nil, store.ErrIdempotencyInProgress
+		}
+		stored := f.stored[k]
+		return &stored, nil
+	}
+	f.hashes[k], f.pending[k] = hash, true
+	return nil, nil
 }
-func (f *fakeIdempotency) Store(ctx context.Context, key, route, _ string, status int, body []byte) error {
+func (f *fakeIdempotency) Store(ctx context.Context, key, route, hash string, status int, body []byte) error {
 	f.storeCtx = ctx
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if f.stored == nil {
-		f.stored = map[string]store.StoredResponse{}
+	k := key + route
+	f.stored[k], f.hashes[k] = store.StoredResponse{Status: status, Body: body}, hash
+	delete(f.pending, k)
+	return nil
+}
+
+func (f *fakeIdempotency) Release(_ context.Context, key, route string) error {
+	k := key + route
+	if f.pending[k] {
+		delete(f.pending, k)
+		delete(f.hashes, k)
+		f.released = append(f.released, key)
 	}
-	f.stored[key+route] = store.StoredResponse{Status: status, Body: body}
+	return nil
+}
+
+type fakeEvents struct{ recorded []string }
+
+func (f *fakeEvents) RecordEvent(_ context.Context, severity, _, technicalText string) error {
+	f.recorded = append(f.recorded, severity+" "+technicalText)
 	return nil
 }
 
 type fakeHub struct {
 	broadcasts    int
+	eventTypes    []string
+	last          Transaction
 	networkEvents []store.NetworkEvent
 }
 
-func (f *fakeHub) BroadcastTransaction(string, Transaction) { f.broadcasts++ }
+func (f *fakeHub) BroadcastTransaction(eventType string, txn Transaction) {
+	f.broadcasts++
+	f.eventTypes = append(f.eventTypes, eventType)
+	f.last = txn
+}
 
 func (f *fakeHub) BroadcastNetworkEvent(evt store.NetworkEvent) {
 	f.networkEvents = append(f.networkEvents, evt)
@@ -177,7 +215,7 @@ func newTestRequest() PurchaseRequest {
 
 func TestCreatePurchase_approvedMapsToApprovedStatus__MCN_303_AC2(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-1")
 
@@ -189,7 +227,7 @@ func TestCreatePurchase_approvedMapsToApprovedStatus__MCN_303_AC2(t *testing.T) 
 
 func TestCreatePurchase_declinedMapsToDeclinedStatus__MCN_303_AC2(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "14", 64: stdMACHex}}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-2")
 
@@ -200,7 +238,7 @@ func TestCreatePurchase_declinedMapsToDeclinedStatus__MCN_303_AC2(t *testing.T) 
 
 func TestCreatePurchase_linkDownDeclinesRc91WithoutSending__MCN_303_AC4(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: false}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-3")
 
@@ -213,7 +251,7 @@ func TestCreatePurchase_linkDownDeclinesRc91WithoutSending__MCN_303_AC4(t *testi
 func TestCreatePurchase_replaysIdempotentRequest__MCN_303_AC1(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "111111", 64: stdMACHex}}
 	idem := &fakeIdempotency{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 	req := PurchaseRequest{TerminalID: "00000042", CardToken: "tok_normal", EntryMode: "CHIP_PIN", Amount: Money{Amount: 5000, Currency: "704"}}
 
 	first, err := svc.CreatePurchase(context.Background(), req, "same-key")
@@ -227,7 +265,7 @@ func TestCreatePurchase_replaysIdempotentRequest__MCN_303_AC1(t *testing.T) {
 
 func TestCreatePurchase_unknownCardTokenIsDeclined__MCN_303(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00"}}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	req := newTestRequest()
 	req.CardToken = "tok_does_not_exist"
@@ -238,7 +276,7 @@ func TestCreatePurchase_unknownCardTokenIsDeclined__MCN_303(t *testing.T) {
 func TestCreatePurchase_timeoutQueuesReversalWithReasonSixtyEight__MCN_401_AC1(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}
 	reversal := &fakeReversal{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-timeout")
 
@@ -259,7 +297,7 @@ func TestCreatePurchase_everyPostSendFailureQueuesReversal__POS_G4(t *testing.T)
 			mux := &fakeMux{linkSignedOn: true, err: sendErr}
 			reversal := &fakeReversal{}
 			tranLog := &fakeTranLog{}
-			svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+			svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 			txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-"+name)
 
@@ -276,7 +314,7 @@ func TestCreatePurchase_linkDroppedBeforeSendDeclinesRc91WithoutReversal__POS_G4
 	mux := &fakeMux{linkSignedOn: true, err: isonet.ErrNotSignedOn}
 	reversal := &fakeReversal{}
 	tranLog := &fakeTranLog{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-link-dropped")
 
@@ -290,7 +328,7 @@ func TestCreatePurchase_linkDroppedBeforeSendDeclinesRc91WithoutReversal__POS_G4
 func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC1(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}
 	reversal := &fakeReversal{err: errors.New("boom")}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-timeout-fail")
 	require.Error(t, err)
@@ -299,7 +337,7 @@ func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC
 func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testing.T) {
 	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Type: tranTypePurchase, Status: statusApproved, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
-	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CancelPurchase(context.Background(), "x", "cancel-key-1")
 
@@ -312,7 +350,7 @@ func TestCancelPurchase_replaysIdempotentRequest__MCN_401_AC5(t *testing.T) {
 	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Type: tranTypePurchase, Status: statusApproved, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	idem := &fakeIdempotency{}
-	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, idem, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, idem, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	first, err := svc.CancelPurchase(context.Background(), "y", "same-cancel-key")
 	require.NoError(t, err)
@@ -329,7 +367,7 @@ func TestCancelPurchase_onlyAnApprovedPurchaseCanBeCancelled__MCN_401(t *testing
 	for _, status := range []string{statusDeclined, statusTimedOut, statusReversalPending, "REVERSED", statusSent} {
 		tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "v", Status: status}}}
 		reversal := &fakeReversal{}
-		svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+		svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 		_, err := svc.CancelPurchase(context.Background(), "v", "cancel-"+status)
 
@@ -343,7 +381,7 @@ func TestCancelPurchase_onlyAnApprovedPurchaseCanBeCancelled__MCN_401(t *testing
 func TestCancelPurchase_refusesAnApprovedNonPurchase__MCN_401(t *testing.T) {
 	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "p", Type: "PREAUTH", Status: statusApproved}}}
 	reversal := &fakeReversal{}
-	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	_, err := svc.CancelPurchase(context.Background(), "p", "cancel-preauth")
 
@@ -354,7 +392,8 @@ func TestCancelPurchase_refusesAnApprovedNonPurchase__MCN_401(t *testing.T) {
 func TestRecordLateResponse_setsColumnsWithoutChangingStatus__MCN_403_AC1(t *testing.T) {
 	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "z", Status: "TIMED_OUT"}}}
 	hub := &fakeHub{}
-	svc := NewService(&fakeMux{}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, hub, &fakeReversal{}, stdHSM(), testZAK, nil)
+	events := &fakeEvents{}
+	svc := NewService(&fakeMux{}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, hub, &fakeReversal{}, stdHSM(), testZAK, nil, events)
 
 	err := svc.RecordLateResponse(context.Background(), "z", "00")
 
@@ -363,12 +402,14 @@ func TestRecordLateResponse_setsColumnsWithoutChangingStatus__MCN_403_AC1(t *tes
 	require.Equal(t, "00", tranLog.rows[0].LateResponseCode)
 	require.Len(t, hub.networkEvents, 1)
 	require.Equal(t, "WARN", hub.networkEvents[0].Severity)
+	require.Equal(t, []string{"WARN late 0210 for RRN z, RC 00"}, events.recorded, "NET-G5: the event is persisted, not only broadcast")
+	require.Equal(t, []string{eventUpdated}, hub.eventTypes, "OVW-G3")
 }
 
 func TestRecordLateResponse_leavesOnTimeResponseAlone__MCN_403_AC1(t *testing.T) {
 	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "w", Status: statusSent}}}
 	hub := &fakeHub{}
-	svc := NewService(&fakeMux{}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, hub, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(&fakeMux{}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, hub, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	err := svc.RecordLateResponse(context.Background(), "w", "00")
 
@@ -380,7 +421,7 @@ func TestRecordLateResponse_leavesOnTimeResponseAlone__MCN_403_AC1(t *testing.T)
 func TestSendPurchase_computesAndAttachesMACOnOutgoing0200__MCN_502_AC1(t *testing.T) {
 	hsmFake := stdHSM()
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, hsmFake, testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, hsmFake, testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-mac-1")
 
@@ -394,7 +435,7 @@ func TestSendPurchase_badIncomingMACFailsTransactionAndQueuesReversal__MCN_502_A
 	hsmFake := stdHSM()
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: badMACHex}}
 	reversal := &fakeReversal{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-mac-2")
 
@@ -408,7 +449,7 @@ func TestSendPurchase_missingIncomingMACFailsTransaction__MCN_502_AC3(t *testing
 	hsmFake := stdHSM()
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456"}}
 	reversal := &fakeReversal{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-mac-3")
 
@@ -427,7 +468,7 @@ func TestSendPurchase_incomingMACVerifiesAgainstRecentlyRetiredZAKDuringRotation
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: oldMACHex}}
 	reversal := &fakeReversal{}
 	keyStore := &fakeRetiredKeyFinder{row: &store.KeyRow{KeyUnderLMKHex: hex.EncodeToString(oldZAK)}}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, keyStore)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, keyStore, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-rotation-1")
 
@@ -441,7 +482,7 @@ func TestSendPurchase_incomingMACStillFailsWhenNoRecentlyRetiredZAKMatches__MCN_
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: badMACHex}}
 	reversal := &fakeReversal{}
 	keyStore := &fakeRetiredKeyFinder{row: nil}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, keyStore)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, keyStore, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-rotation-2")
 
@@ -468,7 +509,7 @@ var testMerchants = fakeMerchants{
 func TestCreatePurchase_usesTerminalsMerchantInDE42AndTranLog__MCN_002(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}}
 	tranLog := &fakeTranLog{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 	req := newTestRequest()
 	req.TerminalID = "00000043"
 
@@ -483,7 +524,7 @@ func TestCreatePurchase_usesTerminalsMerchantInDE42AndTranLog__MCN_002(t *testin
 func TestCreatePurchase_unknownTerminalSendsNothing__MCN_002(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true}
 	tranLog := &fakeTranLog{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 	req := newTestRequest()
 	req.TerminalID = "99999999"
 
@@ -496,7 +537,7 @@ func TestCreatePurchase_unknownTerminalSendsNothing__MCN_002(t *testing.T) {
 
 func TestCreatePurchase_linkDownDeclineKeepsTerminalsMerchant__MCN_002(t *testing.T) {
 	tranLog := &fakeTranLog{}
-	svc := NewService(&fakeMux{linkSignedOn: false}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(&fakeMux{linkSignedOn: false}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 	req := newTestRequest()
 	req.TerminalID = "00000043"
 
@@ -510,7 +551,7 @@ func TestCreatePurchase_linkDownDeclineKeepsTerminalsMerchant__MCN_002(t *testin
 func TestCreatePurchase_recordsWhatA0420MustRepeat__MCN_401(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}}
 	tranLog := &fakeTranLog{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-0420-fields")
 
@@ -529,7 +570,7 @@ func TestCreatePurchase_callerGivingUpMidSendStillStoresTheOutcome__POS_G4(t *te
 	defer cancel()
 	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}, onSend: cancel}
 	idem := &fakeIdempotency{}
-	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	txn, err := svc.CreatePurchase(ctx, newTestRequest(), "idem-gave-up")
 
@@ -542,7 +583,7 @@ func TestCreatePurchase_callerGivingUpMidSendStillStoresTheOutcome__POS_G4(t *te
 
 func TestCreatePurchase_linkDroppedBeforeWriteLogsOneRow__POS_G4(t *testing.T) {
 	tranLog := &fakeTranLog{}
-	svc := NewService(&fakeMux{linkSignedOn: true, err: isonet.ErrNotSignedOn}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+	svc := NewService(&fakeMux{linkSignedOn: true, err: isonet.ErrNotSignedOn}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil, &fakeEvents{})
 
 	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-dropped-once")
 
@@ -562,7 +603,7 @@ func TestCreatePurchase_reversalIsQueuedEvenWhenTheStatusUpdateFails__POS_G4(t *
 		t.Run(name, func(t *testing.T) {
 			reversal := &fakeReversal{}
 			tranLog := &fakeTranLog{failStatus: tc.fail}
-			svc := NewService(tc.mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+			svc := NewService(tc.mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
 			_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-status-fails")
 
@@ -575,3 +616,94 @@ func TestCreatePurchase_reversalIsQueuedEvenWhenTheStatusUpdateFails__POS_G4(t *
 
 // badMACHex never matches the fake HSM's MAC.
 const badMACHex = "FFFFFFFFFFFFFFFF"
+
+func newIdemTestService(mux *fakeMux, tranLog *fakeTranLog, idem *fakeIdempotency, hub *fakeHub, reversal *fakeReversal) *Service {
+	return NewService(mux, DefaultCardTokens(), testMerchants, tranLog, idem, hub, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
+}
+
+func TestCreatePurchase_sameKeyDifferentRequestIsAMismatch__POS_G3(t *testing.T) {
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "111111", 64: stdMACHex}}
+	svc := newIdemTestService(mux, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{})
+	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "same-key")
+	require.NoError(t, err)
+	mux.lastFields = nil
+
+	other := newTestRequest()
+	other.Amount.Amount = 99
+	_, err = svc.CreatePurchase(context.Background(), other, "same-key")
+
+	require.ErrorIs(t, err, store.ErrIdempotencyKeyMismatch)
+	require.Nil(t, mux.lastFields, "never sent")
+}
+
+func TestCreatePurchase_releasesTheKeyOnlyWhenNothingWasSent__POS_G3(t *testing.T) {
+	idem := &fakeIdempotency{}
+	svc := newIdemTestService(&fakeMux{linkSignedOn: true}, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{})
+	req := newTestRequest()
+	req.CardToken = "tok_does_not_exist"
+	_, err := svc.CreatePurchase(context.Background(), req, "key-unknown-card")
+	require.Error(t, err)
+	require.Equal(t, []string{"key-unknown-card"}, idem.released, "nothing was sent, so the key may be retried")
+
+	svc = newIdemTestService(&fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{err: errors.New("boom")})
+	_, err = svc.CreatePurchase(context.Background(), newTestRequest(), "key-sent")
+	require.ErrorIs(t, err, ErrAfterSend)
+	require.NotContains(t, idem.released, "key-sent", "the request may be at the issuer: a retry must never resend it")
+}
+
+func TestCreatePurchase_responseCarriesLabelLatencyAndTraceID__POS_G8(t *testing.T) {
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "111111", 64: stdMACHex}}
+	tranLog := &fakeTranLog{}
+	svc := newIdemTestService(mux, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{})
+
+	txn, err := svc.CreatePurchase(tracedContext(), newTestRequest(), "key-trace")
+
+	require.NoError(t, err)
+	require.NotNil(t, txn.ResponseLabel)
+	require.NotNil(t, txn.LatencyMs)
+	require.Equal(t, testTraceID, txn.TraceID)
+	require.Equal(t, testTraceID, tranLog.rows[0].TraceID)
+}
+
+func TestCreatePurchase_responseWithoutRCIsDeclinedFormatError__OVW_G11(t *testing.T) {
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{64: stdMACHex}}
+	svc := newIdemTestService(mux, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{})
+
+	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-no-rc")
+
+	require.NoError(t, err)
+	require.Equal(t, statusDeclined, txn.Status)
+	require.Equal(t, "30", txn.ResponseCode)
+}
+
+func TestCancelPurchase_broadcastsTheStatusChange__OVW_G3(t *testing.T) {
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "626514000001", Type: tranTypePurchase, Status: statusApproved, Amount: 5000, Currency: "704"}}}
+	hub := &fakeHub{}
+	svc := newIdemTestService(&fakeMux{linkSignedOn: true}, tranLog, &fakeIdempotency{}, hub, &fakeReversal{})
+
+	_, err := svc.CancelPurchase(context.Background(), "626514000001", "key-cancel")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{eventUpdated}, hub.eventTypes)
+}
+
+func TestBroadcastUpdate_sendsTheRowsCurrentState__OVW_G3(t *testing.T) {
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "626514000002", Type: tranTypePurchase, Status: "REVERSED", Amount: 5000, Currency: "704", ResponseCode: "00", MaskedPAN: "970436******4417", ReversalReasonCode: "68"}}}
+	hub := &fakeHub{}
+	svc := newIdemTestService(&fakeMux{}, tranLog, &fakeIdempotency{}, hub, &fakeReversal{})
+
+	require.NoError(t, svc.BroadcastUpdate(context.Background(), "626514000002"))
+
+	require.Equal(t, []string{eventUpdated}, hub.eventTypes)
+	require.Equal(t, "REVERSED", hub.last.Status)
+	require.Equal(t, "970436******4417", hub.last.MaskedPAN)
+	require.Equal(t, store.ReversalTimeout, hub.last.ReversalReason)
+}
+
+const testTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+
+func tracedContext() context.Context {
+	traceID, _ := trace.TraceIDFromHex(testTraceID)
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	return trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID}))
+}
