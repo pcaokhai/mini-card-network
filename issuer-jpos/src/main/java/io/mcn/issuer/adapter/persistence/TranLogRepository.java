@@ -1,5 +1,6 @@
 package io.mcn.issuer.adapter.persistence;
 
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -172,16 +173,20 @@ public class TranLogRepository {
   }
 
   /** Marks the original transaction's row {@code REVERSED} once its reversing journal is posted. */
-  public void markReversed(long tranId, LocalDate businessDate) {
+  /**
+   * Flips an APPROVED row to REVERSED on the caller's connection, so it commits with the reversing
+   * journal. The row lock the UPDATE takes serialises a 0420 and its 0421 repeat: only the one that
+   * sees APPROVED gets {@code true} and posts.
+   */
+  public boolean markReversed(Connection conn, long tranId, LocalDate businessDate)
+      throws SQLException {
     String sql =
-        "UPDATE tran_log SET status = 'REVERSED', updated_at = now() WHERE id = ? AND business_date = ?";
-    try (var conn = dataSource.getConnection();
-        var stmt = conn.prepareStatement(sql)) {
+        "UPDATE tran_log SET status = 'REVERSED', updated_at = now()"
+            + " WHERE id = ? AND business_date = ? AND status = 'APPROVED'";
+    try (var stmt = conn.prepareStatement(sql)) {
       stmt.setLong(1, tranId);
       stmt.setObject(2, businessDate);
-      stmt.executeUpdate();
-    } catch (SQLException e) {
-      throw new IllegalStateException("mark tran_log reversed failed", e);
+      return stmt.executeUpdate() == 1;
     }
   }
 }

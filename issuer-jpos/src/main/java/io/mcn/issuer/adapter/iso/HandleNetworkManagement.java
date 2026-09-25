@@ -34,7 +34,10 @@ public final class HandleNetworkManagement {
       response.setResponseMTI();
       return handleNetworkManagement(request, response);
     }
-    if ("01".equals(mtiClass) || "02".equals(mtiClass)) {
+    // Owned by the listeners registered after this one in 30_iso_server.xml: AuthorizationListener
+    // (01/02) and ReversalListener (04). Claiming 04 here answered every reversal with RC 30
+    // before the reversal chain ever saw it.
+    if ("01".equals(mtiClass) || "02".equals(mtiClass) || "04".equals(mtiClass)) {
       return null;
     }
     ISOMsg response = (ISOMsg) request.clone();

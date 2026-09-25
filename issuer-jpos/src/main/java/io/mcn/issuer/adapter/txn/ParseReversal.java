@@ -23,9 +23,12 @@ public class ParseReversal implements TransactionParticipant {
     ctx.put(TxnContextKeys.ORIGINAL_MTI, originalData.substring(0, 4));
     ctx.put(TxnContextKeys.ORIGINAL_STAN, originalData.substring(4, 10));
     ctx.put(TxnContextKeys.ORIGINAL_DE7, originalData.substring(10, 20));
-    // trim(): tran_log.acquirer_id (what LocateAndReverse's findByReversalKey matches against)
-    // is stored unpadded, unlike this DE 90 sub-field's fixed width.
-    ctx.put(TxnContextKeys.ORIGINAL_ACQUIRER, originalData.substring(20, 31).trim());
+    // tran_log.acquirer_id (what LocateAndReverse's findByReversalKey matches against) is stored
+    // unpadded, but docs/03 §7.3 zero-fills this fixed-width sub-field: strip both the zero fill
+    // and any legacy space padding.
+    ctx.put(
+        TxnContextKeys.ORIGINAL_ACQUIRER,
+        originalData.substring(20, 31).trim().replaceFirst("^0+(?!$)", ""));
 
     if (request.hasField(39)) {
       ctx.put(TxnContextKeys.REVERSAL_REASON, request.getString(39));

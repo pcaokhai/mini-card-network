@@ -71,4 +71,29 @@ class SchemaMigrationTest {
       assertThat(cardColumns).contains("card_ref", "holder_name");
     }
   }
+
+  /**
+   * tran_log.response_code is an FK: an RC the issuer answers with but can't store aborts the log.
+   */
+  @Test
+  void everyResponseCodeInTheSpecExists__MCN_002() throws Exception {
+    com.zaxxer.hikari.HikariConfig cfg = new com.zaxxer.hikari.HikariConfig();
+    cfg.setJdbcUrl(postgres.getJdbcUrl());
+    cfg.setUsername(postgres.getUsername());
+    cfg.setPassword(postgres.getPassword());
+    DataSource ds = new com.zaxxer.hikari.HikariDataSource(cfg);
+    Flyway.configure().dataSource(ds).load().migrate();
+
+    Set<String> codes = new HashSet<>();
+    try (Connection c = ds.getConnection();
+        Statement st = c.createStatement()) {
+      ResultSet rs = st.executeQuery("SELECT code FROM response_code");
+      while (rs.next()) codes.add(rs.getString(1));
+    }
+    // docs/03-iso8583-interface-spec.md §8
+    assertThat(codes)
+        .contains(
+            "00", "05", "06", "10", "12", "13", "14", "17", "30", "51", "54", "55", "57", "61",
+            "62", "65", "68", "75", "91", "94", "95", "96");
+  }
 }
