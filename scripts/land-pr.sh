@@ -37,23 +37,27 @@ for _ in $(seq 1 20); do
 	[ "$STATE" != "UNKNOWN" ] && break
 	sleep 3
 done
+HEAD_SHA="$(gh pr view "$PR" --json headRefOid -q .headRefOid)"
 if [ "$STATE" = "BEHIND" ] || [ "$STATE" = "DIRTY" ]; then
 	echo "-- branch is $STATE, rebasing onto main --"
 	(cd "$WORKTREE" && git fetch origin main && git rebase origin/main)
 	echo "-- re-verifying: $TEST_CMD --"
 	(cd "$WORKTREE" && eval "$TEST_CMD")
 	(cd "$WORKTREE" && git push --force-with-lease)
-	echo "-- waiting for CI on the rebased commit --"
-	# Wait for the run of the pushed commit itself: pending checks are not registered for a few
-	# seconds after a push, so counting them once let the merge run before CI had started.
+	# The PR's headRefOid can lag the push for a few seconds; the pushed commit is the one to wait on.
 	HEAD_SHA="$(cd "$WORKTREE" && git rev-parse HEAD)"
-	RUN_ID=""
-	while [ -z "$RUN_ID" ]; do
-		sleep 8
-		RUN_ID="$(gh run list --branch "$BRANCH" --json databaseId,headSha -q ".[] | select(.headSha == \"$HEAD_SHA\") | .databaseId" | head -1)"
-	done
-	gh run watch "$RUN_ID" --exit-status >/dev/null
 fi
+
+echo "-- waiting for CI on the PR's head commit --"
+# Always wait for the CI run of the exact head being merged, rebase or not: a PR opened moments ago
+# has no finished run yet, and pending checks are not registered for a few seconds after a push,
+# so counting them once let the merge run before CI had started.
+RUN_ID=""
+while [ -z "$RUN_ID" ]; do
+	RUN_ID="$(gh run list --branch "$BRANCH" --workflow CI --json databaseId,headSha -q ".[] | select(.headSha == \"$HEAD_SHA\") | .databaseId" | head -1)"
+	[ -z "$RUN_ID" ] && sleep 8
+done
+gh run watch "$RUN_ID" --exit-status >/dev/null
 
 echo "-- confirming a real CI run happened, not just a third-party check --"
 gh run list --branch "$BRANCH" --limit 3
