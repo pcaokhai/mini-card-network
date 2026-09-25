@@ -290,28 +290,138 @@
   },
   "network": {
     "title": "Network operations",
-    "linksHeading": "Connections",
-    "statusPill": {
-      "SIGNED_ON": "Signed on",
-      "CONNECTED": "Connected",
-      "DOWN": "Down",
-      "DISCONNECTED": "Disconnected"
+    "subtitle": "Watch the links between the two banks, the resend queue and stand-in mode when something breaks.",
+    "toggle": {
+      "down": "Simulate issuer outage",
+      "restore": "Restore the issuer"
     },
-    "table": {
-      "link": "Link",
-      "status": "Status",
-      "lastEcho": "Last echo",
-      "p99": "p99 latency",
-      "inFlight": "In-flight"
+    "topology": {
+      "heading": "Connection map",
+      "ariaLabel": "Network map",
+      "segmentUp": "{from} → {to}: up",
+      "segmentDown": "{from} → {to}: down",
+      "pos": {
+        "title": "POS terminals",
+        "easy": "{count} terminals registered",
+        "tech": "{count} terminals registered",
+        "easyUnavailable": "No terminal list yet",
+        "techUnavailable": "GET /v1/terminals · not available"
+      },
+      "acquirer": {
+        "title": "Acquiring bank",
+        "easy": "{count} gateway servers",
+        "tech": "{names} (Go)",
+        "easyDown": "Lost the network",
+        "techDown": "{names} DOWN"
+      },
+      "switch": {
+        "title": "Switch",
+        "easy": "Routes by card number prefix",
+        "tech": "BIN routing · MUX pool",
+        "easyStip": "Standing in",
+        "techStip": "STIP ACTIVE · circuit {circuit}",
+        "easyUnavailable": "No data yet",
+        "techUnavailable": "GET /v1/network/switch · not available"
+      },
+      "issuer": {
+        "title": "Issuing bank",
+        "easy": "{count} servers running",
+        "tech": "{names} (jPOS)",
+        "easyDown": "Not responding",
+        "techDown": "{names} DOWN"
+      }
     },
-    "actions": {
-      "echo": "Echo now",
-      "signOn": "Sign on",
-      "signOff": "Sign off"
+    "links": {
+      "heading": "Links",
+      "ariaLabel": "Links",
+      "colLink": "Link",
+      "colStatus": "Status",
+      "colLatencyEasy": "Latency",
+      "colLatencyTech": "p99",
+      "colEchoEasy": "Last check",
+      "colEchoTech": "Echo 0800/301",
+      "switch": "Switch",
+      "protocol": "ISO 8583 · 2-byte header",
+      "pingEasy": "Check now",
+      "pingTech": "Send echo",
+      "latency": "{ms} ms",
+      "status": {
+        "SIGNED_ON": "Signed on",
+        "CONNECTED": "Connected",
+        "DOWN": "Down",
+        "DISCONNECTED": "Disconnected"
+      },
+      "echo": {
+        "noReply": "No reply",
+        "none": "Not checked yet",
+        "justNow": "Just now",
+        "seconds": "{n} s ago",
+        "minutes": "{n} min ago",
+        "hours": "{n} h ago"
+      },
+      "empty": "No links reported yet."
     },
     "events": {
-      "empty": "No network events yet",
-      "heading": "Event timeline"
+      "heading": "Today's event log",
+      "ariaLabel": "Event log",
+      "empty": "No network events today.",
+      "showMore": "Show {count} more events",
+      "known": {
+        "linkUp": "Link to the issuing bank is up",
+        "linkDown": "Link to the issuing bank is down, reconnecting",
+        "signedOnAgain": "Signed on again: the issuing bank had signed the link off",
+        "stillSignedOff": "The issuing bank still holds the link signed off",
+        "lateResponse": "A response arrived too late for a transaction"
+      }
+    },
+    "breaker": {
+      "ariaLabel": "Circuit breaker and stand-in",
+      "titleEasy": "Auto cut-off and stand-in",
+      "titleTech": "Circuit breaker and STIP",
+      "state": {
+        "CLOSED": "Normal",
+        "OPEN": "Cut off",
+        "HALF_OPEN": "Retrying"
+      },
+      "desc": {
+        "CLOSED": {
+          "easy": "All normal: transactions go straight to the issuing bank for a decision.",
+          "tech": "CLOSED: every request goes to the issuer. Opens after 3 consecutive echo timeouts or an error rate > 50%."
+        },
+        "OPEN": {
+          "easy": "The issuing bank is not answering, so the system stopped sending to it. Small transactions are approved on its behalf and reported once it is back.",
+          "tech": "OPEN: nothing goes to the issuer; the switch authorizes by STIP rules and queues advices in SAF. Moves to HALF_OPEN after 30 s."
+        },
+        "HALF_OPEN": {
+          "easy": "The system is sending a few test transactions to the issuing bank. If they succeed, everything goes back to normal.",
+          "tech": "HALF_OPEN: a few trial requests go to the issuer. Success closes the circuit, failure opens it again."
+        },
+        "unavailable": {
+          "easy": "The switch has not reported its state. Transactions go straight from the gateway to the issuing bank.",
+          "tech": "GET /v1/network/switch is not on the gateway yet (MCN-802). No circuit breaker or STIP."
+        }
+      },
+      "limitEasy": "Stand-in limit per transaction",
+      "limitTech": "STIP limit / txn",
+      "countEasy": "Approved on the issuer's behalf",
+      "countTech": "STIP approved"
+    },
+    "saf": {
+      "ariaLabel": "Resend queue",
+      "titleEasy": "Resend queue",
+      "titleTech": "SAF queue",
+      "depth": "{count} items",
+      "emptyBadge": "Empty",
+      "emptyEasy": "Nothing waiting. Every notice has arrived.",
+      "emptyTech": "depth {depth} · dead {dead} · oldest —",
+      "advice": "Stand-in notice",
+      "reversal": "Reversal",
+      "withAmount": "{label} · {amount}",
+      "adviceTech": "{mti} advice · STIP approved",
+      "reversalTech": "{mti} reversal",
+      "rrn": "RRN {rrn}",
+      "attemptsEasy": "Tried {n} times",
+      "attemptsTech": "attempts {n}"
     }
   },
   "pos": {
