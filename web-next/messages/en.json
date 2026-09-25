@@ -795,53 +795,107 @@
   },
   "chaos": {
     "heading": "Chaos lab",
-    "activeCount": "{count} active",
-    "runControl": {
-      "label": "Transactions to run",
-      "button": "Run transactions"
+    "subtitle": "Switch on a failure, run test transactions and watch how the system keeps customers' money safe.",
+    "count": {
+      "calm": "All normal",
+      "active": "{count, plural, one {# failure on} other {# failures on}}"
+    },
+    "resetAll": "Turn all off",
+    "runBatch": "Run {count} test transactions",
+    "error": {
+      "toggle": "Could not change the failure. Try again.",
+      "run": "Could not start the test run. Try again."
+    },
+    "card": {
+      "on": "On · click to turn off",
+      "off": "Turn on failure"
     },
     "money": {
-      "heading": "Money verification",
-      "opening": "Opening balance",
-      "closing": "Closing balance",
-      "discrepancy": "Discrepancy",
-      "discrepancyRun": "Discrepancy found in run {runId}",
-      "empty": "Start a run to verify money movement"
+      "heading": "Money check",
+      "badge": {
+        "none": "Not run yet",
+        "pending": "Checking…",
+        "ok": "Books match",
+        "discrepancy": "Books do not match"
+      },
+      "note": "Whatever fails, the money in customer accounts must always equal the sum of the transactions that really succeeded.",
+      "easy": {
+        "opening": "Total opening balance",
+        "approved": "{count} transactions approved",
+        "approvedNone": "Approved transactions",
+        "reversed": "Transactions cancelled, no money taken",
+        "current": "Current balance",
+        "discrepancy": "Difference"
+      },
+      "expert": {
+        "opening": "Opening balance (opening)",
+        "approved": "RC 00 transactions · {count}",
+        "approvedNone": "RC 00 transactions",
+        "reversed": "Reversed (0420 → 0430)",
+        "current": "Σ available_balance",
+        "discrepancy": "Σ ledger − Σ tran_log"
+      },
+      "count": "{count} txns",
+      "discrepancyRun": "Mismatch in run {runId}"
     },
     "reaction": {
-      "heading": "What the system does",
-      "empty": "No failure scenarios are active"
+      "heading": "How the system is reacting",
+      "calm": "Everything is normal. Turn on a failure on the left to see how the system reacts.",
+      "easy": {
+        "saf": "Messages waiting to resend",
+        "latency": "Response time"
+      },
+      "expert": {
+        "saf": "SAF depth",
+        "latency": "p99 end-to-end"
+      },
+      "latency": {
+        "ms": "{value} ms",
+        "s": "{value} s"
+      }
     },
     "scenarios": {
       "SLOW_NETWORK": {
-        "easyText": "Slow network",
-        "technicalText": "3000ms added latency on every gateway-to-issuer call",
-        "reaction": "Requests still complete, just slower — no money is at risk"
+        "title": "Slow network",
+        "desc": "Every request is delayed by about 3 seconds on the line.",
+        "tech": "Toxiproxy latency 3000 ms ± 200",
+        "react": "Response time rises to about 3.2 seconds but stays within the timeout, so transactions still succeed.",
+        "reactTech": "p99 3.2 s < timeout 30 s"
       },
       "CONNECTION_CUT": {
-        "easyText": "Connection cut",
-        "technicalText": "TCP connection to the issuer is closed mid-request",
-        "reaction": "The gateway can't tell if the issuer got the request, so it queues a reversal instead of retrying blindly"
+        "title": "Connection lost",
+        "desc": "The line to the issuing bank is cut suddenly.",
+        "tech": "Toxiproxy reset_peer · link DOWN",
+        "react": "The system reconnects on its own. Cancellations it could not send wait in a queue and go out when the line is back.",
+        "reactTech": "reconnect backoff 1s→8s · SAF holds 0420"
       },
       "DROP_RESPONSE": {
-        "easyText": "Dropped response",
-        "technicalText": "Issuer processes the request but its response is discarded before reaching the gateway",
-        "reaction": "The gateway times out, treats the outcome as unknown, and sends a reversal for safety"
+        "title": "Lost answer",
+        "desc": "The request arrives, but the answer gets lost on the way back.",
+        "tech": "Drop 0210 → timeout → 0420",
+        "react": "After 30 seconds without an answer, the system sends a cancellation. The bank refunds the money if it was taken.",
+        "reactTech": "0200 timeout → 0420 field 90 → 0430"
       },
       "DUPLICATE_REQUEST": {
-        "easyText": "Duplicate request",
-        "technicalText": "The same request is sent twice with the same STAN/RRN",
-        "reaction": "The issuer recognizes the duplicate and returns the original result instead of processing it twice"
+        "title": "Sent twice",
+        "desc": "The same transaction is sent twice because of a network fault.",
+        "tech": "Duplicate 0200 · same STAN + field 7",
+        "react": "The issuing bank spots the duplicate and returns the earlier result, without taking money twice.",
+        "reactTech": "uq_tran_dedupe hit → replay earlier 0210"
       },
       "ISSUER_DOWN": {
-        "easyText": "Issuer down",
-        "technicalText": "The issuer connection resets and stays unavailable",
-        "reaction": "Stand-in processing takes over, approving small transactions within pre-set limits"
+        "title": "Issuing bank down",
+        "desc": "The issuing bank's core system stops working.",
+        "tech": "Issuer core down → STIP",
+        "react": "Stand-in approval takes over: small transactions are still approved and reported to the bank once it recovers.",
+        "reactTech": "circuit OPEN · STIP limit 500.000 ₫ · 0120/0220 into SAF"
       },
       "LATE_RESPONSE": {
-        "easyText": "Late response",
-        "technicalText": "The issuer responds after the gateway's timeout window has passed",
-        "reaction": "The gateway has already reversed the request, so the late response is discarded"
+        "title": "Answer arrives late",
+        "desc": "The answer arrives after the waiting time has run out.",
+        "tech": "Delay 0210 > timeout → late response",
+        "react": "The transaction was already cancelled, so the late answer is only logged for monitoring and moves no money.",
+        "reactTech": "late 0210 → log + metric late_response_total"
       }
     }
   },

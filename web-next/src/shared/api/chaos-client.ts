@@ -24,7 +24,8 @@ const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 const liveFetch = (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args);
 
 const SCENARIOS_KEY = ["chaos", "scenarios"] as const;
-const runKey = (runId: string) => ["chaos", "run", runId] as const;
+/** Query key of one run, so a WS `chaos.run.progress` snapshot can land in the same cache entry. */
+export const chaosRunKey = (runId: string) => ["chaos", "run", runId] as const;
 
 /** WS `chaos.run.progress` is the live channel; this poll is a low-frequency backstop only. */
 const RUN_POLL_INTERVAL_MS = 2000;
@@ -55,15 +56,28 @@ export function useChaosScenarios() {
 export function useSetChaosScenario() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (vars: { scenarioId: ChaosScenarioId; enabled: boolean }): Promise<ChaosScenario> => {
-      const { data, error } = await client.PUT("/v1/chaos/scenarios/{scenarioId}", {
-        params: { path: { scenarioId: vars.scenarioId }, header: { "Idempotency-Key": crypto.randomUUID() } },
-        body: { enabled: vars.enabled },
-        fetch: liveFetch,
-      });
-      if (error) throw error;
-      return data;
+    mutationFn: (vars: { scenarioId: ChaosScenarioId; enabled: boolean }) => putScenario(vars.scenarioId, vars.enabled),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: SCENARIOS_KEY });
     },
+  });
+}
+
+async function putScenario(scenarioId: ChaosScenarioId, enabled: boolean): Promise<ChaosScenario> {
+  const { data, error } = await client.PUT("/v1/chaos/scenarios/{scenarioId}", {
+    params: { path: { scenarioId }, header: { "Idempotency-Key": crypto.randomUUID() } },
+    body: { enabled },
+    fetch: liveFetch,
+  });
+  if (error) throw error;
+  return data;
+}
+
+/** "Tắt tất cả": one PUT enabled=false per scenario that is on. */
+export function useDisableAllChaosScenarios() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (scenarioIds: ChaosScenarioId[]) => Promise.all(scenarioIds.map((id) => putScenario(id, false))),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: SCENARIOS_KEY });
     },
@@ -86,7 +100,7 @@ export function useStartChaosRun() {
 
 export function useChaosRun(runId: string | null) {
   return useQuery({
-    queryKey: runKey(runId ?? "none"),
+    queryKey: chaosRunKey(runId ?? "none"),
     enabled: runId != null,
     queryFn: async (): Promise<ChaosRun> => {
       const { data, error } = await client.GET("/v1/chaos/runs/{runId}", {
@@ -96,6 +110,10 @@ export function useChaosRun(runId: string | null) {
       if (error) throw error;
       return data;
     },
-    refetchInterval: RUN_POLL_INTERVAL_MS,
+    refetchInterval: (query) => (isRunFinished(query.state.data) ? false : RUN_POLL_INTERVAL_MS),
   });
+}
+
+export function isRunFinished(run: ChaosRun | undefined): boolean {
+  return run?.status === "PASSED" || run?.status === "FAILED";
 }
