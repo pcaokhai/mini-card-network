@@ -2,6 +2,7 @@ package advtxn
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"syscall"
@@ -22,6 +23,7 @@ type fakeMux struct {
 	lastMTI     string
 	lastFields  map[int]string
 	stanCounter int
+	onSend      func() // runs inside Send, e.g. to cancel the caller's context mid-flight
 }
 
 func (f *fakeMux) NextSTAN() (string, bool) {
@@ -37,12 +39,16 @@ func (f *fakeMux) IsSignedOn() bool { return !f.linkDown }
 func (f *fakeMux) Send(_ context.Context, mti string, fields map[int]string) (map[int]string, error) {
 	f.lastMTI = mti
 	f.lastFields = fields
+	if f.onSend != nil {
+		f.onSend()
+	}
 	return f.response, f.err
 }
 
 type fakeTranLog struct {
 	rows        []store.TranLogRow
 	transitions []string
+	failStatus  string // UpdateStatus to this status fails, leaving the row as it was
 }
 
 func (f *fakeTranLog) RecordStateTransition(_ context.Context, _ int64, from, to string) error {
@@ -65,6 +71,9 @@ func (f *fakeTranLog) Get(_ context.Context, rrn string) (store.TranLogRow, erro
 }
 
 func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, responseCode, authCode string) error {
+	if status == f.failStatus {
+		return errors.New("db down")
+	}
 	f.rows[id-1].Status = status
 	f.rows[id-1].ResponseCode = responseCode
 	f.rows[id-1].AuthCode = authCode
@@ -72,7 +81,8 @@ func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, response
 }
 
 type fakeIdempotency struct {
-	stored map[string]store.StoredResponse
+	stored   map[string]store.StoredResponse
+	storeCtx context.Context // the context the last Store ran on
 }
 
 func (f *fakeIdempotency) Find(_ context.Context, key, route string) (*store.StoredResponse, error) {
@@ -83,7 +93,11 @@ func (f *fakeIdempotency) Find(_ context.Context, key, route string) (*store.Sto
 	return &stored, nil
 }
 
-func (f *fakeIdempotency) Store(_ context.Context, key, route, _ string, status int, body []byte) error {
+func (f *fakeIdempotency) Store(ctx context.Context, key, route, _ string, status int, body []byte) error {
+	f.storeCtx = ctx
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if f.stored == nil {
 		f.stored = map[string]store.StoredResponse{}
 	}
@@ -125,8 +139,16 @@ var testMerchants = fakeMerchants{
 }
 
 type fakeReversal struct {
-	reasons []string
-	queued  []store.TranLogRow
+	reasons    []string
+	queued     []store.TranLogRow
+	advices    []map[int]string // QueueAdvice's fields, keyed by DE
+	adviceMTIs []string
+}
+
+func (f *fakeReversal) QueueAdvice(_ context.Context, _ int64, mti string, sent map[int]string) error {
+	f.adviceMTIs = append(f.adviceMTIs, mti)
+	f.advices = append(f.advices, sent)
+	return nil
 }
 
 func (f *fakeReversal) Queue(_ context.Context, txn store.TranLogRow, reasonCode string) error {
@@ -323,7 +345,7 @@ func sendOneOfEach(t *testing.T, svc *Service, tranLog *fakeTranLog, key string)
 	return append(txns, preAuth, completion, refund, balance)
 }
 
-func TestSend_everyPostSendFailureQueuesTimeoutReversalForEveryFlow__POS_G4_POS_G9(t *testing.T) {
+func TestSend_everyPostSendFailureFollowsUpByType__POS_G4_POS_G9(t *testing.T) {
 	failures := map[string]error{
 		"timeout":           context.DeadlineExceeded,
 		"request cancelled": context.Canceled,
@@ -336,14 +358,19 @@ func TestSend_everyPostSendFailureQueuesTimeoutReversalForEveryFlow__POS_G4_POS_
 
 			txns := sendOneOfEach(t, svc, tranLog, name)
 
-			for _, txn := range txns {
-				require.Equal(t, "REVERSAL_PENDING", txn.Status, "%s: the response reports the row's real status", txn.Type)
-			}
-			require.Equal(t, []string{"68", "68", "68", "68"}, reversal.reasons)
-			for i, queued := range reversal.queued {
+			// pre-auth, completion, refund, balance: the response reports each row's real status
+			require.Equal(t, []string{statusReversalPending, statusTimedOut, statusReversalPending, statusTimedOut},
+				[]string{txns[0].Status, txns[1].Status, txns[2].Status, txns[3].Status})
+			require.Equal(t, []string{"68", "68"}, reversal.reasons, "a pre-auth and a refund are reversed")
+			require.Equal(t, []string{tranTypePreAuth, tranTypeRefund}, []string{reversal.queued[0].Type, reversal.queued[1].Type})
+			for _, queued := range reversal.queued {
 				require.Equal(t, statusTimedOut, queued.Status, "queued from the state the row holds")
-				require.Equal(t, statusTimedOut, tranLog.rows[i+1].Status, "the row never stays SENT")
 				require.NotEmpty(t, queued.CardToken, "the SAF worker rebuilds DE 2 from the card token")
+			}
+			require.Equal(t, []string{"0220"}, reversal.adviceMTIs, "a completion is an advice: repeated, never reversed (docs/03 §7.4)")
+			require.Equal(t, "000001", reversal.advices[0][11])
+			for _, row := range tranLog.rows[1:] {
+				require.Equal(t, statusTimedOut, row.Status, "the row never stays SENT")
 			}
 		})
 	}
@@ -376,12 +403,13 @@ func TestSend_linkDroppedBeforeWriteDeclinesRc91WithoutReversal__POS_G4(t *testi
 	require.Equal(t, statusDeclined, txn.Status)
 	require.Equal(t, "91", txn.ResponseCode)
 	require.Equal(t, statusDeclined, tranLog.rows[0].Status)
+	require.Len(t, tranLog.rows, 1, "the row sendAndRecord logged is updated, never logged twice")
 	require.Empty(t, reversal.reasons)
 }
 
 func TestSend_badIncomingMACDeclinesRc96AndQueuesReasonSixReversal__POS_G5(t *testing.T) {
 	for name, resp := range map[string]map[int]string{
-		"wrong MAC":   {39: "00", 38: "123456", 64: "FFFFFFFFFFFFFFFF"},
+		"wrong MAC":   {39: "00", 38: "123456", 64: badMACHex},
 		"missing MAC": {39: "00", 38: "123456"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -395,6 +423,65 @@ func TestSend_badIncomingMACDeclinesRc96AndQueuesReasonSixReversal__POS_G5(t *te
 			require.Equal(t, []string{"06"}, reversal.reasons)
 			require.Equal(t, statusDeclined, reversal.queued[0].Status)
 			require.Equal(t, "96", tranLog.rows[0].ResponseCode)
+		})
+	}
+}
+
+func TestSend_badMACOnACompletionRepeatsTheAdvice__POS_G5(t *testing.T) {
+	svc, tranLog, _, _, reversal := newTestServiceWithReversal(&fakeMux{response: map[int]string{39: "00", 64: badMACHex}})
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, Status: statusApproved, TerminalID: "00000042", CardToken: testCardToken})
+
+	txn, err := svc.CreateCompletion(context.Background(), "626514000300", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "idem-completion-mac")
+
+	require.NoError(t, err)
+	require.Equal(t, statusTimedOut, txn.Status, "a 0230 that fails its MAC proves nothing: the advice is repeated")
+	require.Empty(t, reversal.reasons)
+	require.Equal(t, []string{"0220"}, reversal.adviceMTIs)
+}
+
+func TestSend_badMACOnABalanceInquiryQueuesNothing__POS_G5(t *testing.T) {
+	svc, _, _, _, reversal := newTestServiceWithReversal(&fakeMux{response: map[int]string{39: "00", 64: badMACHex}})
+
+	txn, err := svc.CreateBalanceInquiry(context.Background(), sampleBalanceRequest(), "idem-balance-mac")
+
+	require.NoError(t, err)
+	require.Equal(t, statusDeclined, txn.Status)
+	require.Equal(t, "96", txn.ResponseCode)
+	require.Empty(t, reversal.reasons, "a balance inquiry holds no money")
+	require.Empty(t, reversal.adviceMTIs)
+}
+
+func TestSend_callerGivingUpMidSendStillStoresTheOutcome__POS_G4(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc, _, idem, _ := newTestService(&fakeMux{response: map[int]string{39: "00", 64: stdMACHex}, onSend: cancel})
+
+	txn, err := svc.CreateRefund(ctx, sampleRefundRequest(), "idem-gave-up")
+
+	require.NoError(t, err)
+	require.Equal(t, statusApproved, txn.Status)
+	require.Len(t, idem.stored, 1, "a retry with the same key must replay, never resend")
+	_, hasDeadline := idem.storeCtx.Deadline()
+	require.True(t, hasDeadline, "work after the send is detached from the caller but still bounded")
+}
+
+func TestSend_reversalIsQueuedFromTheRowsStateWhenTheUpdateFails__POS_G4(t *testing.T) {
+	for name, tc := range map[string]struct {
+		fail string
+		want string
+	}{
+		"status update fails":  {statusTimedOut, statusSent},
+		"status update worked": {"", statusTimedOut},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, tranLog, _, _, reversal := newTestServiceWithReversal(&fakeMux{err: context.DeadlineExceeded})
+			tranLog.failStatus = tc.fail
+
+			_, err := svc.CreatePreAuth(context.Background(), samplePreAuthRequest(), "idem-status")
+
+			require.Equal(t, tc.fail != "", err != nil, "a failed update is still reported")
+			require.Equal(t, []string{"68"}, reversal.reasons)
+			require.Equal(t, tc.want, reversal.queued[0].Status, "Queue refuses any state but the one the row holds")
 		})
 	}
 }
@@ -420,3 +507,6 @@ func TestResponseMTI(t *testing.T) {
 	require.Equal(t, "0210", responseMTI("0200"))
 	require.Equal(t, "0230", responseMTI("0220"))
 }
+
+// badMACHex never matches the fake HSM's MAC.
+const badMACHex = "FFFFFFFFFFFFFFFF"

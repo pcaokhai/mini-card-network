@@ -27,7 +27,6 @@ type MACVerifier struct {
 	hsm      hsm.Module
 	zak      []byte
 	keyStore RetiredKeyFinder
-	ownerRef string
 }
 
 // NewMACVerifier builds a MACVerifier. A nil keyStore disables the dual-key retry.
@@ -67,7 +66,8 @@ func (v MACVerifier) macMatchesRecentlyRetiredZAK(ctx context.Context, packed, m
 	if v.keyStore == nil {
 		return false
 	}
-	retired, err := v.keyStore.FindRecentlyRetired(ctx, "ZAK", v.ownerRef, dualKeyWindow)
+	// The simulator holds one global ZAK, so its owner reference is empty (rotationAdapter).
+	retired, err := v.keyStore.FindRecentlyRetired(ctx, "ZAK", "", dualKeyWindow)
 	if err != nil || retired == nil {
 		return false
 	}

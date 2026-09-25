@@ -219,20 +219,31 @@ func (s *Service) CreatePurchase(ctx context.Context, req PurchaseRequest, idemp
 	stan, ok := s.mux.NextSTAN()
 	if !s.linkStatus.IsSignedOn() || !ok {
 		txn := s.declinedTransaction(req, merchant, maskedPAN, rcLinkDown)
-		if err := s.persistAndBroadcast(ctx, txn, req, merchant, idempotencyKey, requestHash); err != nil {
+		if err := s.recordLinkDown(ctx, txn, req, merchant); err != nil {
 			return Transaction{}, err
 		}
-		return txn, nil
+		return txn, s.publish(ctx, txn, idempotencyKey, requestHash)
 	}
 
 	txn, err := s.sendPurchase(ctx, req, card, merchant, maskedPAN, stan)
+	// The 0200 may be at the issuer: the idempotent response must be stored even if the caller has
+	// given up, or a retry with the same key would send a second 0200.
+	ctx, cancel := Detach(ctx)
+	defer cancel()
 	if err != nil {
 		return Transaction{}, err
 	}
-	if err := s.persistAndBroadcast(ctx, txn, req, merchant, idempotencyKey, requestHash); err != nil {
-		return Transaction{}, err
-	}
-	return txn, nil
+	return txn, s.publish(ctx, txn, idempotencyKey, requestHash)
+}
+
+// persistTimeout bounds the work a request finishes after its send on a detached context (root
+// CLAUDE.md §6.9: every path has a cancellation path).
+const persistTimeout = 10 * time.Second
+
+// Detach returns a context that outlives ctx's cancellation, for recording the outcome of a
+// request that may already be at the issuer, bounded by persistTimeout.
+func Detach(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), persistTimeout)
 }
 
 // resolveCardAndMerchant maps the request's cardToken to its fixture card and its terminal to
@@ -302,20 +313,13 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 
 	// The request may already be at the issuer: whatever happened to the caller's request, the
 	// outcome must be recorded, so nothing after the send may be cancelled with it.
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancelPersist := Detach(ctx)
+	defer cancelPersist()
 	txn := s.baseTransaction(req, merchant, rrn, stan, maskedPAN)
 	macFailed := s.mapSendOutcome(ctx, &txn, resp, err)
 
-	finalized, err := s.finalizeSendResult(ctx, id, row, txn, now)
-	if err != nil {
-		return Transaction{}, err
-	}
-	if macFailed {
-		if err := s.queueMacFailureReversal(ctx, row, id, now); err != nil {
-			return Transaction{}, err
-		}
-	}
-	return finalized, nil
+	row.ID, row.CreatedAt = id, now
+	return s.finalizeSendResult(ctx, row, txn, macFailed)
 }
 
 // mapSendOutcome maps mux.Send's (resp, sendErr) onto txn's Status/ResponseCode/AuthCode -
@@ -347,25 +351,14 @@ func (s *Service) mapSendOutcome(ctx context.Context, txn *Transaction, resp map
 // SendFailureStatus is what a transaction becomes when mux.Send fails. Only a link that was down
 // before the write guarantees nothing left the gateway: that is a DECLINED RC 91. Every other
 // failure (timeout, broken connection, cancelled request) is an unknown outcome, so the row goes
-// TIMED_OUT and the caller queues a reversal (root CLAUDE.md §6.4); it never resends.
+// TIMED_OUT and the caller queues a reversal (root CLAUDE.md §6.4); it never resends. Mux.Send's
+// other pre-write failure, "pack request", can't happen here: every caller packs the same fields
+// to compute the MAC before sending, so a message that doesn't pack never reaches Send.
 func SendFailureStatus(sendErr error) (status, responseCode string) {
 	if errors.Is(sendErr, isonet.ErrNotSignedOn) {
 		return statusDeclined, rcLinkDown
 	}
 	return statusTimedOut, ""
-}
-
-// queueMacFailureReversal queues the DE 39 "06" reversal for a purchase whose incoming MAC
-// failed verification (MCN-502-AC3).
-func (s *Service) queueMacFailureReversal(ctx context.Context, row store.TranLogRow, id int64, now time.Time) error {
-	reversalRow := row
-	reversalRow.ID = id
-	reversalRow.Status = statusDeclined
-	reversalRow.CreatedAt = now
-	if err := s.reversal.Queue(ctx, reversalRow, reasonMacFailure); err != nil {
-		return fmt.Errorf("queue reversal for mac failure: %w", err)
-	}
-	return nil
 }
 
 // attachMAC computes the Retail MAC over fields (MTI 0200, not yet containing DE 64/128) and
@@ -398,28 +391,47 @@ func (s *Service) sendDuplicateIfActive(ctx context.Context, fields map[int]stri
 	_, _ = s.mux.Send(dupCtx, "0200", fields)
 }
 
-// finalizeSendResult persists the post-send status and, on a timeout, queues the reversal -
-// unknown outcome -> reversal (root CLAUDE.md §6.4): never resend the 0200, queue a 0420 in SAF
-// instead. Queue moves the row to REVERSAL_PENDING, and the response reports that real status
-// (docs/04 §4).
-func (s *Service) finalizeSendResult(ctx context.Context, id int64, row store.TranLogRow, txn Transaction, now time.Time) (Transaction, error) {
-	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
-		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
+// finalizeSendResult persists the post-send status and queues the reversal an unknown outcome
+// (DE 39 "68") or a bad incoming MAC ("06", MCN-502-AC3) needs - unknown outcome -> reversal (root
+// CLAUDE.md §6.4): never resend the 0200. The reversal is attempted even when the status update
+// failed, from the state the row still holds, so a database hiccup never leaves money unreturned.
+// The response reports the row's real status (docs/04 §4), REVERSAL_PENDING after a timeout.
+func (s *Service) finalizeSendResult(ctx context.Context, row store.TranLogRow, txn Transaction, macFailed bool) (Transaction, error) {
+	current, recordErr := s.recordStatus(ctx, row.ID, txn)
+	reason := reversalReasonFor(txn.Status, macFailed)
+	if reason == "" {
+		return txn, recordErr
 	}
-	_ = s.tranLog.RecordStateTransition(ctx, id, statusSent, txn.Status)
+	row.Status = current
+	if err := s.reversal.Queue(ctx, row, reason); err != nil {
+		return Transaction{}, errors.Join(recordErr, fmt.Errorf("queue reversal %s: %w", reason, err))
+	}
+	if txn.Status == statusTimedOut {
+		txn.Status = statusReversalPending
+	}
+	return txn, recordErr
+}
 
-	if txn.Status != statusTimedOut {
-		return txn, nil
+// recordStatus moves row id from SENT to txn's status and returns the status the row now holds.
+func (s *Service) recordStatus(ctx context.Context, id int64, txn Transaction) (current string, err error) {
+	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
+		return statusSent, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
 	}
-	reversalRow := row
-	reversalRow.ID = id
-	reversalRow.Status = statusTimedOut
-	reversalRow.CreatedAt = now
-	if err := s.reversal.Queue(ctx, reversalRow, reasonTimeout); err != nil {
-		return Transaction{}, fmt.Errorf("queue reversal for timeout: %w", err)
+	if err := s.tranLog.RecordStateTransition(ctx, id, statusSent, txn.Status); err != nil {
+		return txn.Status, fmt.Errorf("record %s->%s: %w", statusSent, txn.Status, err)
 	}
-	txn.Status = statusReversalPending
-	return txn, nil
+	return txn.Status, nil
+}
+
+// reversalReasonFor is DE 39 of the 0420 an outcome needs, empty when it needs none.
+func reversalReasonFor(status string, macFailed bool) string {
+	switch {
+	case status == statusTimedOut:
+		return reasonTimeout
+	case macFailed:
+		return reasonMacFailure
+	}
+	return ""
 }
 
 func (s *Service) baseTransaction(req PurchaseRequest, merchant store.Merchant, rrn, stan, maskedPAN string) Transaction {
@@ -445,24 +457,23 @@ func (s *Service) declinedTransaction(req PurchaseRequest, merchant store.Mercha
 	return txn
 }
 
-// persistAndBroadcast records a link-down decline in tran_log, broadcasts the transaction, and
-// stores the idempotent response so a replay never resends.
-func (s *Service) persistAndBroadcast(ctx context.Context, txn Transaction, req PurchaseRequest, merchant store.Merchant, idempotencyKey, requestHash string) error {
-	if txn.Status == statusDeclined && txn.ResponseCode == rcLinkDown {
-		// Link-down decline: mux.Send was never called, so this row wasn't logged earlier in
-		// CreatePurchase; log it now so it's still visible in tran_log.
-		row := store.TranLogRow{
-			RRN: txn.RRN, Type: tranTypePurchase, Status: statusDeclined,
-			Amount: req.Amount.Amount, Currency: req.Amount.Currency, MaskedPAN: txn.MaskedPAN,
-			TerminalID: req.TerminalID, MerchantID: merchant.MID, ResponseCode: txn.ResponseCode,
-		}
-		if _, err := s.tranLog.Insert(ctx, row); err != nil {
-			return fmt.Errorf("insert tran_log for link-down decline: %w", err)
-		}
+// recordLinkDown logs a link-down decline in tran_log: nothing was sent, so sendPurchase never
+// logged it.
+func (s *Service) recordLinkDown(ctx context.Context, txn Transaction, req PurchaseRequest, merchant store.Merchant) error {
+	row := store.TranLogRow{
+		RRN: txn.RRN, Type: tranTypePurchase, Status: statusDeclined, MTI: "0200",
+		Amount: req.Amount.Amount, Currency: req.Amount.Currency, MaskedPAN: txn.MaskedPAN,
+		TerminalID: req.TerminalID, MerchantID: merchant.MID, ResponseCode: txn.ResponseCode,
 	}
+	if _, err := s.tranLog.Insert(ctx, row); err != nil {
+		return fmt.Errorf("insert tran_log for link-down decline: %w", err)
+	}
+	return nil
+}
 
+// publish broadcasts the transaction and stores the idempotent response so a replay never resends.
+func (s *Service) publish(ctx context.Context, txn Transaction, idempotencyKey, requestHash string) error {
 	s.hub.BroadcastTransaction("transaction.created", txn)
-
 	body, err := json.Marshal(txn)
 	if err != nil {
 		return fmt.Errorf("encode transaction for idempotency store: %w", err)

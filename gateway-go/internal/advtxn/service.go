@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -134,6 +135,13 @@ type HubPort interface {
 	BroadcastTransaction(eventType string, txn Transaction)
 }
 
+// SAFQueuer stores what an unknown outcome needs delivered later; *saf.ReversalQueuer satisfies
+// it. Queue reverses a request with a 0420; QueueAdvice repeats an advice (a 0220) until its x30.
+type SAFQueuer interface {
+	purchase.ReversalQueuer
+	QueueAdvice(ctx context.Context, tranID int64, mti string, sent map[int]string) error
+}
+
 // Service builds and sends advanced (pre-auth/completion/refund/balance) transactions.
 type Service struct {
 	mux         MuxSender
@@ -142,7 +150,7 @@ type Service struct {
 	tranLog     TranLogPort
 	idempotency IdempotencyPort
 	hub         HubPort
-	reversal    purchase.ReversalQueuer
+	saf         SAFQueuer
 	hsm         hsm.Module
 	zak         []byte
 	mac         purchase.MACVerifier
@@ -151,10 +159,10 @@ type Service struct {
 // NewService builds a Service, reusing the same dependency shapes purchase.NewService takes -
 // Ruling 2: a sibling service, not a re-derivation of purchase.Service's already-proven wiring.
 // reversal and keyStore are the same SAF queue and dual-key MAC lookup purchases use.
-func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency IdempotencyPort, hub HubPort, reversal purchase.ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore purchase.RetiredKeyFinder) *Service {
+func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency IdempotencyPort, hub HubPort, safQueuer SAFQueuer, hsmModule hsm.Module, zak []byte, keyStore purchase.RetiredKeyFinder) *Service {
 	return &Service{
 		mux: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, idempotency: idempotency, hub: hub,
-		reversal: reversal, hsm: hsmModule, zak: zak, mac: purchase.NewMACVerifier(hsmModule, zak, keyStore),
+		saf: safQueuer, hsm: hsmModule, zak: zak, mac: purchase.NewMACVerifier(hsmModule, zak, keyStore),
 	}
 }
 
@@ -232,8 +240,11 @@ func (s *Service) send(ctx context.Context, p sendParams) (Transaction, error) {
 	if err != nil {
 		return Transaction{}, err
 	}
-	// The outcome is already recorded; a caller that went away must not stop it being replayable.
-	return txn, s.publish(context.WithoutCancel(ctx), p, txn)
+	// The outcome is already recorded; a caller that went away must not stop it being replayable,
+	// or a retry with the same key would send the request again.
+	ctx, cancel := purchase.Detach(ctx)
+	defer cancel()
+	return txn, s.publish(ctx, p, txn)
 }
 
 // sendAndRecord logs the row as SENT, sends it, and records the outcome. Every failure after the
@@ -258,27 +269,17 @@ func (s *Service) sendAndRecord(ctx context.Context, p sendParams, merchant stor
 	resp, sendErr := s.mux.Send(sendCtx, p.mti, p.fields)
 	// The request may already be at the issuer: the outcome must be recorded whatever happened to
 	// the caller's request.
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancelPersist := purchase.Detach(ctx)
+	defer cancelPersist()
 
 	txn, macFailed := s.outcome(ctx, p, resp, sendErr)
 	txn = s.describe(txn, p, merchant)
-	if err := s.transition(ctx, id, statusSent, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
-		return Transaction{}, err
-	}
-	row.ID, row.Status = id, txn.Status
-	switch {
-	case txn.Status == statusTimedOut:
-		// The response reports the row's real status (POS-G9).
-		txn.Status = statusReversalPending
-		return txn, s.queueReversal(ctx, row, reasonTimeout)
-	case macFailed:
-		// Stays DECLINED RC 96 for the POS, as a purchase does; the row moves on to REVERSAL_PENDING.
-		return txn, s.queueReversal(ctx, row, reasonMacFailure)
-	}
-	return txn, nil
+	row.ID = id
+	return s.finalize(ctx, p, row, txn, macFailed)
 }
 
-// outcome maps mux.Send's result onto a Transaction, verifying the response's MAC.
+// outcome maps mux.Send's result onto a Transaction, verifying the response's MAC. A completion's
+// 0230 that fails its MAC proves nothing, so the completion stays an unknown outcome.
 func (s *Service) outcome(ctx context.Context, p sendParams, resp map[int]string, sendErr error) (txn Transaction, macFailed bool) {
 	if sendErr != nil {
 		txn = Transaction{Type: p.txnType, Amount: p.requestedAmt}
@@ -290,15 +291,68 @@ func (s *Service) outcome(ctx context.Context, p sendParams, resp map[int]string
 		return txn, false
 	}
 	obs.MacFailureTotal.Inc()
+	if p.txnType == tranTypeCompletion {
+		return Transaction{Type: p.txnType, Amount: p.requestedAmt, Status: statusTimedOut}, true
+	}
 	return Transaction{Type: p.txnType, Amount: p.requestedAmt, Status: statusDeclined, ResponseCode: rcMacFailure}, true
 }
 
-// queueReversal moves row to REVERSAL_PENDING with its 0420 queued, in one DB transaction.
-func (s *Service) queueReversal(ctx context.Context, row store.TranLogRow, reason string) error {
-	if err := s.reversal.Queue(ctx, row, reason); err != nil {
-		return fmt.Errorf("queue reversal %s for %s: %w", reason, row.RRN, err)
+// finalize records txn's status and delivers what the outcome still owes the issuer (root
+// CLAUDE.md §6.4), never a resend of the request:
+//   - an unknown pre-auth or refund is reversed with a 0420 (DE 39 "68"), a bad-MAC one with "06";
+//   - an unknown completion is an advice: its 0220 is repeated as 0221 until the 0230, never
+//     reversed (docs/03 §7.4);
+//   - a balance inquiry holds no money, so it owes nothing.
+//
+// The follow-up is attempted even when the status update failed, from the state the row still
+// holds, so a database hiccup never leaves it undone.
+func (s *Service) finalize(ctx context.Context, p sendParams, row store.TranLogRow, txn Transaction, macFailed bool) (Transaction, error) {
+	current, recordErr := s.recordStatus(ctx, row.ID, txn)
+	switch {
+	case p.txnType == tranTypeBalance:
+		return txn, recordErr
+	case p.txnType == tranTypeCompletion && txn.Status == statusTimedOut:
+		if err := s.saf.QueueAdvice(ctx, row.ID, p.mti, p.fields); err != nil {
+			return Transaction{}, errors.Join(recordErr, fmt.Errorf("queue %s repeat for %s: %w", p.mti, row.RRN, err))
+		}
+		return txn, recordErr
 	}
-	return nil
+	reason := reversalReason(txn.Status, macFailed)
+	if reason == "" {
+		return txn, recordErr
+	}
+	row.Status = current
+	if err := s.saf.Queue(ctx, row, reason); err != nil {
+		return Transaction{}, errors.Join(recordErr, fmt.Errorf("queue reversal %s for %s: %w", reason, row.RRN, err))
+	}
+	if txn.Status == statusTimedOut {
+		// The response reports the row's real status (POS-G9). A MAC failure stays DECLINED RC 96
+		// for the POS, as a purchase does, while its row moves on to REVERSAL_PENDING.
+		txn.Status = statusReversalPending
+	}
+	return txn, recordErr
+}
+
+// recordStatus moves row id from SENT to txn's status and returns the status the row now holds.
+func (s *Service) recordStatus(ctx context.Context, id int64, txn Transaction) (current string, err error) {
+	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
+		return statusSent, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
+	}
+	if err := s.tranLog.RecordStateTransition(ctx, id, statusSent, txn.Status); err != nil {
+		return txn.Status, fmt.Errorf("record %s->%s: %w", statusSent, txn.Status, err)
+	}
+	return txn.Status, nil
+}
+
+// reversalReason is DE 39 of the 0420 an outcome needs, empty when it needs none.
+func reversalReason(status string, macFailed bool) string {
+	switch {
+	case status == statusTimedOut:
+		return reasonTimeout
+	case macFailed:
+		return reasonMacFailure
+	}
+	return ""
 }
 
 // recordLinkDown logs a request the link could not carry as DECLINED RC 91: nothing was sent, so
