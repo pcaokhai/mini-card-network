@@ -53,21 +53,240 @@
     }
   },
   "lab": {
-    "rawHeading": "Message thô, đúng như gửi trên đường truyền",
-    "bitmapHeading": "Lưới bitmap",
-    "fieldsHeading": "Danh sách field",
-    "de": "DE",
-    "name": "Tên trường",
-    "format": "Định dạng",
-    "value": "Giá trị",
-    "selectHint": "Chọn một phần trong message, bitmap hoặc bảng trường để xem chi tiết.",
-    "mtiVersion": "Phiên bản",
-    "mtiClass": "Nhóm message",
-    "mtiFunction": "Chức năng",
-    "mtiOrigin": "Nguồn gốc",
-    "pasteHint": "Dán một message ISO 8583 thô, hoặc chọn mẫu có sẵn",
-    "primaryBitmap": "Bitmap chính",
-    "secondaryBitmap": "Bitmap phụ"
+    "title": "Phòng lab message",
+    "subtitle": "Mổ xẻ một message ISO 8583: bấm vào bất kỳ đoạn nào, ô bitmap nào hoặc dòng nào để xem nó nghĩa là gì.",
+    "samplesLabel": "Chọn message mẫu",
+    "samples": {
+      "0200": "0200 Mua hàng",
+      "0210": "0210 Trả lời",
+      "0420": "0420 Hủy",
+      "0800": "0800 Kiểm tra kết nối"
+    },
+    "loading": "Đang tải message mẫu…",
+    "loadFailed": "Không tải được message: {detail}",
+    "raw": {
+      "label": "Message thô",
+      "heading": "Message thô, đúng như gửi trên đường truyền",
+      "legendMti": "Loại message",
+      "legendBitmap": "Bitmap",
+      "legendFields": "Các field dữ liệu",
+      "hintMti": "Loại message",
+      "hintBitmap": "Bitmap",
+      "hintField": "Field {n}: {name}",
+      "noteEasy": "Mỗi ô màu là một phần của message. Số thẻ đã được che để bảo mật.",
+      "noteExpert": "Packager ASCII (iso87ascii) · field nhị phân hiển thị dạng hex · PAN đã được che cho bài lab · tổng {count} field"
+    },
+    "bitmap": {
+      "label": "Bitmap",
+      "heading": "Lưới bitmap",
+      "pagesLabel": "Chọn bitmap",
+      "primary": "Chính 1–64",
+      "secondary": "Phụ 65–128",
+      "noteSecondary": "Mỗi hàng là 1 byte gồm 8 bit. Bit 1 đang bật nên message này có thêm bitmap phụ cho các field 65 đến 128.",
+      "notePrimary": "Mỗi hàng là 1 byte gồm 8 bit. Ô màu là bit bật, nghĩa là field có số đó xuất hiện trong message.",
+      "cell": "Bit {n}, {on, select, true {bật} other {tắt}}",
+      "totalEasy": "Toàn bộ bitmap viết dạng hex",
+      "total64": "Bitmap 64 bit (hex)",
+      "total128": "Bitmap 128 bit (hex)"
+    },
+    "detail": {
+      "label": "Chi tiết",
+      "tech": "Tên kỹ thuật",
+      "format": "Định dạng",
+      "value": "Giá trị",
+      "always": "Luôn có",
+      "present": "Có trong message",
+      "absent": "Không có trong message",
+      "fieldsPresent": "{count} field có mặt",
+      "fieldTag": "Field {n}",
+      "mtiTitle": "Loại message {mti}",
+      "mtiWhy": "Bốn chữ số đầu tiên cho biết đây là message gì. Bên nhận đọc nó trước để biết cách hiểu phần còn lại.",
+      "bitmapTitlePrimary": "Bitmap chính",
+      "bitmapTitleBoth": "Bitmap chính và phụ",
+      "bitmapWhy": "Mỗi bit đại diện cho một field. Bit bật nghĩa là field đó có mặt trong message, nhờ vậy message không phải chứa những field trống.",
+      "absentWhy": "Field này không có trong message {mti}. {why}",
+      "unusedTech": "Không dùng trong bài lab này",
+      "unusedWhy": "Field này không được dùng trong các message mẫu của bài lab.",
+      "unlistedWhy": "Bài lab chưa có giải thích cho field này."
+    },
+    "mti": {
+      "version": "phiên bản",
+      "class": "nhóm",
+      "function": "chức năng",
+      "origin": "nguồn",
+      "versions": {
+        "0": "ISO 8583:1987",
+        "1": "ISO 8583:1993",
+        "2": "ISO 8583:2003"
+      },
+      "classes": {
+        "1": "Cấp phép",
+        "2": "Tài chính",
+        "3": "Thao tác tệp",
+        "4": "Hủy, đảo giao dịch",
+        "5": "Đối soát",
+        "6": "Quản trị",
+        "8": "Quản lý mạng"
+      },
+      "functions": {
+        "0": "Yêu cầu",
+        "1": "Trả lời",
+        "2": "Thông báo (advice)",
+        "3": "Trả lời thông báo",
+        "4": "Thông báo không cần trả lời"
+      },
+      "origins": {
+        "0": "Do bên thanh toán (acquirer) gửi",
+        "1": "Bên thanh toán gửi lại",
+        "2": "Do ngân hàng phát hành (issuer) gửi",
+        "3": "Ngân hàng phát hành gửi lại",
+        "4": "Do bên khác gửi"
+      }
+    },
+    "entry": {
+      "pan": {
+        "00": "Không rõ cách đọc",
+        "01": "Nhập tay",
+        "02": "Quẹt dải từ",
+        "05": "Đọc bằng chip",
+        "07": "Chạm thẻ không tiếp xúc",
+        "90": "Quẹt dải từ, đọc đủ track"
+      },
+      "pin": {
+        "0": "Không rõ máy có nhận PIN không",
+        "1": "Máy có thể nhận PIN",
+        "2": "Máy không nhận PIN"
+      }
+    },
+    "emv": {
+      "9F26": "Mã xác thực do chip tạo (ARQC)",
+      "9F27": "Loại mã xác thực",
+      "9F36": "Bộ đếm giao dịch của chip (ATC)"
+    },
+    "original": {
+      "mti": "Loại message gốc",
+      "stan": "Số thứ tự gốc (STAN)",
+      "time": "Thời điểm gửi gốc",
+      "acquirer": "Mã ngân hàng thanh toán gốc"
+    },
+    "list": {
+      "label": "Danh sách field",
+      "field": "Field",
+      "easyName": "Ý nghĩa",
+      "techName": "Tên kỹ thuật",
+      "format": "Định dạng",
+      "value": "Giá trị"
+    },
+    "fields": {
+      "1": {
+        "name": "Bitmap phụ",
+        "why": "Bật khi message có dùng field từ 65 đến 128. Khi đó ngay sau bitmap chính sẽ có thêm 64 bit nữa."
+      },
+      "2": {
+        "name": "Số thẻ",
+        "why": "Số in trên thẻ. Luôn được che khi hiển thị; 2 chữ số đầu cho biết độ dài."
+      },
+      "3": {
+        "name": "Loại giao dịch",
+        "why": "Cho biết đây là mua hàng, rút tiền hay hoàn tiền, và từ loại tài khoản nào."
+      },
+      "4": {
+        "name": "Số tiền",
+        "why": "Số tiền theo đơn vị nhỏ nhất, đệm số 0 bên trái cho đủ 12 chữ số."
+      },
+      "7": {
+        "name": "Thời điểm gửi",
+        "why": "Giờ quốc tế (GMT) lúc gửi message. Không có năm, nên hệ thống phải tự suy ra."
+      },
+      "11": {
+        "name": "Số thứ tự giao dịch",
+        "why": "Số tăng dần do bên gửi cấp, dùng để ghép câu trả lời với đúng câu hỏi."
+      },
+      "12": {
+        "name": "Giờ tại quầy",
+        "why": "Giờ địa phương lúc khách thanh toán."
+      },
+      "13": {
+        "name": "Ngày tại quầy",
+        "why": "Ngày địa phương lúc khách thanh toán."
+      },
+      "14": {
+        "name": "Ngày hết hạn thẻ",
+        "why": "Năm và tháng thẻ hết hạn, dùng để từ chối thẻ quá hạn."
+      },
+      "15": {
+        "name": "Ngày quyết toán",
+        "why": "Ngày làm việc mà giao dịch được tính vào khi chốt ngày và đối soát."
+      },
+      "18": {
+        "name": "Ngành hàng",
+        "why": "Mã loại hình kinh doanh của cửa hàng, ví dụ 5814 là quán ăn nhanh, cà phê."
+      },
+      "22": {
+        "name": "Cách đọc thẻ",
+        "why": "Hai số đầu là cách đọc thẻ (05 là chip), số cuối cho biết có nhập PIN không."
+      },
+      "25": {
+        "name": "Điều kiện giao dịch",
+        "why": "00 nghĩa là giao dịch bình thường, có khách và thẻ tại quầy."
+      },
+      "32": {
+        "name": "Mã ngân hàng thanh toán",
+        "why": "Cho biết ngân hàng nào nhận giao dịch từ cửa hàng."
+      },
+      "37": {
+        "name": "Mã tra soát",
+        "why": "Mã duy nhất để tra cứu giao dịch khi khiếu nại hay đối soát."
+      },
+      "38": {
+        "name": "Mã chấp thuận",
+        "why": "Mã ngân hàng phát hành cấp khi đồng ý giao dịch, in trên hóa đơn."
+      },
+      "39": {
+        "name": "Mã kết quả",
+        "why": "00 là đồng ý. Các mã khác cho biết lý do từ chối hoặc lỗi."
+      },
+      "41": {
+        "name": "Mã máy POS",
+        "why": "Định danh chiếc máy POS đã gửi giao dịch."
+      },
+      "42": {
+        "name": "Mã cửa hàng",
+        "why": "Định danh cửa hàng đăng ký với ngân hàng thanh toán."
+      },
+      "43": {
+        "name": "Tên và địa chỉ cửa hàng",
+        "why": "Tên cửa hàng, thành phố và mã nước, in ra trên sao kê của chủ thẻ."
+      },
+      "49": {
+        "name": "Loại tiền",
+        "why": "Mã số tiền tệ theo ISO 4217: 704 là đồng Việt Nam."
+      },
+      "52": {
+        "name": "PIN đã mã hóa",
+        "why": "Mã PIN của khách, đã được mã hóa. Không ai đọc được PIN gốc trên đường truyền."
+      },
+      "55": {
+        "name": "Dữ liệu chip",
+        "why": "Dữ liệu do chip trên thẻ tạo ra, gồm mã xác thực chống làm giả thẻ."
+      },
+      "64": {
+        "name": "Chữ ký chống giả mạo",
+        "why": "Chữ ký tính từ nội dung message. Chỉ cần sửa một ký tự là chữ ký không còn khớp."
+      },
+      "70": {
+        "name": "Mã quản lý mạng",
+        "why": "001 là đăng nhập, 002 là đăng xuất, 301 là kiểm tra kết nối."
+      },
+      "90": {
+        "name": "Thông tin giao dịch gốc",
+        "why": "Chỉ ra giao dịch cần hủy: loại message, số thứ tự, thời điểm và ngân hàng gốc."
+      },
+      "128": {
+        "name": "Chữ ký chống giả mạo",
+        "why": "Chữ ký đặt ở field cuối khi message có bitmap phụ. Chỉ cần sửa một ký tự là chữ ký không còn khớp."
+      }
+    }
   },
   "network": {
     "title": "Vận hành mạng",
