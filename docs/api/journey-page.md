@@ -3,8 +3,8 @@
 | | |
 | --- | --- |
 | Document | `docs/api/journey-page.md` |
-| Version | 1.2 |
-| Status | Approved for integration for purchases. Journeys of pre-authorizations, completions, refunds and balance inquiries show purchase MTIs and money signs today (§9 JRN-G2) |
+| Version | 1.3 |
+| Status | Approved for integration for every transaction type |
 | Date | 2026-09-25 |
 | Screen | route `/transactions` → `web-next/src/app/(console)/transactions/JourneyIndexScreen.tsx`; route `/transactions/{rrn}` → `web-next/src/app/(console)/transactions/[rrn]/JourneyScreen.tsx`. Both render `components/journey/JourneyView.tsx` |
 | Stories | MCN-307, MCN-406 (WEB); MCN-304 (GW); contract change #92 (`JourneyStep.code`, enum `StepCode`); MCN-308 (ISS, ledger reads) |
@@ -44,7 +44,7 @@ This contract covers the transaction list lookup, the journey read, the `StepCod
 | # | Method + path | Provider | Purpose | Trigger / cadence | Idempotency-Key | Concurrency | Availability |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 4.1 | `GET /v1/transactions?status={s}&limit=1` | gateway-go | Newest transaction of the tab's outcome | `/transactions` mount and tab change | n/a | none | Real |
-| 4.2 | `GET /v1/transactions/{rrn}/journey` | gateway-go | Transaction, steps, money deltas | once per RRN | n/a | none | Real (purchases); other types use purchase MTIs (JRN-G2) |
+| 4.2 | `GET /v1/transactions/{rrn}/journey` | gateway-go | Transaction, steps, money deltas | once per RRN | n/a | none | Real |
 | 4.3 | `StepCode` contract | – | Step semantics inside 4.2 | – | – | – | Real (#92) |
 | 4.4 | `GET /v1/cards` | issuer-jpos | Find the card by `maskedPan` | after 4.2, once per RRN | n/a | none | Real |
 | 4.5 | `GET /v1/cards/{cardRef}` | issuer-jpos | Current `ledgerBalance` | after 4.4 | n/a | `ETag` returned, unused | Real |
@@ -64,19 +64,19 @@ This contract covers the transaction list lookup, the journey read, the `StepCod
 | --- | --- | --- | --- | --- | --- |
 | `status` | query | `TransactionStatus` | no (the page always sends it) | `APPROVED` for "Thành công", `DECLINED` for "Bị từ chối", `REVERSED` for "Đã tự hủy" | none |
 | `limit` | query | integer | no | 1–200; the page sends `1` | 50 |
-| `cursor`, `rc`, `last4`, `from`, `to` | query | | no | not sent by this page | |
+| `cursor`, `rc`, `last4`, `from`, `to`, `reversalReason` | query | | no | not sent by this page | |
 
 - **Response.** `200`, `{ items: TransactionSummary[], nextCursor }`. The page reads `items[0].rrn` only; an empty `items` is the empty state.
 - **Provider rules.**
   1. Newest first by (`createdAt`, id) descending; keyset cursor, stable under concurrent inserts.
-  2. `status` filters on `tran_log.state` exactly; unknown values are not rejected (JRN-G6).
-  3. `limit` ≤ 0 means 50. Values above 200 are not clamped (JRN-G6).
+  2. `status` filters on `tran_log.state` exactly. `status` and `reversalReason` must be enum values, `rc` `^[0-9A-Z]{2}$`, `last4` `^[0-9]{4}$`, `from`/`to` RFC 3339, `limit` 1–200 (absent ⇒ 50) and `cursor` one this API returned; anything else ⇒ 400 `validation-error` with `errors[]`.
+  3. `reversalReason` filters on DE 39 of the queued 0420: `TIMEOUT` = `68`, `CUSTOMER_CANCELLATION` = `17`, `MAC_FAILURE` = `06`, `SEND_FAILURE` = any other code. `TransactionSummary.reversalReason` reports the same (null when no reversal was queued; rows reversed before #PR2 have none).
 - **Errors.**
 
 | HTTP status | Problem `type` | When | UI behaviour |
 | --- | --- | --- | --- |
-| 400 | `invalid-request` | `limit` not an integer, `from`/`to` not RFC 3339 | "Không tải được hành trình. Thử tải lại trang." |
-| 500 | `transactions-read-failed` | Database error, or a malformed `cursor` (JRN-G6) | same |
+| 400 | `validation-error` | A query parameter breaks the contract (rule 2) | "Không tải được hành trình. Thử tải lại trang." |
+| 500 | `transactions-read-failed` | Database error | same |
 | 502 | `https://mcn.local/problems/upstream-unavailable` (BFF) | Gateway unreachable | same |
 
 - **Example.** Real: `GET /api/v1/transactions?status=REVERSED&limit=1`
@@ -103,7 +103,7 @@ This contract covers the transaction list lookup, the journey read, the `StepCod
 
 | Parameter | In | Type | Required | Constraints |
 | --- | --- | --- | --- | --- |
-| `rrn` | path | string | ✓ | `^[0-9A-Z]{12}$` (not enforced, JRN-G6) |
+| `rrn` | path | string | ✓ | `^[0-9A-Z]{12}$`, else 400 `validation-error` |
 
 - **Response.** `200`, schema `Journey`.
 
@@ -153,13 +153,14 @@ This contract covers the transaction list lookup, the journey read, the `StepCod
   6. DE 2 is the stored masked PAN passed through `obs.MaskPAN` again. DE 52, DE 64 and DE 128 are never returned.
   7. REVERSAL_SENT carries MTI `0421` when the advice took more than one send (`saf_queue.attempts` counts failed sends), else `0420`.
   8. The client derives the outcome from `transaction.status` and the steps: REVERSED with a NO_RESPONSE step ⇒ auto-reversed ("đã được tự động hủy"), REVERSED without one ⇒ cancelled ("đã được hủy"); TIMED_OUT or REVERSAL_PENDING ⇒ reversing; CREATED/SENT ⇒ pending.
-  9. Provider `money`: the debit sits at ISSUER_APPROVED; for an unknown outcome at NO_RESPONSE; for a declined response that still queued a reversal (MAC failure) at ISSUER_DECLINED. A plain decline has no rows. The credit sits at REVERSAL_CONFIRMED. `delta` is `-amount` for the debit and `+amount` for the credit, whatever the type (JRN-G2).
+  9. Provider `money`: the debit sits at ISSUER_APPROVED; for an unknown outcome at NO_RESPONSE; for a declined response that still queued a reversal (MAC failure) at ISSUER_DECLINED. A plain decline has no rows. The credit sits at REVERSAL_CONFIRMED. `delta` is `-amount` for a purchase, pre-auth (`Hold`) or completion and `+amount` for a refund; the reversal row has the opposite sign. A balance inquiry has no rows. The MTI pair (0100/0110, 0220/0230, else 0200/0210), the POS_REQUEST path and the step texts follow `tran_type`; a 0220 carries no DE 2/22/41/42 and its DE 37 is the pre-auth's RRN; a balance inquiry carries no DE 4/49.
   10. The web prefers the issuer ledger (§4.4–§4.6, plan MCN-307 Ruling 3): it rewinds the card's current `ledgerBalance` through its journals to just before this RRN's first journal, then shows "Trước giao dịch", the RRN's own journals and "Số dư cuối cùng". It falls back to rule 9's deltas when the card or the RRN's journals aren't found, and shows nothing for a DECLINED transaction.
 - **Errors.**
 
 | HTTP status | Problem `type` | When | UI behaviour |
 | --- | --- | --- | --- |
-| 404 | `unknown-transaction` | No `tran_log` row for `{rrn}` (including malformed RRNs) | "Không tìm thấy giao dịch {rrn}." after 3 retries |
+| 400 | `validation-error` | `{rrn}` doesn't match `^[0-9A-Z]{12}$` | as 404 today (JRN-G9) |
+| 404 | `unknown-transaction` | No `tran_log` row for `{rrn}` | "Không tìm thấy giao dịch {rrn}." after 3 retries |
 | 500 | `transaction-read-failed` | `tran_log` read failed | same message (JRN-G9) |
 | 500 | `journey-read-failed` | State history or reversal lookup failed | same |
 | 502 | `…/upstream-unavailable` (BFF) | Gateway unreachable | same |
@@ -175,7 +176,7 @@ This contract covers the transaction list lookup, the journey read, the `StepCod
     "terminalId": "00000042", "merchantName": "Cà phê Góc Phố", "latencyMs": 8059,
     "createdAt": "2026-09-25T07:57:55.625583Z", "authCode": "L7AFDG",
     "approvedAmount": null, "balance": null, "businessDate": "2026-09-25",
-    "originalRrn": null, "traceId": "626807000352"
+    "originalRrn": null, "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
   },
   "steps": [
     { "seq": 1, "code": "POS_REQUEST", "actor": "POS", "offsetMs": 0, "kind": "OK",
@@ -281,14 +282,14 @@ Rules for providers and clients:
 
 ## 5. Real-time events
 
-None. A journey loaded while the transaction is still SENT, TIMED_OUT or REVERSAL_PENDING doesn't update until a reload or a window refocus (JRN-G5; the gateway doesn't send `transaction.updated` either, OVW-G3).
+None. A journey loaded while the transaction is still SENT, TIMED_OUT or REVERSAL_PENDING doesn't update until a reload or a window refocus (JRN-G5). The gateway now sends `transaction.updated` on every later status change (OVW-G3), so the page could subscribe.
 
 ## 6. Security and compliance
 
 - The only card identifier returned is `maskedPan` (first 6 + last 4), including DE 2 inside every rebuilt message, which is re-masked by `obs.MaskPAN` even if a clear PAN were ever stored (plan MCN-304 Ruling 3).
 - PIN block (DE 52) and MACs (DE 64/128) are never returned; neither is stored.
 - The ledger match uses `maskedPan`, never a PAN; the ledger's customer account is `ACC-{cardRef}`, not a PAN.
-- `traceId` is the RRN, not a real trace id (JRN-G3); NFR-08 correlation still works by RRN.
+- `traceId` is the W3C trace id of the request that created the transaction, stored in `tran_log.trace_id`; rows older than #PR2 have none and omit it.
 - The page is read-only: no audit, no destructive action.
 
 ## 7. Non-functional requirements
@@ -322,12 +323,12 @@ Payload bounds: at most one step per code, so at most 11 steps; messages carry a
 | ID | Gap | Evidence | Owner lane | Proposed fix / story |
 | --- | --- | --- | --- | --- |
 | JRN-G1 | ~~Journeys of pre-auth, completion, refund and balance inquiry show "declined before reaching the issuer" although they were sent and answered~~ | **Fixed** (#114): `advtxn` records `sent_at`, the network STAN, the processing code, the POS entry mode, the card token, the MTI and the CREATED→SENT→final history | GW | Done |
-| JRN-G2 | The journey builder is purchase-only | `mtiRequest = "0200"` and a hard-coded `"0210"` in `message.go`, so a PREAUTH shows 0200/0210 instead of 0100/0110 and a COMPLETION instead of 0220/0230; POS_REQUEST's text says `POST /v1/purchases` (the path is `/v1/transactions/purchases`); `moneyRows` gives a REFUND a negative delta (`Delta: -txn.Amount`). Since #119 the issuer really credits a refund (REFUND journal, C customer) and a refund reversal debits it. **The gateway must flip the sign:** `+amount` for a REFUND at ISSUER_APPROVED and `−amount` for its reversal at REVERSAL_CONFIRMED. #117 (open) makes exactly that change in `internal/journey/types.go` (rule 9 there: "`+amount` for a refund; the reversal row has the opposite sign"), so the two are consistent once both land; whichever merges second reconciles this row | GW | Take the MTI pair and the money sign from `tran_type`; fix the path text |
-| JRN-G3 | `Transaction` detail fields are never filled | `transactionDTO` types `approvedAmount` and `balance` as `*string` and never sets them; `originalRrn` isn't persisted (live COMPLETION `626807000294`: `originalRrn: null`); `traceId` is the RRN (`toTransactionDTO` ponytail comment) | GW | Persist approved amount, balance and original RRN in `tran_log`; add a `trace_id` column |
+| JRN-G2 | ~~The journey builder is purchase-only~~ | **Fixed** (#PR2): `internal/journey/types.go`: MTI pair, request path, carried fields, money sign and texts per `tran_type` | GW | Done |
+| JRN-G3 | ~~`Transaction` detail fields are never filled~~ | **Fixed** (#PR2): `approved_amount`, `balance_amount`/`balance_currency`, `original_rrn` and `trace_id` columns (migration 00007), set by `advtxn`/`purchase` and returned by the detail | GW | Done |
 | JRN-G4 | `money[].balanceAfter` is always `null` | MCN-304-AC3 asks for issuer-reported balances (DE 54) or null; plan MCN-304 Ruling 7 keeps null, and the web reads the issuer ledger instead (MCN-307 Ruling 3), costing 3–12 extra requests per journey | GW + ISS | Keep the ruling, and add an `rrn` filter to `/v1/cards/{cardRef}/ledger` so the web needs one request |
 | JRN-G5 | No live refresh for unfinished journeys | `useJourney` has no `refetchInterval`; the page uses no WS event | WEB (+ GW OVW-G3) | **Fixed** in #125: polls every 2 s while `status` is SENT, TIMED_OUT or REVERSAL_PENDING |
-| JRN-G6 | Query parameters aren't validated as the contract says | `?limit=500` returns 269 rows (max 200); `?cursor=zzz` → 500 `transactions-read-failed` (should be 400); `?status=BOGUS` → 200 empty; `/transactions/bad!!/journey` → 404 instead of 400 | GW | Validate `limit`, `status`, `rc`, `last4`, `cursor` and the RRN pattern in `parseTransactionFilter` / the handlers; 400 `validation-error` |
-| JRN-G7 | The "Đã tự hủy" (auto-cancelled) tab opens any REVERSED transaction | Live: the newest REVERSED is `626807000345`, a MAC-failure reversal (RC 96, reason 06), which renders as outcome "cancelled" ("Giao dịch 10.000 ₫ đã được hủy"); POS cancellations (reason 17) land there too. `TransactionSummary` has no reversal reason to filter on | contracts + GW + WEB | **Fixed** in #125: the tab asks for `status=REVERSED&reversalReason=TIMEOUT` (contract `ReversalReason`) |
+| JRN-G6 | ~~Query parameters aren't validated as the contract says~~ | **Fixed** (#PR2): `parseTransactionFilter` and `pathRRN` validate every parameter; a bad cursor is `store.ErrInvalidCursor`; all ⇒ 400 `validation-error` | GW | Done |
+| JRN-G7 | ~~The "Đã tự hủy" (auto-cancelled) tab opens any REVERSED transaction~~ | **Fixed** (#PR2): `ReversalQueuer.Queue` stores the 0420's DE 39 in `tran_log.reversal_reason`; `TransactionSummary.reversalReason` and `?reversalReason=` use it. The web tab still has to ask for `TIMEOUT` | contracts + GW + WEB | Done (the WEB tab asks for `reversalReason=TIMEOUT` since #125) |
 | JRN-G8 | "Mở trong phòng lab" opens the lab without the message | `IsoField.raw` / message bytes are never returned (messages are rebuilt, not captured); `StepDetail` links to `/lab/message` with no parameter | GW + WEB | Pack the rebuilt message and return it as `raw` on the MTI field, then pass it to the lab |
 | JRN-G9 | Every journey error reads as "not found" | `JourneyView`: `if (isError) return <Notice>{t("notFound", { rrn })}</Notice>` for 404, 500 and 502 alike, after 3 retries | WEB | **Fixed** in #125: a 404 reads "not found" and isn't retried; other problems read as a load error |
 | JRN-G10 | Problem responses aren't docs/04 §3 shaped | Bare slugs `unknown-transaction`, `transaction-read-failed`, `journey-read-failed`, `transactions-read-failed`, `invalid-request`; see OVW-G12 in [overview-page.md](overview-page.md) | GW | As OVW-G12 |
@@ -341,3 +342,4 @@ Payload bounds: at most one step per code, so at most 11 steps; messages carry a
 | 1.1 | 2026-09-25 | JRN-G1 fixed (#114) |
 | 1.2 | 2026-09-25 | JRN-G2 evidence: after #119 the issuer ledger credits refunds, so the gateway's negative REFUND `money` row is now wrong against it; the gateway must flip it (#117). No provider change here. |
 | 1.3 | 2026-09-26 | JRN-G5, G7, G9, G11 fixed (#125) |
+| 1.4 | 2026-09-25 | JRN-G2, JRN-G3, JRN-G6 and JRN-G7 fixed (#PR2) |
