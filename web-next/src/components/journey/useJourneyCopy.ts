@@ -48,7 +48,8 @@ export function useJourneyCopy(journey: Journey) {
   function step(s: Step, index: number): StepCopy {
     const k = key(s, index);
     const reason = txn.responseCode && tRc.has(txn.responseCode) ? tRc(txn.responseCode) : (txn.responseLabel ?? "");
-    const params = { last4: txn.maskedPan.slice(-4), merchant: txn.merchantName, amount, reason, total: total() };
+    // "The whole journey took …" is the time until the POS answered, not until a later reversal.
+    const params = { last4: txn.maskedPan.slice(-4), merchant: txn.merchantName, amount, reason, total: total(s.offsetMs) };
     const title = k ? t(`${k}.title`) : s.title;
     const easy = k ? t(`${k}.easy`, params) : s.easyText;
     return {

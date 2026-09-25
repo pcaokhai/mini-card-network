@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
+import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import en from "../../../messages/en.json";
@@ -55,6 +56,17 @@ describe("JourneyView (MCN-307: summary, timeline, detail, money as in the desig
     const fields = within(detail).getByRole("table", { name: "Message 0210 content" });
     expect(within(fields).getByText("Approval code")).toBeInTheDocument();
     expect(within(fields).getByText("A00123")).toBeInTheDocument();
+  });
+
+  it("times the receipt at its own step, not at the end of a later cancellation", async () => {
+    server.use(
+      http.get("*/v1/transactions/:rrn/journey", () =>
+        HttpResponse.json({ ...APPROVED_JOURNEY, steps: [...APPROVED_JOURNEY.steps, { ...AUTO_REVERSED_JOURNEY.steps[6], seq: 5, offsetMs: 636 }] }),
+      ),
+    );
+    renderJourney(APPROVED_JOURNEY.transaction.rrn);
+
+    expect(await screen.findByText("The customer gets the goods. The whole journey took 182 ms.")).toBeInTheDocument();
   });
 
   it("switches the timeline and field names to technical copy in Expert mode", async () => {
