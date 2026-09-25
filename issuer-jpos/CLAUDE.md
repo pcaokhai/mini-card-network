@@ -7,11 +7,10 @@ Lane: **ISS**. Owns: `issuer-jpos/**`, database `issuer`, migrations `issuer-jpo
 ## Commands
 
 ```bash
-./gradlew build                 # compile + unit + integration tests
-./gradlew test                  # unit tests only
-./gradlew integrationTest       # Testcontainers (Postgres), golden ISO vectors
+./gradlew build                 # compile + every test
+./gradlew test                  # every test: unit, Testcontainers integration, ISO golden vectors, ArchUnit
 ./gradlew spotlessApply         # format (google-java-format)
-./gradlew spotlessCheck archTest
+./gradlew spotlessCheck test    # what CI runs
 ./gradlew run                   # start Q2 locally (needs `make up` infra)
 ```
 

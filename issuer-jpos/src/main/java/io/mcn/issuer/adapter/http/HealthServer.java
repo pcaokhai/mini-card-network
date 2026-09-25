@@ -41,6 +41,7 @@ public final class HealthServer {
                       .routes
                       .before(ApiProblems::assignTraceId)
                       .exception(Exception.class, ApiProblems::internal)
+                      .error(404, ApiProblems::unmatchedRoute)
                       .get("/health/live", ctx -> ctx.contentType("application/json").result(UP))
                       .get(
                           "/health/ready",

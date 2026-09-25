@@ -622,7 +622,7 @@ class CardAdminApiIntegrationTest {
   }
 
   @Test
-  @DisplayName("Idempotency: in-flight blocks sharing a key all get the first one's stored 200")
+  @DisplayName("CARDS-G17: in-flight blocks sharing a key all get the first one's stored 200")
   void should_replayTheFirstResponse_when_sameKeyBlocksAreInFlightTogether() throws Exception {
     String cardRef = newCard("ACTIVE", "3012");
     String key = UUID.randomUUID().toString();
@@ -640,8 +640,7 @@ class CardAdminApiIntegrationTest {
   }
 
   @Test
-  @DisplayName(
-      "Idempotency: in-flight limit saves sharing a key all get the first one's stored 200")
+  @DisplayName("CARDS-G17: in-flight limit saves sharing a key all get the first one's stored 200")
   void should_replayTheFirstResponse_when_sameKeyLimitSavesAreInFlightTogether() throws Exception {
     String cardRef = newCard("ACTIVE", "3012");
     String key = UUID.randomUUID().toString();
@@ -655,7 +654,7 @@ class CardAdminApiIntegrationTest {
   }
 
   @Test
-  @DisplayName("Idempotency: a key that isn't a UUID is insufficient-idempotency-key")
+  @DisplayName("CARDS-G16: a key that isn't a UUID is insufficient-idempotency-key")
   void should_return400_when_idempotencyKeyIsNotAUuid() throws Exception {
     String cardRef = newCard("ACTIVE", "3012");
 
@@ -672,6 +671,86 @@ class CardAdminApiIntegrationTest {
       assertThat(r.body()).contains("https://mcn.local/problems/insufficient-idempotency-key");
     }
     assertThat(storedStatus(cardRef)).isEqualTo("ACTIVE");
+  }
+
+  @Test
+  @DisplayName(
+      "CARDS-G6: concurrent blocks (distinct keys) - one wins, the rest see it and get 409")
+  void should_letExactlyOneBlockWin_when_blocksRace() throws Exception {
+    String cardRef = newCard("ACTIVE", "3012");
+
+    var responses = concurrently(6, () -> block(cardRef, "LOST", "ops"));
+
+    assertThat(responses).extracting(HttpResponse::statusCode).containsOnly(200, 409);
+    assertThat(responses.stream().filter(r -> r.statusCode() == 200)).hasSize(1);
+    assertThat(new AuditLogRepository(ds).findByEntity("card", cardRef)).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("CARDS-G6: concurrent unblocks (distinct keys) - one wins, the rest get 409")
+  void should_letExactlyOneUnblockWin_when_unblocksRace() throws Exception {
+    String cardRef = newCard("BLOCKED", "3012");
+
+    var responses = concurrently(6, () -> unblock(cardRef, "ops"));
+
+    assertThat(responses).extracting(HttpResponse::statusCode).containsOnly(200, 409);
+    assertThat(responses.stream().filter(r -> r.statusCode() == 200)).hasSize(1);
+    assertThat(new AuditLogRepository(ds).findByEntity("card", cardRef)).hasSize(1);
+    assertThat(storedStatus(cardRef)).isEqualTo("ACTIVE");
+  }
+
+  @Test
+  @DisplayName("CARDS-G9: a problem never echoes a PAN from the path")
+  void should_maskAPan_when_theRequestPathCarriesOne() throws Exception {
+    for (String path : List.of("/v1/cards/9704360000004417", "/v1/nothing/9704360000004417")) {
+      var response = get(path);
+
+      assertThat(response.body()).as(path).doesNotContain("9704360000004417");
+      assertThat(JSON.readTree(response.body()).path("instance").asText())
+          .as(path)
+          .contains("970436******4417");
+    }
+  }
+
+  @Test
+  @DisplayName("CARDS-G9: a 500 is an internal problem whose body carries no exception text")
+  void should_returnAnInternalProblemWithoutExceptionText_when_theHandlerFails() throws Exception {
+    var cfg = new com.zaxxer.hikari.HikariConfig();
+    cfg.setJdbcUrl(postgres.getJdbcUrl());
+    cfg.setUsername(postgres.getUsername());
+    cfg.setPassword(postgres.getPassword());
+    var closedPool = new HikariDataSource(cfg);
+    closedPool.close();
+    var brokenServer =
+        new HealthServer(
+            new Readiness(),
+            new CardAdminController(
+                closedPool,
+                new CardRepository(closedPool),
+                new AccountRepository(closedPool),
+                new CardLimitRepository(closedPool),
+                new AuditLogRepository(closedPool),
+                new IdempotencyRepository(closedPool),
+                new LedgerRepository(),
+                new BusinessDateRepository(closedPool)));
+    int brokenPort = brokenServer.start(0);
+    try {
+      var response =
+          client.send(
+              HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + brokenPort + "/v1/cards"))
+                  .GET()
+                  .build(),
+              HttpResponse.BodyHandlers.ofString());
+
+      assertThat(response.statusCode()).isEqualTo(500);
+      var problem = JSON.readTree(response.body());
+      assertThat(problem.path("type").asText()).isEqualTo("https://mcn.local/problems/internal");
+      assertThat(problem.has("detail")).isFalse();
+      assertThat(response.body()).doesNotContainIgnoringCase("exception").doesNotContain("Hikari");
+      assertThat(problem.path("traceId").asText()).matches("[0-9a-f]{32}");
+    } finally {
+      brokenServer.stop();
+    }
   }
 
   @Test

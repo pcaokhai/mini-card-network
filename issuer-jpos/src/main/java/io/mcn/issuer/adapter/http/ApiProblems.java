@@ -3,6 +3,7 @@ package io.mcn.issuer.adapter.http;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.http.Context;
 import io.javalin.http.HttpResponseException;
+import io.mcn.issuer.adapter.logging.PanMasker;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +20,7 @@ import org.slf4j.LoggerFactory;
  */
 final class ApiProblems {
   private static final Logger LOG = LoggerFactory.getLogger(ApiProblems.class);
+  private static final String PROBLEM_JSON = "application/problem+json";
   private static final String TYPE_BASE = "https://mcn.local/problems/";
   private static final String TRACE_ID_ATTRIBUTE = "mcn.traceId";
   private static final Pattern TRACEPARENT =
@@ -67,17 +69,33 @@ final class ApiProblems {
   }
 
   /**
-   * Exception handler. Javalin's own 404 (no such route) arrives here too, as an {@link
-   * HttpResponseException}; anything else is unexpected: logged against the trace id, answered with
-   * only the trace.
+   * Exception handler. Javalin's own client errors (404 no such route, 400, 405…) arrive here as
+   * {@link HttpResponseException} and keep their status. Anything else is unexpected: logged
+   * against the trace id, answered 500 with only the trace.
    */
   static void internal(Exception e, Context ctx) {
-    if (e instanceof HttpResponseException http && http.getStatus() == 404) {
-      send(ctx, 404, "not-found", "Not found", "No resource at " + ctx.path());
+    if (e instanceof HttpResponseException http && http.getStatus() < 500) {
+      int status = http.getStatus();
+      String slug = status == 404 ? "not-found" : "validation-error";
+      send(ctx, status, slug, "Request not served", "No " + ctx.method() + " at " + ctx.path());
       return;
     }
-    LOG.error("admin api request failed trace_id={} path={}", traceId(ctx), ctx.path(), e);
+    LOG.error(
+        "admin api request failed trace_id={} path={}",
+        traceId(ctx),
+        PanMasker.mask(ctx.path()),
+        e);
     send(ctx, 500, "internal", "Internal error", null);
+  }
+
+  /**
+   * 404 error handler: Javalin answers an unmatched route with its own plain text that echoes the
+   * raw path. A 404 a handler already wrote as a problem is left alone.
+   */
+  static void unmatchedRoute(Context ctx) {
+    String contentType = ctx.contentType();
+    if (contentType != null && contentType.startsWith(PROBLEM_JSON)) return;
+    send(ctx, 404, "not-found", "Not found", "No " + ctx.method() + " at " + ctx.path());
   }
 
   private static void send(
@@ -86,8 +104,9 @@ final class ApiProblems {
     body.put("type", TYPE_BASE + slug);
     body.put("title", title);
     body.put("status", status);
-    if (detail != null) body.put("detail", detail);
-    body.put("instance", ctx.path());
+    // The path and anything built from it are caller input: mask a PAN typed into the URL.
+    if (detail != null) body.put("detail", PanMasker.mask(detail));
+    body.put("instance", PanMasker.mask(ctx.path()));
     body.put("traceId", traceId(ctx));
     if (!errors.isEmpty()) body.put("errors", errors);
     try {
@@ -96,6 +115,6 @@ final class ApiProblems {
     } catch (Exception e) {
       throw new IllegalStateException("serialize problem failed", e);
     }
-    ctx.contentType("application/problem+json");
+    ctx.contentType(PROBLEM_JSON);
   }
 }
