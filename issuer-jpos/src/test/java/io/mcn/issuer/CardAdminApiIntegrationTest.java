@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -597,6 +598,80 @@ class CardAdminApiIntegrationTest {
         tinyServer.stop();
       }
     }
+  }
+
+  /** Fires {@code n} identical requests at once; returns their responses. */
+  private List<HttpResponse<String>> concurrently(int n, Callable<HttpResponse<String>> request)
+      throws Exception {
+    var start = new CountDownLatch(1);
+    List<Future<HttpResponse<String>>> futures = new ArrayList<>();
+    try (var pool = Executors.newFixedThreadPool(n)) {
+      for (int i = 0; i < n; i++) {
+        futures.add(
+            pool.submit(
+                () -> {
+                  start.await();
+                  return request.call();
+                }));
+      }
+      start.countDown();
+      List<HttpResponse<String>> responses = new ArrayList<>();
+      for (var f : futures) responses.add(f.get(30, TimeUnit.SECONDS));
+      return responses;
+    }
+  }
+
+  @Test
+  @DisplayName("Idempotency: in-flight blocks sharing a key all get the first one's stored 200")
+  void should_replayTheFirstResponse_when_sameKeyBlocksAreInFlightTogether() throws Exception {
+    String cardRef = newCard("ACTIVE", "3012");
+    String key = UUID.randomUUID().toString();
+
+    var responses =
+        concurrently(
+            6,
+            () ->
+                post("/v1/cards/" + cardRef + "/blocks", key, "{\"reason\":\"CUSTOMER_REQUEST\"}"));
+
+    assertThat(responses).extracting(HttpResponse::statusCode).containsOnly(200);
+    var first = JSON.readTree(responses.get(0).body());
+    for (var r : responses) assertThat(JSON.readTree(r.body())).isEqualTo(first);
+    assertThat(new AuditLogRepository(ds).findByEntity("card", cardRef)).hasSize(1);
+  }
+
+  @Test
+  @DisplayName(
+      "Idempotency: in-flight limit saves sharing a key all get the first one's stored 200")
+  void should_replayTheFirstResponse_when_sameKeyLimitSavesAreInFlightTogether() throws Exception {
+    String cardRef = newCard("ACTIVE", "3012");
+    String key = UUID.randomUUID().toString();
+    String etag = etagOf(cardRef);
+    String body = limitsBody(100_000, 900_000, "704", 5);
+
+    var responses = concurrently(6, () -> put("/v1/cards/" + cardRef + "/limits", key, etag, body));
+
+    assertThat(responses).extracting(HttpResponse::statusCode).containsOnly(200);
+    assertThat(new AuditLogRepository(ds).findByEntity("card", cardRef)).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("Idempotency: a key that isn't a UUID is insufficient-idempotency-key")
+  void should_return400_when_idempotencyKeyIsNotAUuid() throws Exception {
+    String cardRef = newCard("ACTIVE", "3012");
+
+    var block = post("/v1/cards/" + cardRef + "/blocks", "not-a-uuid", "{\"reason\":\"LOST\"}");
+    var limits =
+        put(
+            "/v1/cards/" + cardRef + "/limits",
+            "12345",
+            etagOf(cardRef),
+            limitsBody(100_000, 900_000, "704", 5));
+
+    for (var r : List.of(block, limits)) {
+      assertThat(r.statusCode()).isEqualTo(400);
+      assertThat(r.body()).contains("https://mcn.local/problems/insufficient-idempotency-key");
+    }
+    assertThat(storedStatus(cardRef)).isEqualTo("ACTIVE");
   }
 
   @Test

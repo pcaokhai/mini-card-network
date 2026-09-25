@@ -24,12 +24,20 @@ public class IdempotencyRepository {
   }
 
   public Optional<IdempotencyRecord> find(String key, String route) {
+    try (var conn = dataSource.getConnection()) {
+      return find(conn, key, route);
+    } catch (SQLException e) {
+      throw new IllegalStateException("find idempotency_record failed", e);
+    }
+  }
+
+  /** Same lookup inside the caller's transaction (under the lock that serializes the write). */
+  public Optional<IdempotencyRecord> find(Connection conn, String key, String route) {
     String sql =
         "SELECT key, route, request_hash, status, body FROM idempotency_record "
             + "WHERE key = ? AND route = ? AND created_at > now() - "
             + TTL;
-    try (var conn = dataSource.getConnection();
-        var stmt = conn.prepareStatement(sql)) {
+    try (var stmt = conn.prepareStatement(sql)) {
       stmt.setString(1, key);
       stmt.setString(2, route);
       try (ResultSet rs = stmt.executeQuery()) {

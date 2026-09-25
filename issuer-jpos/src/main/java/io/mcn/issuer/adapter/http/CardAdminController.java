@@ -44,6 +44,9 @@ import javax.sql.DataSource;
  */
 public final class CardAdminController {
   private static final Pattern CARD_REF = Pattern.compile("^crd_[A-Za-z0-9]{10,32}$");
+  private static final Pattern UUID_KEY =
+      Pattern.compile(
+          "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
   private static final int DEFAULT_PAGE_SIZE = 50;
   private static final int MAX_PAGE_SIZE = 200;
 
@@ -139,13 +142,13 @@ public final class CardAdminController {
   /** Shared POST/DELETE .../blocks handler; {@code block} picks which state transition runs. */
   private void changeBlockStatus(Context ctx, boolean block) {
     String idempotencyKey = ctx.header("Idempotency-Key");
-    if (idempotencyKey == null || idempotencyKey.isBlank()) {
+    if (idempotencyKey == null || !UUID_KEY.matcher(idempotencyKey).matches()) {
       insufficientIdempotencyKey(ctx);
       return;
     }
     String route = ctx.method() + " " + ctx.path();
     String requestHash = sha256(ctx.body());
-    if (replayIfPresent(ctx, route, idempotencyKey, requestHash)) return;
+    if (replayIfPresent(ctx, idempotency.find(idempotencyKey, route), requestHash)) return;
 
     Optional<BlockReason> reason = block ? blockReason(ctx.body()) : Optional.empty();
     if (block && reason.isEmpty()) {
@@ -190,6 +193,12 @@ public final class CardAdminController {
       notFound(ctx);
       return;
     }
+    // Same-key requests in flight together queue on this lock; the first commits its record before
+    // releasing it, so the rest replay it here instead of hitting its primary key.
+    if (replayIfPresent(ctx, idempotency.find(conn, idempotencyKey, route), requestHash)) {
+      conn.rollback();
+      return;
+    }
     Card card = locked.get();
     String current =
         CardLifecycle.effectiveStatus(card.status(), card.expiryYymm(), reads.businessDate());
@@ -222,14 +231,14 @@ public final class CardAdminController {
 
   private void updateLimits(Context ctx) {
     String idempotencyKey = ctx.header("Idempotency-Key");
-    if (idempotencyKey == null || idempotencyKey.isBlank()) {
+    if (idempotencyKey == null || !UUID_KEY.matcher(idempotencyKey).matches()) {
       insufficientIdempotencyKey(ctx);
       return;
     }
     // Replay before If-Match: a retried successful save carries the ETag it just made stale.
     String route = ctx.method() + " " + ctx.path();
     String requestHash = sha256(ctx.body());
-    if (replayIfPresent(ctx, route, idempotencyKey, requestHash)) return;
+    if (replayIfPresent(ctx, idempotency.find(idempotencyKey, route), requestHash)) return;
 
     Optional<Card> card = cards.findByCardRef(ctx.pathParam("cardRef"));
     if (card.isEmpty()) {
@@ -266,6 +275,11 @@ public final class CardAdminController {
       String requestHash)
       throws SQLException {
     Card card = cards.lockByCardRef(conn, ctx.pathParam("cardRef")).orElseThrow();
+    // As in transitionUnderLock: a same-key request that was in flight with this one replays here.
+    if (replayIfPresent(ctx, idempotency.find(conn, idempotencyKey, route), requestHash)) {
+      conn.rollback();
+      return;
+    }
     List<CardLimit> currentLimits = cardLimits.findAllForCard(conn, card.id());
     if (!ifMatchAccepts(ctx.header("If-Match"), currentLimits)) {
       conn.rollback();
@@ -372,8 +386,8 @@ public final class CardAdminController {
   // ---- replay / idempotency ----------------------------------------------------------------
 
   /** Answers from the stored record (or 422 on a body mismatch); true when it answered. */
-  private boolean replayIfPresent(Context ctx, String route, String key, String requestHash) {
-    Optional<IdempotencyRecord> stored = idempotency.find(key, route);
+  private boolean replayIfPresent(
+      Context ctx, Optional<IdempotencyRecord> stored, String requestHash) {
     if (stored.isEmpty()) return false;
     IdempotencyRecord record = stored.get();
     if (!record.requestHash().equals(requestHash)) {
@@ -581,8 +595,8 @@ public final class CardAdminController {
         ctx,
         400,
         "insufficient-idempotency-key",
-        "Idempotency-Key header is required",
-        ctx.method() + " " + ctx.path() + " requires Idempotency-Key.");
+        "Idempotency-Key missing or not a UUID",
+        ctx.method() + " " + ctx.path() + " requires an Idempotency-Key that is a UUID.");
   }
 
   private static void idempotencyKeyMismatch(Context ctx) {

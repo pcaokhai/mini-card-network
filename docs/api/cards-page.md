@@ -222,7 +222,7 @@ Next page: `GET …/ledger?limit=2&cursor=243` → journals `242`, `236`, `nextC
 | name | in | type | required | constraints | notes |
 | --- | --- | --- | --- | --- | --- |
 | `cardRef` | path | string | ✓ | as §4.2 | |
-| `Idempotency-Key` | header | UUID | ✓ | non-blank | new `crypto.randomUUID()` per confirm |
+| `Idempotency-Key` | header | UUID | ✓ | a UUID (`8-4-4-4-12` hex), else `400 insufficient-idempotency-key` | new `crypto.randomUUID()` per confirm |
 | `Content-Type` | header | string | ✓ | `application/json` | |
 | `traceparent` | header | string | – | forwarded by the BFF | not read by the handler |
 
@@ -235,8 +235,8 @@ Body:
 **Response.** `200`, `CardDetail` with the new status: `LOST` for `LOST`, `STOLEN` for `STOLEN`, `BLOCKED` for `FRAUD_SUSPECTED` and `CUSTOMER_REQUEST`. The fields are as in §4.2; the response has no `ETag` header.
 
 **Provider rules.**
-1. **Order of checks.** (a) `cardRef` pattern; (b) `Idempotency-Key` present; (c) replay lookup on (key, `"POST /v1/cards/{cardRef}/blocks"`); (d) `reason` in the enum; (e) card exists and, under `SELECT … FOR UPDATE` on the card, its status as read (§4.2 rule 3) is `ACTIVE`.
-2. **Replay.** Same key, same route, same body hash → the stored status and body, byte for byte. Same key, different body → `422`. Records expire after 24 h (docs/04 §2): an older record is ignored, so the key counts as new, and each admin write purges expired records (CARDS-G10).
+1. **Order of checks.** (a) `cardRef` pattern; (b) `Idempotency-Key` present and a UUID; (c) replay lookup on (key, `"POST /v1/cards/{cardRef}/blocks"`); (d) `reason` in the enum; (e) card exists and, under `SELECT … FOR UPDATE` on the card, its status as read (§4.2 rule 3) is `ACTIVE`.
+2. **Replay.** Same key, same route, same body hash → the stored status and body, byte for byte. Same key, different body → `422`. Records expire after 24 h (docs/04 §2): an older record is ignored, so the key counts as new, and each admin write purges expired records (CARDS-G10). **Requests in flight together with the same key** don't race: every write takes the card's row lock, and the first request commits its idempotency record before releasing it. Each later request re-reads the record once it holds the lock and replays it (the same `200` body, or `422` for a different body). So none of them gets a `500` from the record's primary key, and the change and its audit row happen once.
 3. The status update, the `audit_log` row (`action = CARD_BLOCKED`, `entity_type = card`, `entity_id = cardRef`, before `{"status":"ACTIVE"}`, after `{"status":"<new status>","reason":"<reason>"}`) and the idempotency record commit in one transaction.
 4. `audit_log.actor` = the `X-Actor` header, or `"unknown"`. The BFF neither sends nor forwards `X-Actor`, so every audit row from the page says `unknown` (§9 CARDS-G3).
 5. Effect on authorization: the issuer's Validate participant declines the next 0100/0200 for this card with RC `62` (the Expert description says so).
@@ -245,7 +245,7 @@ Body:
 
 | HTTP status | problem `type` slug | when | UI behaviour |
 | --- | --- | --- | --- |
-| 400 | `insufficient-idempotency-key` | header missing or blank | "Không đổi được trạng thái thẻ: {detail}" under the panel |
+| 400 | `insufficient-idempotency-key` | header missing or not a UUID | "Không đổi được trạng thái thẻ: {detail}" under the panel |
 | 404 | `not-found` | unknown card | same, with the detail |
 | 400 | `validation-error` | `reason` missing or outside the enum (`errors[0].field = reason`), or a malformed `cardRef` | same |
 | 409 | `conflict` | card isn't `ACTIVE`, including an expired card (detail: `card {cardRef} is {status}, cannot block it`) | same |
@@ -292,7 +292,7 @@ Content-Type: application/json
 | name | in | type | required | constraints | notes |
 | --- | --- | --- | --- | --- | --- |
 | `cardRef` | path | string | ✓ | as §4.2 | |
-| `Idempotency-Key` | header | UUID | ✓ | non-blank | new per save |
+| `Idempotency-Key` | header | UUID | ✓ | a UUID (`8-4-4-4-12` hex), else `400 insufficient-idempotency-key` | new per save |
 | `If-Match` | header | string | ✓ | its limits version (the part before `-`, §4.2 rule 6) must equal the current one; a limits-only ETag from before #115 is also accepted | the UI sends the ETag from its last §4.2 read, or `""` when it had none |
 | `Content-Type` | header | string | ✓ | `application/json` | |
 
@@ -309,17 +309,19 @@ Body (`CardLimits`):
 **Response.** `200`, `CardDetail` with the new `limits`, plus a new `ETag` header.
 
 **Provider rules.**
-1. **Order of checks.** (a) `cardRef` pattern; (b) `Idempotency-Key` present; (c) replay lookup, so a retried successful save gets its stored `200` even though its If-Match is now stale; (d) card exists; (e) body validation (§4.6 body table), every failure listed in `errors[]`; (f) inside the write transaction, under `SELECT … FOR UPDATE` on the card, the If-Match limits version equals the current one.
+1. **Order of checks.** (a) `cardRef` pattern; (b) `Idempotency-Key` present and a UUID; (c) replay lookup, so a retried successful save gets its stored `200` even though its If-Match is now stale; (d) card exists; (e) body validation (§4.6 body table), every failure listed in `errors[]`; (f) inside the write transaction, under `SELECT … FOR UPDATE` on the card, the If-Match limits version equals the current one.
 2. **ETag.** As §4.2 rule 6. A save that changes only `dailyCount` still changes the limits version. A block or unblock doesn't.
 3. The upsert of both `card_limit` rows (`txn_type = ALL`, periods `PER_TXN` and `DAILY`, with `max_count = dailyCount` on DAILY), the `audit_log` row (`CARD_LIMITS_UPDATED`, before/after limit maps) and the idempotency record commit in one transaction.
 4. Of two concurrent saves carrying the same ETag, exactly one succeeds; the other reads the winner's limits under the lock and gets `412` (CARDS-G6).
 5. `perTransactionAmount ≤ dailyAmount` is enforced for new saves (CARDS-G7). Rows saved before #115 can still break it (`crd_normal0001` on the local stack: 9 500 000 per transaction against 8 000 000 per day) until they are saved again.
+6. **Ceilings are positive.** Amounts must be > 0 and `dailyCount` null or > 0, the same rule as the `card_limit` CHECKs (`max_amount > 0`, `max_count > 0`). A zero ceiling gets `400 validation-error` with the field in `errors[]`, never a 500 from the database. To stop spending, block the card (§4.4). Decided by the lead on #115 (CARDS-G7).
+7. **Same-key requests in flight** replay the first one's stored response under the card lock, as in §4.4 rule 2.
 
 **Errors.**
 
 | HTTP status | problem `type` slug | when | UI behaviour |
 | --- | --- | --- | --- |
-| 400 | `insufficient-idempotency-key` | header missing or blank | "Không lưu được hạn mức: {detail}" |
+| 400 | `insufficient-idempotency-key` | header missing or not a UUID | "Không lưu được hạn mức: {detail}" |
 | 400 | `validation-error` | the body isn't a JSON object, or fields fail the body table; `errors[]` has one `{field, message}` per failure (for example `dailyAmount.amount`, `perTransactionAmount.currency`, `dailyCount`) | same |
 | 404 | `not-found` | unknown card | same |
 | 412 | `precondition-failed` | `If-Match` missing or stale | banner "Someone changed this card. Reload to continue." with "Tải lại" (MCN-309-AC3); "Tải lại" drops the drafts and refetches §4.2 |
@@ -402,7 +404,7 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | CARDS-G9 | Issuer problems use `Content-Type: application/json`, not `application/problem+json`. `traceId` is a random UUID, not the request's trace. No `X-Trace-Id` header. | live 404 headers; `CardAdminController.java:392-401` | ISS | **Fixed** in #115: One mapper (`ApiProblems`): `application/problem+json`, full-URI `type`, `instance`, `traceId` from `traceparent`, `X-Trace-Id` on every response, 500 `internal` for unexpected errors |
 | CARDS-G10 | Idempotency records never expire (docs/04 §2: 24 h) | `IdempotencyRepository` has no TTL column or filter | ISS | **Fixed** in #115: Records older than 24 h are ignored on read and purged on each admin write |
 | CARDS-G11 | `holds` is always `[]` (no PREAUTH, MCN-603). Journal descriptions are always generated, so real rows show only the type name. | `CardAdminController.java:283-284, 316` | ISS | MCN-603; description from merchant name |
-| CARDS-G12 | `usedToday` keys on the issuer JVM's calendar date, not the ISO business date | `CardLimitRepository.amountToday` | ISS | **Fixed** in #115: Keyed by `system_state.current_business_date`, falling back to the calendar date while no cutover has written it |
+| CARDS-G12 | `usedToday` keys on the issuer JVM's calendar date, not the ISO business date | `CardLimitRepository.amountToday` | ISS | **Fixed** in #115: Keyed by `system_state.current_business_date`, falling back to the calendar date while no cutover has written it. Consistent with ADR-007 (today = the business date, rolled at cutover). **When MCN-702 starts writing `system_state`, the ISO path (`ParseAndValidate`, which sets the business date that keys `velocity_counter`, plus the velocity rules) must switch to it in the same change;** otherwise `usedToday` and the velocity checks read different days. |
 | CARDS-G13 | The provider doesn't enforce the `cardRef` pattern (any string → 404) | `CardAdminController.getCard` | ISS | **Fixed** in #115: 400 `validation-error` on a pattern mismatch |
 | CARDS-G14 | The contract says the posting `account` is a "customer account number (masked)". The provider sends `ACC-<cardRef>`, which the UI relies on (Ruling R7). | `openapi.yaml` `JournalEntry`; `LedgerRepository.postingsForJournals` | PLAT (contracts) | **Fixed** in #115: No provider change needed: it already sends `ACC-<cardRef>`, which the reworded contract (#111) describes |
 | CARDS-G15 | Two strings in `vi.json` are English: `cards.limits.stale` ("Someone changed this card. Reload to continue.", the MCN-309-AC3 wording) and `cards.ledger.expert.more` ("Load more") | `web-next/messages/vi.json` | WEB | Translate, keeping AC3's meaning |
@@ -412,4 +414,4 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | Version | Date | Change |
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack (GET only). |
-| 1.1 | 2026-09-25 | Issuer gap fixes in #115: CARDS-G1, G2, G4, G5 (issuer half), G6, G7, G8, G9, G10, G12 and G13 are marked Fixed, and G14 needed no provider change. §4 provider rules, request tables and error tables now describe the new behaviour. |
+| 1.1 | 2026-09-25 | Issuer gap fixes in #115: CARDS-G1, G2, G4, G5 (issuer half), G6, G7, G8, G9, G10, G12 and G13 are marked Fixed, and G14 needed no provider change. §4 provider rules, request tables and error tables now describe the new behaviour. The `Idempotency-Key` must be a UUID, requests with the same key that are in flight together replay under the card lock (§4.4 rule 2), and limits must be positive (§4.6 rule 6). The G12 note covers MCN-702. |
