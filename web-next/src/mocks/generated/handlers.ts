@@ -1951,6 +1951,7 @@ export function getGetOverview200Response() {
     transactionsDeltaPct: faker.number.int(),
     approvalRate: faker.number.int(),
     p99LatencyMs: faker.number.int(),
+    p50LatencyMs: faker.number.int(),
     ledgerMatches: faker.datatype.boolean(),
     throughput: (() => {
       const arrayMin = 1;

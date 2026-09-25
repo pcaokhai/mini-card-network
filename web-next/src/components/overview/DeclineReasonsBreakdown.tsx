@@ -1,5 +1,6 @@
 import { useTranslations } from "next-intl";
 import type { Overview } from "@/shared/api/overview-client";
+import { useResultLabel } from "@/shared/i18n/useResultLabel";
 
 interface DeclineReasonsBreakdownProps {
   declineReasons: Overview["declineReasons"];
@@ -9,7 +10,10 @@ interface DeclineReasonsBreakdownProps {
 /** MCN-306-AC3: Expert mode appends the ISO 8583 response code to each reason. */
 export function DeclineReasonsBreakdown({ declineReasons, expert = false }: DeclineReasonsBreakdownProps) {
   const t = useTranslations("overview.declineReasons");
-  const sorted = [...declineReasons].sort((a, b) => b.share - a.share);
+  const label = useResultLabel();
+  const sorted = [...declineReasons]
+    .sort((a, b) => b.share - a.share)
+    .map((reason) => ({ ...reason, label: label.forCode(reason.responseCode, reason.label) ?? reason.label }));
 
   return (
     <section

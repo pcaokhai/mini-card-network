@@ -71,4 +71,21 @@ describe("LiveFeed", () => {
     act(() => emit(declined));
     expect(screen.getByTestId("feed-status")).toHaveTextContent(/^Không đủ tiền$/);
   });
+
+  it("MCN-306-AC2: new transactions slide in at the top with a highlight", () => {
+    renderWithIntl(<LiveFeed />);
+    act(() => emit({ type: "transaction.created", data: { rrn: "older", status: "APPROVED" }, occurredAt: "now" }));
+    act(() => emit({ type: "transaction.created", data: { rrn: "newer", status: "APPROVED" }, occurredAt: "now" }));
+    const [first] = screen.getAllByRole("listitem");
+    expect(first).toHaveTextContent("newer");
+    expect(first).toHaveAttribute("data-new", "true");
+  });
+
+  it("an update replaces the row for the same RRN instead of adding a duplicate", () => {
+    renderWithIntl(<LiveFeed />);
+    act(() => emit({ type: "transaction.created", data: { rrn: "same", status: "SENT" }, occurredAt: "now" }));
+    act(() => emit({ type: "transaction.updated", data: { rrn: "same", status: "REVERSED", responseCode: "91" }, occurredAt: "now" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.getByTestId("feed-status")).toHaveTextContent("Đã tự hủy");
+  });
 });

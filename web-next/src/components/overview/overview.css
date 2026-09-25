@@ -7,8 +7,16 @@
   border-bottom: 1px solid #efede6;
 }
 
+/* The outer bar carries the data (scaleY by share of the peak) and eases to new values; the
+   inner fill carries the one-off grow-in, so the two transforms never fight. */
 .throughput-bar {
   flex: 1;
+  height: 100%;
+  transform-origin: bottom;
+  transition: transform 0.5s var(--ease-out-design);
+}
+
+.throughput-bar__fill {
   height: 100%;
   transform-origin: bottom;
   background: var(--color-accent);
@@ -16,7 +24,7 @@
   border-radius: 4px 4px 0 0;
 }
 
-.throughput-bar--latest {
+.throughput-bar--latest .throughput-bar__fill {
   opacity: 1;
 }
 
@@ -30,25 +38,4 @@
 
 .feed-row--expert {
   grid-template-columns: 72px minmax(96px, 1fr) 76px 104px 100px 156px;
-}
-
-@keyframes feed-row-flash {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.feed-row--flash {
-  animation: feed-row-flash 300ms ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .feed-row--flash {
-    animation: none;
-  }
 }

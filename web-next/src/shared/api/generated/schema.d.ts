@@ -856,6 +856,8 @@ export interface components {
             transactionsDeltaPct?: number;
             approvalRate: number;
             p99LatencyMs: number;
+            /** @description Median SENT-to-terminal latency today, shown beside p99LatencyMs on the Overview latency card */
+            p50LatencyMs?: number;
             ledgerMatches: boolean;
             throughput: {
                 /** Format: date-time */

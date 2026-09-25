@@ -3,6 +3,7 @@
 import { useTranslations } from "next-intl";
 import { ModeToggle } from "@/shared/ui/ModeToggle";
 import { SearchIcon } from "@/shared/ui/icons";
+import { PulseDot } from "@/shared/ui/PulseDot";
 import { useLinks } from "@/shared/api/network-client";
 
 type LinkState = "connected" | "down" | "unknown";
@@ -44,10 +45,7 @@ export function Header() {
         data-link-state={state}
         className={`flex h-8.5 items-center gap-2 rounded-full px-3.5 text-[13px] font-semibold ${LINK_CLASSES[state]}`}
       >
-        <span aria-hidden className="relative size-2 shrink-0">
-          <span className="absolute inset-0 animate-ping rounded-full bg-current motion-reduce:animate-none" />
-          <span className="absolute inset-0 rounded-full bg-current" />
-        </span>
+        <PulseDot />
         {t(LINK_LABEL_KEYS[state])}
       </div>
       <ModeToggle />

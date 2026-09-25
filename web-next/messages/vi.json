@@ -132,7 +132,8 @@
       "approvalTech": "RC 00 / tổng 0100 + 0200",
       "latencyTech": "p99 end-to-end",
       "ledgerTech": "Σ ledger = Σ tran_log · lệch 0 ₫",
-      "ledgerTechMismatch": "Σ ledger ≠ Σ tran_log · cần đối soát"
+      "ledgerTechMismatch": "Σ ledger ≠ Σ tran_log · cần đối soát",
+      "latencyTechWithP50": "p99 end-to-end · p50 {p50} ms"
     },
     "throughput": {
       "heading": "Lượng giao dịch trong 60 phút qua"
@@ -169,7 +170,6 @@
     "liveFeed": {
       "heading": "Giao dịch trực tiếp",
       "empty": "Chưa có giao dịch",
-      "rrn": "Mã tra soát",
       "rc": "RC",
       "viewJourney": "Xem hành trình",
       "liveBadge": "Đang cập nhật",
@@ -389,5 +389,39 @@
   "sidebar": {
     "businessDate": "Ngày giao dịch",
     "cutoverAt": "Chốt ngày lúc {time}"
+  },
+  "responseCodes": {
+    "00": "Đã duyệt",
+    "05": "Ngân hàng từ chối",
+    "06": "Lỗi khi tự hủy",
+    "10": "Duyệt một phần",
+    "12": "Giao dịch không hợp lệ",
+    "13": "Số tiền không hợp lệ",
+    "14": "Thẻ không tồn tại",
+    "17": "Khách hàng đã hủy",
+    "30": "Sai định dạng message",
+    "51": "Không đủ tiền",
+    "54": "Thẻ hết hạn",
+    "55": "Sai mã PIN",
+    "57": "Thẻ không được dùng cho giao dịch này",
+    "61": "Vượt hạn mức",
+    "62": "Thẻ bị khóa",
+    "65": "Quá số lần giao dịch",
+    "68": "Phản hồi đến quá trễ",
+    "75": "Nhập sai PIN quá nhiều lần",
+    "91": "Mất kết nối ngân hàng",
+    "94": "Giao dịch bị trùng",
+    "95": "Lỗi đối soát",
+    "96": "Lỗi hệ thống"
+  },
+  "transactionStatus": {
+    "CREATED": "Đang chờ",
+    "SENT": "Đang chờ",
+    "APPROVED": "Đã duyệt",
+    "DECLINED": "Bị từ chối",
+    "TIMED_OUT": "Quá thời gian",
+    "REVERSAL_PENDING": "Đang tự hủy",
+    "REVERSED": "Đã tự hủy",
+    "FAILED": "Thất bại"
   }
 }
