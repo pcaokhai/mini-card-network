@@ -24,8 +24,8 @@ import org.jpos.util.Destroyable;
  * {@code REVERSED}), found and already {@code REVERSED} (idempotent no-op, per docs/03 §7.3 "a
  * reversal of an already reversed transaction is acknowledged idempotently with no ledger effect"),
  * or not found ({@code reversal_without_original}, so a later-arriving original is declined RC 94
- * by {@code Deduplicate}). No branch ever sets {@code RESPONSE_CODE} - advices are always ACKed
- * with 0430 by {@code RespondReversal}.
+ * by {@code Deduplicate}). No branch sets {@code RESPONSE_CODE}; a failure (original still in
+ * flight, DB error) aborts, and {@code RespondReversal} then answers 96 so the acquirer repeats.
  */
 public class LocateAndReverse implements TransactionParticipant, Configurable, Destroyable {
 
@@ -118,12 +118,17 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
     }
 
     OriginalTransactionRow original = found.get();
+    if ("RECEIVED".equals(original.status())) {
+      // The 0200 is still being authorised. A "00" now would let it approve and never be
+      // reversed; aborting answers 96 and the acquirer's SAF repeats the advice.
+      throw new IllegalStateException("original " + original.id() + " still in flight");
+    }
     if (!"APPROVED".equals(original.status())) {
-      // Already REVERSED: idempotent repeat, no second journal entry. Anything else (DECLINED,
-      // RECEIVED) never moved money in the first place - most commonly a later original that
-      // Deduplicate's RC-94 short-circuit already declined because this same reversal recorded
-      // reversal_without_original first; reversing it would fabricate a credit with no matching
-      // debit, breaking the double-entry invariant (docs/10 §5).
+      // Already REVERSED: idempotent repeat, no second journal entry. DECLINED never moved money
+      // - most commonly a later original that Deduplicate's RC-94 short-circuit already declined
+      // because this same reversal recorded reversal_without_original first; reversing it would
+      // fabricate a credit with no matching debit, breaking the double-entry invariant (docs/10
+      // §5).
       return PREPARED;
     }
 
@@ -136,18 +141,19 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
 
     try (Connection conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
-      ledgerRepository.postReversal(
-          conn,
-          original.id(),
-          original.businessDate(),
-          accountId,
-          original.amount(),
-          original.currency());
+      if (tranLogRepository.markReversed(conn, original.id(), original.businessDate())) {
+        ledgerRepository.postReversal(
+            conn,
+            original.id(),
+            original.businessDate(),
+            accountId,
+            original.amount(),
+            original.currency());
+      }
       conn.commit();
     } catch (SQLException e) {
       throw new IllegalStateException("post reversal journal failed", e);
     }
-    tranLogRepository.markReversed(original.id(), original.businessDate());
     return PREPARED;
   }
 }

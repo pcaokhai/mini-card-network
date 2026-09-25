@@ -56,4 +56,33 @@ class RespondReversalTest {
 
     assertThat(response.getString(39)).isEqualTo("00");
   }
+
+  /** A reversal the issuer failed to record is still owed: never acknowledge it with "00". */
+  @Test
+  void abort_answers96SoTheAcquirerRepeats__MCN_401() throws Exception {
+    ISOMsg request = new ISOMsg("0420");
+    request.set(39, "68");
+    var sent = new java.util.ArrayList<ISOMsg>();
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.REQUEST, request);
+    ctx.put(TxnContextKeys.SOURCE, recordingSource(sent));
+
+    new RespondReversal().abort(0, ctx);
+
+    assertThat(sent).singleElement().satisfies(r -> assertThat(r.getString(39)).isEqualTo("96"));
+  }
+
+  private static org.jpos.iso.ISOSource recordingSource(java.util.List<ISOMsg> sent) {
+    return new org.jpos.iso.ISOSource() {
+      @Override
+      public void send(ISOMsg m) {
+        sent.add(m);
+      }
+
+      @Override
+      public boolean isConnected() {
+        return true;
+      }
+    };
+  }
 }

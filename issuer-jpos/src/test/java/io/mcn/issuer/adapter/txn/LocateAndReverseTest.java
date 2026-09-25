@@ -26,19 +26,56 @@ class LocateAndReverseTest {
   void prepare_foundOriginal_postsReversalAndMarksReversed_MCN_402_AC1() throws Exception {
     var tranLog = mock(TranLogRepository.class);
     var ledger = mock(LedgerRepository.class);
-    var cards = mock(CardRepository.class);
     when(tranLog.findByReversalKey("0200", "000123", "0922140000", "970499     "))
         .thenReturn(Optional.of(originalRow(42L, "APPROVED", 10_000L)));
+    when(tranLog.markReversed(any(), eq(42L), any())).thenReturn(true);
+    Context ctx = contextWithReversalKey();
+
+    newLocateAndReverse(tranLog, ledger).prepare(0, ctx);
+
+    verify(tranLog).markReversed(any(), eq(42L), any());
+    verify(ledger).postReversal(any(), eq(42L), any(), anyLong(), eq(10_000L), eq("704"));
+  }
+
+  /** A 0420 and its 0421 repeat in flight together: only the one that flips APPROVED posts. */
+  @Test
+  void prepare_concurrentReversalAlreadyFlippedTheRow_postsNoJournal__MCN_401() throws Exception {
+    var tranLog = mock(TranLogRepository.class);
+    var ledger = mock(LedgerRepository.class);
+    when(tranLog.findByReversalKey(any(), any(), any(), any()))
+        .thenReturn(Optional.of(originalRow(42L, "APPROVED", 10_000L)));
+    when(tranLog.markReversed(any(), eq(42L), any())).thenReturn(false);
+
+    newLocateAndReverse(tranLog, ledger).prepare(0, contextWithReversalKey());
+
+    verifyNoInteractions(ledger);
+  }
+
+  /**
+   * The 0200 is still being authorised: answering "00" now would let it approve and never be
+   * reversed, so the reversal fails and the acquirer's SAF repeats it.
+   */
+  @Test
+  void prepare_originalStillInFlight_failsSoTheAcquirerRepeats__MCN_401() {
+    var tranLog = mock(TranLogRepository.class);
+    var ledger = mock(LedgerRepository.class);
+    when(tranLog.findByReversalKey(any(), any(), any(), any()))
+        .thenReturn(Optional.of(originalRow(42L, "RECEIVED", 10_000L)));
+
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> newLocateAndReverse(tranLog, ledger).prepare(0, contextWithReversalKey()))
+        .isInstanceOf(IllegalStateException.class);
+    verifyNoInteractions(ledger);
+  }
+
+  private static LocateAndReverse newLocateAndReverse(
+      TranLogRepository tranLog, LedgerRepository ledger) throws Exception {
+    var cards = mock(CardRepository.class);
     when(cards.findById(7L)).thenReturn(Optional.of(card(7L, 99L)));
     var ds = mock(DataSource.class);
     when(ds.getConnection()).thenReturn(mock(java.sql.Connection.class));
-    Context ctx = contextWithReversalKey();
-
-    new LocateAndReverse(tranLog, ledger, mock(ReversalWithoutOriginalRepository.class), cards, ds)
-        .prepare(0, ctx);
-
-    verify(tranLog).markReversed(eq(42L), any());
-    verify(ledger).postReversal(any(), eq(42L), any(), anyLong(), eq(10_000L), eq("704"));
+    return new LocateAndReverse(
+        tranLog, ledger, mock(ReversalWithoutOriginalRepository.class), cards, ds);
   }
 
   @Test
