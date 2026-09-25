@@ -61,12 +61,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := store.Migrate(cfg.DatabaseURL); err != nil {
-		return fmt.Errorf("migrate database: %w", err)
-	}
-	pool, err := store.Open(ctx, cfg.DatabaseURL)
+	pool, err := openDatabase(ctx, cfg.DatabaseURL)
 	if err != nil {
-		return fmt.Errorf("open db: %w", err)
+		return err
 	}
 	defer pool.Close()
 	linkRepo := store.NewLinkRepository(pool)
@@ -156,6 +153,18 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	})
 	logger.Info("gateway started", "http", apiLn.Addr().String(), "metrics", metricsLn.Addr().String())
 	return g.Wait()
+}
+
+// openDatabase migrates, then opens the pool.
+func openDatabase(ctx context.Context, url string) (*store.Pool, error) {
+	if err := store.Migrate(url); err != nil {
+		return nil, fmt.Errorf("migrate database: %w", err)
+	}
+	pool, err := store.Open(ctx, url)
+	if err != nil {
+		return nil, fmt.Errorf("open db: %w", err)
+	}
+	return pool, nil
 }
 
 func serve(s *http.Server, ln net.Listener) error {
