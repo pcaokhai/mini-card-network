@@ -1,6 +1,5 @@
-import { releaseFor } from "@/shared/navigation/nav-items";
-import { ComingSoon } from "@/shared/ui/ComingSoon";
+import { SettlementScreen } from "./SettlementScreen";
 
 export default function Page() {
-  return <ComingSoon release={releaseFor("/settlement")} />;
+  return <SettlementScreen />;
 }
