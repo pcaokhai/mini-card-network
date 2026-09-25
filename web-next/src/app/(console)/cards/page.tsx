@@ -1,5 +1,5 @@
-import { CardsListScreen } from "./CardsListScreen";
+import { CardsScreen } from "./CardsScreen";
 
 export default function Page() {
-  return <CardsListScreen />;
+  return <CardsScreen />;
 }

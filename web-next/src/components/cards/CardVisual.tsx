@@ -1,29 +1,30 @@
 import { useTranslations } from "next-intl";
-import type { CardDetail } from "@/shared/api/cards-client";
+import type { CardSummary } from "@/shared/api/cards-client";
+import { LockIcon } from "@/shared/ui/icons";
+import { cardTag } from "./cards-model";
 
-const STATUS_CLASSES: Record<CardDetail["status"], string> = {
-  ACTIVE: "bg-ok-soft text-ok",
-  BLOCKED: "bg-bad-soft text-bad",
-  LOST: "bg-bad-soft text-bad",
-  STOLEN: "bg-bad-soft text-bad",
-  EXPIRED: "bg-canvas text-muted",
-  PIN_BLOCKED: "bg-warn-soft text-warn",
-};
-
-export function CardVisual({ card }: { card: Pick<CardDetail, "maskedPan" | "holderName" | "status" | "expiry"> }) {
-  const t = useTranslations("cards.status");
+/** Only the last four digits ever reach the browser's markup (web-next/CLAUDE.md, card data). */
+export function CardVisual({ card, locked }: { card: Pick<CardSummary, "maskedPan" | "holderName" | "expiry">; locked: boolean }) {
+  const t = useTranslations("cards.visual");
   return (
-    <div className="rounded-card bg-ink px-6 py-5 text-white">
-      <div className="flex items-start justify-between">
-        <span className="font-mono text-lg tracking-wider">{card.maskedPan}</span>
-        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_CLASSES[card.status]}`}>
-          {t(card.status)}
-        </span>
+    <div className="cards-visual" data-tag={cardTag(card.maskedPan)}>
+      <div className="cards-visual__row">
+        <span className="cards-visual__brand">{t("brand")}</span>
+        <span aria-hidden="true" className="cards-visual__chip" />
       </div>
-      <div className="mt-6 flex items-end justify-between text-sm">
+      <div className="cards-visual__pan">•••• •••• •••• {card.maskedPan.slice(-4)}</div>
+      <div className="cards-visual__meta">
         <span>{card.holderName}</span>
-        <span className="font-mono">{card.expiry}</span>
+        <span>{t("expires", { expiry: card.expiry })}</span>
       </div>
+      {locked && (
+        <div role="status" className="cards-lock">
+          <span className="cards-lock__icon">
+            <LockIcon width={24} height={24} strokeWidth={2} />
+          </span>
+          <span>{t("locked")}</span>
+        </div>
+      )}
     </div>
   );
 }

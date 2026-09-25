@@ -93,7 +93,8 @@ export function useBlockCard(cardRef: string) {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: cardKey(cardRef) }),
+    // The list's status badge changes too, so refresh every cards query, not only this card's.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: CARDS_KEY }),
   });
 }
 
@@ -108,6 +109,6 @@ export function useUnblockCard(cardRef: string) {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: cardKey(cardRef) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: CARDS_KEY }),
   });
 }
