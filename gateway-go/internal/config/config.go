@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -39,7 +42,16 @@ type Config struct {
 	// where web-next talks to the gateway straight from the browser (docs/09-risk-register.md
 	// R-10 - the real BFF proxy this workaround stands in for doesn't exist yet).
 	CORSAllowedOrigin string
+	// KeyLifetimeDays is the rotation policy per key type (KEY_LIFETIME_DAYS, e.g. "ZPK=30,ZAK=30"),
+	// behind GET /v1/keys/acquirer's lifetimeDays and daysRemaining (SEC-G9).
+	KeyLifetimeDays map[string]int
 }
+
+// defaultKeyLifetimes: working keys rotate monthly, the ZMK yearly (the Security page's canvas).
+const defaultKeyLifetimes = "ZMK=365,ZPK=30,ZAK=30"
+
+// maxKeyLifetimeDays rejects a typo like 3000 → 30000; ten years is beyond any key policy here.
+const maxKeyLifetimeDays = 3650
 
 // Load reads configuration through getenv (os.Getenv in production, a map in tests).
 func Load(getenv func(string) string) (Config, error) {
@@ -106,7 +118,11 @@ func loadOptionalKeys(getenv func(string) string, cfg *Config) error {
 		}
 		cfg.SafEncKey = key
 	}
-	var err error
+	lifetimes, err := keyLifetimes(valueOr(getenv("KEY_LIFETIME_DAYS"), defaultKeyLifetimes))
+	if err != nil {
+		return fmt.Errorf("KEY_LIFETIME_DAYS: %w", err)
+	}
+	cfg.KeyLifetimeDays = lifetimes
 	if cfg.InitialZAK, err = optionalAESKeyHex(getenv, "ZAK_HEX"); err != nil {
 		return err
 	}
@@ -151,6 +167,29 @@ func httpURL(raw string) (string, error) {
 		return "", fmt.Errorf("want an http(s) URL with a host, got %q", raw)
 	}
 	return raw, nil
+}
+
+// keyLifetimes parses "TYPE=days,..." for the contract's KeyInfo key types.
+func keyLifetimes(raw string) (map[string]int, error) {
+	known := map[string]bool{"ZMK": true, "ZPK": true, "ZAK": true, "TPK": true, "TAK": true, "CVK": true, "PVK": true}
+	out := map[string]int{}
+	for _, pair := range strings.Split(raw, ",") {
+		keyType, daysText, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		days, err := strconv.Atoi(daysText)
+		switch {
+		case !ok || err != nil:
+			return nil, fmt.Errorf("want TYPE=days pairs, got %q", pair)
+		case !known[keyType]:
+			return nil, fmt.Errorf("unknown key type %q", keyType)
+		case days < 1 || days > maxKeyLifetimeDays:
+			return nil, fmt.Errorf("%s: days must be 1-%d, got %d", keyType, maxKeyLifetimeDays, days)
+		}
+		if _, dup := out[keyType]; dup {
+			return nil, fmt.Errorf("%s listed twice", keyType)
+		}
+		out[keyType] = days
+	}
+	return out, nil
 }
 
 func valueOr(v, fallback string) string {

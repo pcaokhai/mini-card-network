@@ -78,3 +78,23 @@ func TestMux_countsLateResponse__MCN_203_AC3(t *testing.T) {
 
 	require.Eventually(t, func() bool { return lateCount.Load() == 1 }, time.Second, 10*time.Millisecond)
 }
+
+func TestMux_pendingCountsRequestsAwaitingAResponse__NET_G16(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+	go func() { _, _ = ReadFrame(server) }() // accept the request, never answer
+
+	mux := NewMux(client)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_, _ = mux.Send(ctx, "0800", map[int]string{7: "0101120000", 11: mux.NextSTAN(), 70: "301"})
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool { return mux.Pending() == 1 }, time.Second, 5*time.Millisecond)
+	cancel()
+	<-done
+	require.Equal(t, 0, mux.Pending())
+}

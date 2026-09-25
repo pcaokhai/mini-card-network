@@ -111,6 +111,49 @@ func (r *KeyStoreRepository) List(ctx context.Context) ([]KeyRow, error) {
 	return result, rows.Err()
 }
 
+// ListCurrent returns the keys in use: every ACTIVE row plus a PENDING one while its rotation runs.
+// RETIRED rows stay in the table for the dual-key window and the audit trail, but never reach
+// GET /v1/keys/acquirer (SEC-G8).
+func (r *KeyStoreRepository) ListCurrent(ctx context.Context) ([]KeyRow, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
+		 FROM key_store WHERE status IN ('ACTIVE', 'PENDING') ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []KeyRow
+	for rows.Next() {
+		var row KeyRow
+		if err := rows.Scan(&row.ID, &row.KeyType, &row.OwnerRef, &row.KeyUnderLMKHex, &row.KCV,
+			&row.Status, &row.ActivatedAt, &row.RetiredAt, &row.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+// RetirePending retires id if it is still PENDING: a rotation that failed after GENERATE must not
+// leave its never-activated key listed forever (SEC-G8). An ACTIVE or RETIRED row is untouched.
+func (r *KeyStoreRepository) RetirePending(ctx context.Context, id int64) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE key_store SET status = 'RETIRED', retired_at = now() WHERE id = $1 AND status = 'PENDING'`, id)
+	return err
+}
+
+// RetireAllPending retires every PENDING row. Only safe while no rotation runs: the rotation
+// runner calls it at startup, when any PENDING key belongs to a rotation a crash interrupted.
+func (r *KeyStoreRepository) RetireAllPending(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE key_store SET status = 'RETIRED', retired_at = now() WHERE status = 'PENDING'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // FindRecentlyRetired returns the most recently RETIRED row for (keyType, ownerRef) if it
 // retired within the last `within` duration, or nil if none qualifies (not an error - "no
 // recently-retired key" is the expected steady state outside a rotation's grace window).

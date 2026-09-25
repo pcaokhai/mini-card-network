@@ -162,3 +162,20 @@ func TestLoad_chaosRunMaxDuration__CHA_N2(t *testing.T) {
 		require.ErrorContains(t, err, "CHAOS_RUN_MAX_DURATION", bad)
 	}
 }
+
+const typeZPK = "ZPK"
+
+func TestLoad_keyLifetimePolicy__SEC_G9(t *testing.T) {
+	cfg, err := Load(env(withLMK(nil)))
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"ZMK": 365, "ZPK": 30, "ZAK": 30}, cfg.KeyLifetimeDays)
+
+	cfg, err = Load(env(withLMK(map[string]string{"KEY_LIFETIME_DAYS": "ZPK=7, ZAK=14"})))
+	require.NoError(t, err)
+	require.Equal(t, map[string]int{"ZPK": 7, "ZAK": 14}, cfg.KeyLifetimeDays)
+
+	for _, bad := range []string{typeZPK, "ZPK=0", "ZPK=abc", "FOO=30", "ZPK=30,ZPK=40", "ZPK=4000"} {
+		_, err = Load(env(withLMK(map[string]string{"KEY_LIFETIME_DAYS": bad})))
+		require.ErrorContains(t, err, "KEY_LIFETIME_DAYS", bad)
+	}
+}

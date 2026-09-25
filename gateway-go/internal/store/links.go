@@ -3,9 +3,13 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 )
+
+// ErrInvalidCursor means a network events cursor is not one ListEvents issued.
+var ErrInvalidCursor = errors.New("invalid cursor")
 
 // Link is one row of link_state. JSON shape matches contracts/openapi.yaml's Link schema
 // (linkId/from/to/lastEchoOk are derived, not stored, since v1 has exactly one link).
@@ -44,6 +48,7 @@ func (l Link) MarshalJSON() ([]byte, error) {
 type NetworkEvent struct {
 	ID            int64
 	OccurredAt    time.Time
+	Code          string // contracts NetworkEventCode; empty only on rows older than migration 00008
 	Severity      string
 	EasyText      string
 	TechnicalText string
@@ -55,9 +60,10 @@ func (e NetworkEvent) MarshalJSON() ([]byte, error) {
 		ID            string    `json:"id"`
 		OccurredAt    time.Time `json:"occurredAt"`
 		Severity      string    `json:"severity"`
+		Code          string    `json:"code,omitempty"`
 		EasyText      string    `json:"easyText"`
 		TechnicalText string    `json:"technicalText"`
-	}{strconv.FormatInt(e.ID, 10), e.OccurredAt, e.Severity, e.EasyText, e.TechnicalText})
+	}{strconv.FormatInt(e.ID, 10), e.OccurredAt, e.Severity, e.Code, e.EasyText, e.TechnicalText})
 }
 
 // LinkRepository persists link_state and network_event.
@@ -90,29 +96,56 @@ func (r *LinkRepository) Get(ctx context.Context, endpoint string) (Link, error)
 	return l, err
 }
 
-// RecordEvent inserts a network_event row.
+// RecordEvent inserts a network_event row without a code.
+//
+// Deprecated: use AppendEvent, which records the code and returns the stored row.
 func (r *LinkRepository) RecordEvent(ctx context.Context, severity, easyText, technicalText string) error {
-	_, err := r.pool.Exec(ctx,
-		`INSERT INTO network_event (severity, easy_text, technical_text) VALUES ($1, $2, $3)`,
-		severity, easyText, technicalText)
+	_, err := r.AppendEvent(ctx, NetworkEvent{Severity: severity, EasyText: easyText, TechnicalText: technicalText})
 	return err
 }
 
-// ListEvents returns the most recent network_event rows, newest first.
-func (r *LinkRepository) ListEvents(ctx context.Context, limit int) ([]NetworkEvent, error) {
+// AppendEvent inserts a network_event row and returns it as stored (id, occurredAt), so a
+// broadcast carries the same resource GET /v1/network/events serves (NET-G4).
+func (r *LinkRepository) AppendEvent(ctx context.Context, e NetworkEvent) (NetworkEvent, error) {
+	err := r.pool.QueryRow(ctx,
+		`INSERT INTO network_event (code, severity, easy_text, technical_text) VALUES (NULLIF($1, ''), $2, $3, $4)
+		 RETURNING id, occurred_at`,
+		e.Code, e.Severity, e.EasyText, e.TechnicalText).Scan(&e.ID, &e.OccurredAt)
+	return e, err
+}
+
+// ListEvents returns up to limit network_event rows, newest first, starting after cursor ("" for
+// the first page). The cursor is the last row's id; nextCursor is "" on the last page (NET-G12).
+func (r *LinkRepository) ListEvents(ctx context.Context, limit int, cursor string) ([]NetworkEvent, string, error) {
+	var before int64
+	if cursor != "" {
+		n, err := strconv.ParseInt(cursor, 10, 64)
+		if err != nil || n <= 0 {
+			return nil, "", ErrInvalidCursor
+		}
+		before = n
+	}
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, occurred_at, severity, easy_text, technical_text FROM network_event ORDER BY occurred_at DESC LIMIT $1`, limit)
+		`SELECT id, occurred_at, coalesce(code, ''), severity, easy_text, technical_text FROM network_event
+		 WHERE $2 = 0 OR id < $2 ORDER BY id DESC LIMIT $1`, limit+1, before)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer rows.Close()
 	var events []NetworkEvent
 	for rows.Next() {
 		var e NetworkEvent
-		if err := rows.Scan(&e.ID, &e.OccurredAt, &e.Severity, &e.EasyText, &e.TechnicalText); err != nil {
-			return nil, err
+		if err := rows.Scan(&e.ID, &e.OccurredAt, &e.Code, &e.Severity, &e.EasyText, &e.TechnicalText); err != nil {
+			return nil, "", err
 		}
 		events = append(events, e)
 	}
-	return events, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	if len(events) <= limit {
+		return events, "", nil
+	}
+	events = events[:limit]
+	return events, strconv.FormatInt(events[limit-1].ID, 10), nil
 }

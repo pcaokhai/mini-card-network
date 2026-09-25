@@ -5,8 +5,11 @@ package rotation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -23,6 +26,9 @@ const (
 	StatusDone    = "DONE"
 	StatusFailed  = "FAILED"
 )
+
+// ErrNotFound means no key_rotation row has the requested id.
+var ErrNotFound = errors.New("rotation not found")
 
 var stepOrder = []string{StepGenerate, StepSend0800161, StepPartnerConfirm, StepActivate}
 
@@ -118,6 +124,20 @@ func (r *Repository) Fail(ctx context.Context, id int64) error {
 	return err
 }
 
+// FailAllRunning marks every RUNNING rotation FAILED, flagging each still-PENDING step FAILED.
+// Only the runner calls it, at startup, when a RUNNING row can only be one a crash interrupted.
+func (r *Repository) FailAllRunning(ctx context.Context) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE key_rotation SET status = 'FAILED', updated_at = now(),
+		   steps = (SELECT jsonb_agg(CASE WHEN s->>'status' = 'PENDING' THEN jsonb_set(s, '{status}', '"FAILED"') ELSE s END)
+		            FROM jsonb_array_elements(steps) s)
+		 WHERE status = 'RUNNING'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // Get loads one key_rotation row.
 func (r *Repository) Get(ctx context.Context, id int64) (Row, error) {
 	var row Row
@@ -125,6 +145,9 @@ func (r *Repository) Get(ctx context.Context, id int64) (Row, error) {
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, key_type, status, steps, new_kcv, created_at, updated_at FROM key_rotation WHERE id = $1`, id,
 	).Scan(&row.ID, &row.KeyType, &row.Status, &raw, &row.NewKCV, &row.CreatedAt, &row.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Row{}, ErrNotFound
+	}
 	if err != nil {
 		return Row{}, err
 	}

@@ -45,6 +45,25 @@ type FixtureTerminal struct {
 	MCC          string
 }
 
+// List returns every terminal with its merchant, backing GET /v1/terminals (NET-G13).
+func (r *TerminalRepository) List(ctx context.Context) ([]FixtureTerminal, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT t.tid, m.mid, m.name, m.mcc FROM terminal t JOIN merchant m ON m.mid = t.mid ORDER BY t.tid`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var terminals []FixtureTerminal
+	for rows.Next() {
+		var t FixtureTerminal
+		if err := rows.Scan(&t.TerminalID, &t.MerchantID, &t.MerchantName, &t.MCC); err != nil {
+			return nil, err
+		}
+		terminals = append(terminals, t)
+	}
+	return terminals, rows.Err()
+}
+
 // UpsertFromFixture makes the merchant and terminal tables match the fixture: rows are added, and
 // an existing merchant's name and MCC follow the fixture. Rows the fixture no longer lists stay,
 // since tran_log references them.

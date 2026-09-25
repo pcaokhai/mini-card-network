@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -75,17 +74,21 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
 	keyStoreRepo := store.NewKeyStoreRepository(pool)
-	zak, err := loadActiveZAK(ctx, keyStoreRepo, hsmModule, cfg, logger)
+	activeKeys, err := loadActiveZAK(ctx, keyStoreRepo, hsmModule, cfg, logger)
 	if err != nil {
 		return err
 	}
+	// ponytail: the services below still take the ZAK as a byte slice read once here; switching
+	// them to activeKeys (hsm.ZAKSource) waits for #114/#117, which rewrite those constructors.
+	zak := activeKeys.ActiveZAK()
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	terminalRepo := store.NewTerminalRepository(pool)
 	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, keyStoreRepo)
 	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, reversalQueuer, hsmModule, zak, keyStoreRepo)
 	rotationRepo := rotation.NewRepository(pool)
-	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK)
+	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK,
+		rotation.WithActivationHook(reloadOnActivate(activeKeys, logger)))
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, zak, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 	safWorker.SetLogger(logger)
@@ -110,11 +113,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.NewRouter(r, health)
 	api.MountLab(r)
 	api.MountNetwork(r, linkRepo, supervisor, safRepo)
+	api.MountTerminals(r, terminalRepo)
 	api.MountPurchases(r, purchaseService)
 	api.MountAdvancedTransactions(r, advtxnService)
 	api.MountTransactionsQuery(r, tranLogRepo, saf.NewReversalLookup(safRepo, cfg.SafEncKey))
 	api.MountOverview(r, tranLogRepo)
-	api.MountKeys(r, keyStoreRepo)
+	api.MountKeys(r, keyStoreRepo, cfg.KeyLifetimeDays)
 	api.MountRotations(r, rotationAdapter{runner: rotationRunner, repo: rotationRepo})
 	api.MountChaos(r, toxiproxyClient, chaosRunner, hub)
 	r.Handle("/v1/stream", hub)
@@ -144,6 +148,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	g.Go(func() error { return supervisor.Run(gctx) })
 	g.Go(func() error { return safWorker.Run(gctx) })
 	g.Go(func() error { return chaosRunner.Serve(gctx) })
+	g.Go(func() error { return rotationRunner.Serve(gctx) })
 	if fakeIssuer != nil {
 		g.Go(func() error { return fakeIssuer.Serve(gctx) })
 	}
@@ -202,39 +207,30 @@ func provisionInitialKeys(ctx context.Context, repo *store.KeyStoreRepository, h
 	return nil
 }
 
-// loadActiveZAK registers the initial working keys if needed, then looks up the ACTIVE ZAK.
-// Failing to register a configured key stops startup (config fails fast, CLAUDE.md §6.11).
-// A nil key only happens when ZAK_HEX is unset and no rotation has run: MAC then fails per
-// purchase instead of blocking startup, which keeps the unit-level run tests key-free.
-func loadActiveZAK(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, cfg config.Config, logger *slog.Logger) ([]byte, error) {
+// loadActiveZAK registers the initial working keys if needed, then loads the ACTIVE ZAK into an
+// ActiveKeys that a rotation reloads (SEC-G10). Failing to register a configured key stops
+// startup (config fails fast, CLAUDE.md §6.11). A missing ZAK only happens when ZAK_HEX is unset
+// and no rotation has run: MAC then fails per purchase instead of blocking startup, which keeps
+// the unit-level run tests key-free.
+func loadActiveZAK(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, cfg config.Config, logger *slog.Logger) (*rotation.ActiveKeys, error) {
 	if err := provisionInitialKeys(ctx, repo, hsmModule, cfg, logger); err != nil {
 		return nil, fmt.Errorf("register initial working keys: %w", err)
 	}
-	zak, err := activeClearKey(ctx, repo, hsmModule, "ZAK")
-	if err != nil {
+	keys := rotation.NewActiveKeys(repo, hsmModule)
+	if err := keys.Reload(ctx, "ZAK"); err != nil {
 		logger.Warn("no active ZAK found, MAC on purchases will fail until one is provisioned", "error", err.Error())
 	}
-	return zak, nil
+	return keys, nil
 }
 
-// activeClearKey looks up the ACTIVE key_store row of keyType and unwraps it under the LMK
-// (MCN-502-AC1: purchase.Service holds the clear ZAK once at startup, not per-request).
-func activeClearKey(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, keyType string) ([]byte, error) {
-	rows, err := repo.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list keys: %w", err)
-	}
-	for _, row := range rows {
-		if row.KeyType != keyType || row.Status != "ACTIVE" {
-			continue
+// reloadOnActivate swaps in a key a rotation just activated (SEC-G10). A failed reload keeps the
+// previous key, which the issuer still accepts during the dual-key window, and is logged.
+func reloadOnActivate(keys *rotation.ActiveKeys, logger *slog.Logger) func(context.Context, string) {
+	return func(ctx context.Context, keyType string) {
+		if err := keys.Reload(ctx, keyType); err != nil {
+			logger.Error("reload activated key", "key_type", keyType, "error", err.Error())
 		}
-		keyUnderLMK, err := hex.DecodeString(row.KeyUnderLMKHex)
-		if err != nil {
-			return nil, fmt.Errorf("decode %s cryptogram: %w", keyType, err)
-		}
-		return hsmModule.Unwrap(keyUnderLMK)
 	}
-	return nil, fmt.Errorf("no ACTIVE %s key in key_store", keyType)
 }
 
 // advtxnHubAdapter adapts *ws.Hub to advtxn.HubPort: ws.Hub.BroadcastTransaction is typed to
@@ -248,15 +244,15 @@ func (a advtxnHubAdapter) BroadcastTransaction(eventType string, txn advtxn.Tran
 }
 
 // rotationAdapter adapts rotation.Runner/rotation.Repository to api.Rotator. Rotation initiation
-// (owner-ref empty, matching activeClearKey's single-global-key-per-type simulator model) always
-// runs synchronously in Runner.Run for v1, so StartRotation already returns the final row.
+// (owner-ref empty, matching activeClearKey's single-global-key-per-type simulator model) returns
+// the RUNNING row at once; the steps run on the runner's own goroutine (SEC-G2).
 type rotationAdapter struct {
 	runner *rotation.Runner
 	repo   *rotation.Repository
 }
 
 func (a rotationAdapter) StartRotation(ctx context.Context, keyType string) (rotation.Row, error) {
-	return a.runner.Run(ctx, keyType, "")
+	return a.runner.Start(ctx, keyType, "")
 }
 
 func (a rotationAdapter) GetRotation(ctx context.Context, id int64) (rotation.Row, error) {
