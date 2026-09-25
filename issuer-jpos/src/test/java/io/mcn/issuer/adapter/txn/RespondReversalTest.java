@@ -43,4 +43,17 @@ class RespondReversalTest {
 
     assertThat(response.getMTI()).isEqualTo("0430");
   }
+
+  /** docs/03 §3/§7.3: 0430 DE 39 is the acknowledgement, not an echo of the 0420's reason code. */
+  @Test
+  void buildResponse_acknowledgesWith00RatherThanEchoingTheReason__MCN_401() throws Exception {
+    org.jpos.iso.ISOMsg request = new org.jpos.iso.ISOMsg("0420");
+    request.set(39, "17");
+    org.jpos.transaction.Context ctx = new org.jpos.transaction.Context();
+    ctx.put(TxnContextKeys.REQUEST, request);
+
+    org.jpos.iso.ISOMsg response = new RespondReversal().buildResponse(ctx);
+
+    assertThat(response.getString(39)).isEqualTo("00");
+  }
 }

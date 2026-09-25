@@ -1,6 +1,11 @@
 package io.mcn.issuer.adapter.txn;
 
+import io.mcn.issuer.adapter.crypto.JCESecurityModule;
+import io.mcn.issuer.application.SecurityModule;
 import java.io.Serializable;
+import java.util.HexFormat;
+import org.jpos.core.Configurable;
+import org.jpos.core.Configuration;
 import org.jpos.iso.ISOException;
 import org.jpos.iso.ISOMsg;
 import org.jpos.iso.ISOSource;
@@ -13,8 +18,34 @@ import org.jpos.transaction.Context;
  * rebuilding them. Implements {@link AbortParticipant} and overrides {@code abort()} for the same
  * reason as {@code LogAndOutbox}: a decline earlier in the chain makes the whole transaction abort,
  * and every declined request still needs a response sent.
+ *
+ * <p>Every response is signed with the Retail MAC under the ZAK before it leaves (docs/03 §11,
+ * {@code contracts/iso8583/vectors/0210-approved.json} carries DE 64): the gateway treats a 0210
+ * without a valid MAC as a MAC failure and declines with RC 96.
  */
-public class Respond implements AbortParticipant {
+public class Respond implements AbortParticipant, Configurable {
+
+  private SecurityModule securityModule;
+  private byte[] zak;
+
+  /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
+  public Respond() {}
+
+  public Respond(SecurityModule securityModule, byte[] zak) {
+    this.securityModule = securityModule;
+    this.zak = zak;
+  }
+
+  @Override
+  public void setConfiguration(Configuration cfg) {
+    this.securityModule = new JCESecurityModule(env("LMK_TEST_VALUE_HEX"));
+    this.zak = HexFormat.of().parseHex(env("ZAK_HEX"));
+  }
+
+  private static String env(String name) {
+    String value = System.getenv(name);
+    return value != null ? value : System.getProperty(name);
+  }
 
   @Override
   public int prepare(long id, Serializable context) {
@@ -38,10 +69,29 @@ public class Respond implements AbortParticipant {
       return;
     }
     try {
-      source.send(buildResponse(ctx));
+      source.send(signedResponse(ctx));
     } catch (ISOException | java.io.IOException e) {
       throw new IllegalStateException("failed to send authorization response", e);
     }
+  }
+
+  /** {@link #buildResponse} with its MAC attached: what actually goes on the wire. */
+  ISOMsg signedResponse(Context ctx) throws ISOException {
+    ISOMsg response = buildResponse(ctx);
+    int macField = hasSecondaryBitmapFields(response) ? 128 : 64;
+    response.unset(64);
+    response.unset(128);
+    response.set(macField, securityModule.computeMac(response.pack(), zak));
+    return response;
+  }
+
+  private static boolean hasSecondaryBitmapFields(ISOMsg msg) {
+    for (int field = 65; field <= 127; field++) {
+      if (msg.hasField(field)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   ISOMsg buildResponse(Context ctx) throws ISOException {

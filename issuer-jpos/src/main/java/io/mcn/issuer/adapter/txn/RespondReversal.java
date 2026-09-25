@@ -47,6 +47,9 @@ public class RespondReversal implements AbortParticipant {
     ISOMsg request = ctx.get(TxnContextKeys.REQUEST);
     ISOMsg response = (ISOMsg) request.clone();
     response.setResponseMTI();
+    // The clone carries the 0420's reason code in DE 39; the 0430's DE 39 is the acknowledgement
+    // (docs/03 §3), and the acquirer only treats "00" as delivered.
+    response.set(39, "00");
     return response;
   }
 }

@@ -26,4 +26,20 @@ class ParseReversalTest {
     assertThat(ctx.<String>get(TxnContextKeys.ORIGINAL_ACQUIRER)).isEqualTo("970499");
     assertThat(ctx.<String>get(TxnContextKeys.REVERSAL_REASON)).isEqualTo("68");
   }
+
+  /**
+   * docs/03 §7.3: DE 90's acquirer ID is right-justified and zero-filled, as the gateway sends it.
+   */
+  @Test
+  void prepare_stripsTheZeroFillFromTheAcquirerId__MCN_401() throws Exception {
+    ISOMsg request = new ISOMsg("0420");
+    request.set(90, "0200" + "000124" + "0921073244" + "00000970499" + "00000000000");
+    request.set(39, "68");
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.REQUEST, request);
+
+    new ParseReversal().prepare(0, ctx);
+
+    assertThat(ctx.<String>get(TxnContextKeys.ORIGINAL_ACQUIRER)).isEqualTo("970499");
+  }
 }
