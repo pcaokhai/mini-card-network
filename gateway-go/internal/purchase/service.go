@@ -287,6 +287,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	row := store.TranLogRow{
 		RRN: rrn, Type: tranTypePurchase, Status: statusCreated, Amount: req.Amount.Amount, Currency: req.Amount.Currency,
 		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: merchant.MID, NetworkSTAN: stan,
+		ProcessingCode: fields[3], POSEntryMode: fields[22], SentAt: &now, CardToken: req.CardToken,
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {

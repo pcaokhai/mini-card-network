@@ -32,7 +32,7 @@ func TestSafRepository_enqueueClaimAndAck__MCN_401_AC2(t *testing.T) {
 	require.Equal(t, id, claimed[0].ID)
 	require.Equal(t, 0, claimed[0].Attempts)
 
-	require.NoError(t, saf.MarkInFlight(ctx, id, 1, time.Now().Add(2*time.Second)))
+	require.NoError(t, saf.MarkInFlight(ctx, id, 1, time.Now().Add(2*time.Second), "i/o timeout"))
 	require.NoError(t, saf.MarkAcked(ctx, id))
 
 	_, deadCount, err := saf.ListPending(ctx)

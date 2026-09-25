@@ -419,3 +419,19 @@ func TestCreatePurchase_linkDownDeclineKeepsTerminalsMerchant__MCN_002(t *testin
 	require.Equal(t, "ANHDUO000000001", tranLog.rows[0].MerchantID)
 	require.Equal(t, "Nhà sách Ánh Dương", txn.MerchantName)
 }
+
+func TestCreatePurchase_recordsWhatA0420MustRepeat__MCN_401(t *testing.T) {
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}}
+	tranLog := &fakeTranLog{}
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+
+	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-0420-fields")
+
+	require.NoError(t, err)
+	row := tranLog.rows[0]
+	require.Equal(t, "tok_normal", row.CardToken)
+	require.Equal(t, mux.lastFields[3], row.ProcessingCode)
+	require.Equal(t, mux.lastFields[22], row.POSEntryMode)
+	require.NotNil(t, row.SentAt)
+	require.Equal(t, mux.lastFields[7], row.SentAt.UTC().Format("0102150405"), "DE 90 repeats the DE 7 that was sent")
+}

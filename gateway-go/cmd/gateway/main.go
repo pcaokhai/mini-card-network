@@ -84,7 +84,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	rotationRepo := rotation.NewRepository(pool)
 	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK)
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
-	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
+	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, zak, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 
 	fakeIssuer, toxiproxyOpts, err := setupFakeIssuer(cfg)
 	if err != nil {

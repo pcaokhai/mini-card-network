@@ -34,6 +34,11 @@ type TranLogRow struct {
 	CreatedAt        time.Time
 	LateResponseCode string
 	LateResponseAt   *time.Time
+	// What a reversal advice must repeat from the original request (docs/03 §7.3).
+	ProcessingCode string
+	POSEntryMode   string
+	SentAt         *time.Time // the moment DE 7 was built from
+	CardToken      string     // simulator token, never the PAN
 }
 
 // TransactionFilter narrows TranLogRepository.List. Nil pointer fields mean "no filter".
@@ -66,10 +71,13 @@ func NewTranLogRepository(pool *Pool) *TranLogRepository { return &TranLogReposi
 func (r *TranLogRepository) Insert(ctx context.Context, row TranLogRow) (int64, error) {
 	var id int64
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO tran_log (business_date, client_request_id, tran_type, tid, mid, network_stan, rrn, masked_pan, amount, currency, state, response_code, auth_code)
-		 VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''))
+		`INSERT INTO tran_log (business_date, client_request_id, tran_type, tid, mid, network_stan, rrn, masked_pan, amount, currency, state, response_code, auth_code,
+		                       processing_code, pos_entry_mode, sent_at, card_token)
+		 VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''),
+		         NULLIF($13, ''), NULLIF($14, ''), $15, NULLIF($16, ''))
 		 RETURNING id`,
 		row.RRN, row.Type, row.TerminalID, row.MerchantID, row.NetworkSTAN, row.RRN, row.MaskedPAN, row.Amount, row.Currency, row.Status, row.ResponseCode, row.AuthCode,
+		row.ProcessingCode, row.POSEntryMode, row.SentAt, row.CardToken,
 	).Scan(&id)
 	return id, err
 }
@@ -123,14 +131,15 @@ func (r *TranLogRepository) ListStateHistory(ctx context.Context, id int64) ([]S
 	return history, rows.Err()
 }
 
-const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at`
+const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at, coalesce(t.network_stan, ''), coalesce(t.processing_code, ''), coalesce(t.pos_entry_mode, ''), t.sent_at, coalesce(t.card_token, '')`
 
 // Get reads the tran_log row for the given RRN.
 func (r *TranLogRepository) Get(ctx context.Context, rrn string) (TranLogRow, error) {
 	var row TranLogRow
 	err := r.pool.QueryRow(ctx,
 		`SELECT `+tranLogSelectColumns+` FROM tran_log t JOIN merchant m ON m.mid = t.mid WHERE t.rrn = $1`, rrn,
-	).Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt)
+	).Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
+		&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TranLogRow{}, ErrNotFound
 	}
@@ -211,7 +220,8 @@ func scanTranLogRows(rows pgx.Rows) ([]TranLogRow, error) {
 	var page []TranLogRow
 	for rows.Next() {
 		var row TranLogRow
-		if err := rows.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
+			&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken); err != nil {
 			return nil, err
 		}
 		row.RRN = strings.TrimSpace(row.RRN)

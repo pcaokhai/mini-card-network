@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -132,4 +133,30 @@ func TestTranLogRepository_listStateHistory__MCN_304_AC2(t *testing.T) {
 	require.Len(t, history, 2)
 	require.Equal(t, "SENT", history[0].ToStatus)
 	require.Equal(t, statusApproved, history[1].ToStatus)
+}
+
+func TestTranLogRepository_roundTripsTheFieldsAReversalNeeds__MCN_401(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	sentAt := time.Date(2026, 9, 21, 7, 32, 44, 0, time.UTC)
+
+	_, err := repo.Insert(ctx, TranLogRow{
+		RRN: "626514000701", Type: tranTypePurchase, Status: "CREATED", Amount: 600000, Currency: "704",
+		MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000124",
+		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: "tok_normal",
+	})
+	require.NoError(t, err)
+
+	got, err := repo.Get(ctx, "626514000701")
+	require.NoError(t, err)
+	require.Equal(t, "000124", got.NetworkSTAN)
+	require.Equal(t, "000000", got.ProcessingCode)
+	require.Equal(t, "051", got.POSEntryMode)
+	require.Equal(t, "tok_normal", got.CardToken)
+	require.NotNil(t, got.SentAt)
+	require.True(t, got.SentAt.Equal(sentAt))
+
+	page, _, err := repo.List(ctx, TransactionFilter{})
+	require.NoError(t, err)
+	require.Equal(t, "000124", page[0].NetworkSTAN, "list rows carry the STAN too")
 }
