@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/cards-page.md` |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Approved for integration |
 | Date | 2026-09-25 |
 | Screen | routes `/cards` and `/cards/{cardRef}`, container `web-next/src/app/(console)/cards/CardsScreen.tsx` |
@@ -410,7 +410,7 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | CARDS-G15 | Two strings in `vi.json` are English: `cards.limits.stale` ("Someone changed this card. Reload to continue.", the MCN-309-AC3 wording) and `cards.ledger.expert.more` ("Load more") | `web-next/messages/vi.json` | WEB | Translate, keeping AC3's meaning |
 | CARDS-G16 | An `Idempotency-Key` that isn't a UUID is accepted (docs/04 §2–3 say 400 `insufficient-idempotency-key`) | `CardAdminController` checked non-blank only | ISS | **Fixed** in #115: 400 `insufficient-idempotency-key` unless the key is a UUID |
 | CARDS-G17 | Requests in flight together with the same key: the second one misses the replay lookup and gets 409 (block) or 412 (limits), or a 500 on the idempotency primary key without a lock | `replayIfPresent` read before the write transaction | ISS | **Fixed** in #115: the record is re-read under the card's row lock and replayed (§4.4 rule 2) |
-| CARDS-G18 | The authorization path doesn't use `CardLifecycle`: `CheckCard.isNonActive` declines `BLOCKED`, `LOST` and `STOLEN` with RC 62 but not `PIN_BLOCKED`, which the Admin API reads as a locked card | `CheckCard.isNonActive` | ISS | Move the "can this card authorize?" rule into `CardLifecycle` and decline `PIN_BLOCKED` (RC 75 or 62 per docs/03). Open: this is an ISO-path change, outside this page's PR |
+| CARDS-G18 | The authorization path doesn't use `CardLifecycle`: `CheckCard.isNonActive` declines `BLOCKED`, `LOST` and `STOLEN` with RC 62 but not `PIN_BLOCKED`, which the Admin API reads as a locked card | `CheckCard.isNonActive` | ISS | **Fixed** in #119: `CheckCard` decides by `CardLifecycle.effectiveStatus` on the business date `ParseAndValidate` sets: RC 54 expired (from the first day after the expiry month, as this page reads it), RC 75 `PIN_BLOCKED` (docs/03 §8), RC 62 `BLOCKED`/`LOST`/`STOLEN`. A `BLOCKED` card past expiry now gets 54 |
 
 ## 10. Change log
 
@@ -418,3 +418,4 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack (GET only). |
 | 1.1 | 2026-09-25 | Issuer gap fixes in #115: CARDS-G1, G2, G4, G5 (issuer half), G6, G7, G8, G9, G10, G12 and G13 are marked Fixed, and G14 needed no provider change. §4 provider rules, request tables and error tables now describe the new behaviour. The `Idempotency-Key` must be a UUID, requests with the same key that are in flight together replay under the card lock (§4.4 rule 2), and limits must be positive (§4.6 rule 6). The G12 note covers MCN-702. Adds CARDS-G16 and G17 (Fixed) and G18 (open), and documents the If-Match forms (§4.6) and the PAN masking in problems (G9). |
+| 1.2 | 2026-09-25 | CARDS-G18 marked Fixed in #119: authorization and the Admin API read card status through the same rule. |

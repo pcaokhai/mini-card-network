@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/pos-page.md` |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Approved for integration for purchases. Pre-authorization, completion, refund and balance inquiry are built but not proven against the real issuer (§9 POS-G6) |
 | Date | 2026-09-25 |
 | Screen | route `/pos`, container `web-next/src/app/(console)/pos/PosScreen.tsx` |
@@ -310,7 +310,7 @@ Payload bounds: requests < 300 bytes; `Transaction` ≈ 450 bytes; `CardDetail` 
 | POS-G3 | Idempotency is weaker than docs/04 §2 | `idempotency.Find` returns the stored body without comparing `request_hash` (no 422 `idempotency-key-mismatch`); the key isn't checked to be a UUID; records never expire (docs/04: 24 h); Find-then-Store isn't atomic, so two concurrent requests with one key both send; `advtxn` allocates a STAN before the replay check | GW | Compare hashes, `INSERT … ON CONFLICT` reservation before sending, TTL. The issuer's `CardAdminController.replayIfPresent` already compares hashes |
 | POS-G4 | Advanced transactions break "unknown outcome ⇒ reversal" (root CLAUDE.md §6.4) | `advtxn.Service.send`: any `mux.Send` error, including the 30 s timeout, returns `fmt.Errorf("send %s: %w")` → 500; the `tran_log` row stays SENT and no 0420 is queued. Purchases also return 500 on a non-timeout send error (`mapSendOutcome`) with no reversal. No `IsSignedOn` check in `advtxn`, so link-down is a 500 instead of DECLINED RC 91 | GW | Reuse the purchase timeout branch (`finalizeSendResult` + `ReversalQueuer.Queue`) for every flow and every ambiguous send error; add the link-down path |
 | POS-G5 | Incoming MAC not verified for advanced transactions | `purchase.Service.verifyIncomingMAC` has no counterpart in `internal/advtxn` | GW | Share the verification (and the RC 96 + reason 06 reversal) with `advtxn` |
-| POS-G6 | Pre-auth, completion and balance inquiry aren't proven against the real issuer | Package doc of `internal/advtxn/service.go` (Ruling 1: proven against `internal/chaos/fakeissuer`); live rows: BALANCE `626807000291` DECLINED RC 30, COMPLETION `626807000294` DECLINED with `responseCode: null`; `CardAdminController.cardDetail` always returns `holds: []` | ISS + GW | MCN-601 (issuer hold and completion chain); a DECLINED row always carries an RC |
+| POS-G6 | Pre-auth, completion and balance inquiry aren't proven against the real issuer | Package doc of `internal/advtxn/service.go` (Ruling 1: proven against `internal/chaos/fakeissuer`); live rows: BALANCE `626807000291` DECLINED RC 30, COMPLETION `626807000294` DECLINED with `responseCode: null`; `CardAdminController.cardDetail` always returns `holds: []` | ISS + GW | MCN-601 (issuer hold and completion chain); a DECLINED row always carries an RC. Issuer side proven in #119: a balance inquiry without DE 4 is approved with DE 54 (it used to get RC 30), and a refund credits the account |
 | POS-G7 | Balance inquiry breaks the `Money` pattern | `CreateBalanceInquiry` passes no `requestedAmt`, so the response has `currency: ""` and `tran_log.currency` is blank: live `"amount":{"amount":0,"currency":"   "}` | GW | Use the card's currency (`"704"`) for the zero amount |
 | POS-G8 | POST responses miss fields the schema defines | `purchase.Transaction` has no `responseLabel`/`latencyMs` and never sets `TraceID` (always `""`); `advtxn.Transaction` has no `traceId`, `responseLabel` or `latencyMs`. The GET detail fills `responseLabel`/`latencyMs` and uses the RRN as `traceId` | GW | One DTO for POST and GET; persist a real trace id (NFR-08) |
 | POS-G9 | Timeout response says TIMED_OUT while the row is REVERSAL_PENDING | `finalizeSendResult` returns the queue-time status; docs/04 §4 says "returns final or REVERSAL_PENDING state". No UI impact: `outcomeOf` treats both as `reversalPending` | GW + docs | Return REVERSAL_PENDING, or amend docs/04 |
@@ -319,9 +319,11 @@ Payload bounds: requests < 300 bytes; `Transaction` ≈ 450 bytes; `CardDetail` 
 | POS-G12 | No PIN entry (MCN-305-AC4 deferred) | Plan Ruling R1; the gateway never forwards DE 52 (R-12) | GW + WEB | Close R-12, then restore the PIN pad and `encryptedPinBlock` |
 | POS-G13 | Completion accepts any known RRN; the mock and the gateway disagree on an unknown one | `CreateCompletion` only `tranLog.Get`s the RRN; dev:mock returns 201 DECLINED RC `25`, the gateway 404 `unknown-transaction` | GW + WEB | Gateway: 409 `conflict` unless the original is an approved PREAUTH; align the mock with the gateway |
 | POS-G14 | A retry after an HTTP failure creates a new Idempotency-Key | `pos-client.ts` calls `crypto.randomUUID()` inside each `mutationFn`; after a 500/502 whose outcome is unknown, pressing "Thanh toán" again can charge twice | WEB | Generate the key per draft and reuse it until the user changes the draft |
+| POS-G17 | The issuer debited the account for every processing code, so a refund took money out, and its reversal only wrote a journal without moving the balance (no reversal did) | #114 review; `Authorize` always ran the purchase debit; `LocateAndReverse` never updated `account` | ISS | **Fixed** in #119: a refund credits the customer (REFUND journal D `SETTLEMENT_SUSPENSE` / C customer, no funds or velocity check); a reversal posts the mirror of the original journal and moves the balance in the same transaction. Open: a refund reversal past the overdraft floor fails the DB check and the SAF repeats it (decision pending) |
 
 ## 10. Change log
 
 | Version | Date | Change |
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version |
+| 1.1 | 2026-09-25 | POS-G17 added and marked Fixed in #119 (refunds credit, reversals move balances, balance inquiry approved with DE 54); POS-G6 note. |
