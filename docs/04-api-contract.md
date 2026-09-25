@@ -4,6 +4,8 @@ Version 1.0 · 2026-09-21 · Normative sources: `contracts/openapi.yaml`, `contr
 
 This document explains conventions and lists the endpoints. The files in `contracts/` are the source of truth; code is generated from them (Go strict server, TS client, MSW mocks).
 
+Per-screen integration guides (which UI element reads which field, cadence, provider rules, known gaps): [Overview](api/overview-page.md).
+
 ## 1. Topology
 
 The browser calls only the Next.js BFF (`/api/...`), which forwards to three backends with the same paths under `/v1`:
