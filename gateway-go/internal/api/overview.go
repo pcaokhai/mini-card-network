@@ -33,12 +33,14 @@ type declineReasonDTO struct {
 }
 
 type overviewDTO struct {
-	TransactionsToday int64                 `json:"transactionsToday"`
-	ApprovalRate      float64               `json:"approvalRate"`
-	P99LatencyMs      int64                 `json:"p99LatencyMs"`
-	LedgerMatches     bool                  `json:"ledgerMatches"`
-	Throughput        []throughputSampleDTO `json:"throughput"`
-	DeclineReasons    []declineReasonDTO    `json:"declineReasons"`
+	TransactionsToday    int64                 `json:"transactionsToday"`
+	TransactionsDeltaPct *float64              `json:"transactionsDeltaPct,omitempty"`
+	ApprovalRate         float64               `json:"approvalRate"`
+	P50LatencyMs         int64                 `json:"p50LatencyMs"`
+	P99LatencyMs         int64                 `json:"p99LatencyMs"`
+	LedgerMatches        bool                  `json:"ledgerMatches"`
+	Throughput           []throughputSampleDTO `json:"throughput"`
+	DeclineReasons       []declineReasonDTO    `json:"declineReasons"`
 }
 
 func handleGetOverview(reader OverviewReader) http.HandlerFunc {
@@ -72,9 +74,11 @@ func toOverviewDTO(stats store.OverviewStats) overviewDTO {
 	}
 
 	return overviewDTO{
-		TransactionsToday: stats.TransactionsToday,
-		ApprovalRate:      stats.ApprovalRate,
-		P99LatencyMs:      stats.P99LatencyMs,
+		TransactionsToday:    stats.TransactionsToday,
+		TransactionsDeltaPct: stats.TransactionsDeltaPct,
+		ApprovalRate:         stats.ApprovalRate,
+		P50LatencyMs:         stats.P50LatencyMs,
+		P99LatencyMs:         stats.P99LatencyMs,
 		// ponytail: the gateway doesn't own the ledger (only the issuer does, per
 		// docs/02 §4) and has no cross-service balance-reconciliation read yet - same
 		// documented limitation as internal/chaos/runner.go's closingBalanceTotal.
