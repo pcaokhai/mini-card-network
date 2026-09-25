@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/cards-page.md` |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Approved for integration |
 | Date | 2026-09-25 |
 | Screen | routes `/cards` and `/cards/{cardRef}`, container `web-next/src/app/(console)/cards/CardsScreen.tsx` |
@@ -28,7 +28,7 @@ The page lets an operator pick one of the issuer's cards and see its status, bal
 
 Out of scope:
 - `/v1/accounts` (listed in docs/04 §1, not built);
-- the issuer's `audit_log` table, which has no read API (§9 CARDS-G2);
+- `GET /v1/cards/{cardRef}/audit` (issuer since #115, CARDS-G2), which the page doesn't call yet;
 - the POS tiles and the Journey money panel, which read the same card calls but have their own documents.
 
 ## 2. Page map
@@ -48,13 +48,13 @@ Out of scope:
 | # | Method + path | Provider | Purpose | Trigger / cadence | Idempotency-Key | Concurrency (If-Match/ETag) | Availability |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 4.1 | `GET /v1/cards` | issuer :8081 | Card list | on mount; refetch on window focus (TanStack default); invalidated after block/unblock | n/a | none | Real |
-| 4.2 | `GET /v1/cards/{cardRef}` | issuer :8081 | Card detail, balances, holds, limits, usage | on selecting a card; invalidated after any write | n/a | returns `ETag` (limits only, §4.2 rule 6) | Real |
+| 4.2 | `GET /v1/cards/{cardRef}` | issuer :8081 | Card detail, balances, holds, limits, usage | on selecting a card; invalidated after any write | n/a | returns `ETag` (versions the limits, §4.2 rule 6) | Real |
 | 4.3 | `GET /v1/cards/{cardRef}/ledger?limit=8&cursor=…` | issuer :8081 | Journal entries with postings, newest first | first page on mount; next page on "Xem thêm" / "Load more" | n/a | none | Real |
 | 4.4 | `POST /v1/cards/{cardRef}/blocks` | issuer :8081 | Block the card | "Xác nhận khóa" | required, new UUID per click | none | Real |
 | 4.5 | `DELETE /v1/cards/{cardRef}/blocks` | issuer :8081 | Unblock the card | "Xác nhận mở khóa" | required, new UUID per click | none | Real |
 | 4.6 | `PUT /v1/cards/{cardRef}/limits` | issuer :8081 | Replace the ALL/DAILY and ALL/PER_TXN limits | slider released (pointer up or key up), only when the value changed | required, new UUID per save | `If-Match` required; 412 on mismatch | Real |
 | – | WebSocket | – | none | – | – | – | – |
-| – | Audit line under the status panel | client only | Echo of this session's own block/unblock | on mutation success | – | – | Client only (no audit read API) |
+| – | Audit line under the status panel | client only | Echo of this session's own block/unblock | on mutation success | – | – | Client only (`GET …/audit` exists since #115; the page doesn't read it yet) |
 
 The BFF routes every `/api/v1/cards*` request to `ISSUER_ADMIN_URL` (default `http://localhost:8081`). It forwards only these request headers: `accept`, `content-type`, `idempotency-key`, `if-match`, `traceparent`. It returns only these response headers: `content-type`, `etag`, `location`, `retry-after` (`route.ts:9-10`).
 
@@ -79,7 +79,7 @@ The BFF routes every `/api/v1/cards*` request to `ISSUER_ADMIN_URL` (default `ht
 **Provider rules.**
 1. The list is ordered by the provider's `CardRepository.findAll()`. The UI re-sorts by the last four digits of `maskedPan` (Ruling R2), so the provider needn't guarantee an order.
 2. `maskedPan` = BIN (6) + `*` × (16 − 6 − 4) + last 4. The masking assumes a 16-digit PAN (`maskedPan()`, the `ponytail:` note).
-3. `expiry` is `card.expiry_yymm` rendered as `MM/YY`. The UI treats a card as expired from the first day of the month after its expiry month, whatever `status` says (`cards-model.ts` `isPastExpiry`, Ruling R3). On 2026-09-25 the issuer reports `crd_expird0004` (`08/26`) as `ACTIVE`; the screen shows it "Đã hết hạn" / `EXPIRED` and hides the block toggle.
+3. `expiry` is `card.expiry_yymm` rendered as `MM/YY`. The UI treats a card as expired from the first day of the month after its expiry month, whatever `status` says (`cards-model.ts` `isPastExpiry`, Ruling R3). Since #115 the issuer derives the same thing on read (CARDS-G4): an `ACTIVE` or `BLOCKED` card past its expiry month reads `EXPIRED` (the row isn't changed); `LOST`, `STOLEN` and `PIN_BLOCKED` outrank expiry.
 4. Status mapping for the UI: `ACTIVE` → active; any other value that isn't expired (`BLOCKED`, `LOST`, `STOLEN`, `PIN_BLOCKED`) → locked.
 
 **Errors.** The handler emits no problem. An unexpected failure is Javalin's default `500` with the plain-text body `Server Error`. Through the BFF, an unreachable issuer becomes `502 upstream-unavailable`.
@@ -108,7 +108,7 @@ GET /api/v1/cards
 
 | name | in | type | required | constraints | default |
 | --- | --- | --- | --- | --- | --- |
-| `cardRef` | path | string | ✓ | contract pattern `^crd_[A-Za-z0-9]{10,32}$` (the provider doesn't enforce it; any other value → 404) | – |
+| `cardRef` | path | string | ✓ | contract pattern `^crd_[A-Za-z0-9]{10,32}$`; any other value → `400 validation-error` (CARDS-G13) | – |
 
 **Response.** `200`, `CardDetail` (= `CardSummary` + the fields below), header `ETag`.
 
@@ -128,10 +128,10 @@ GET /api/v1/cards
 1. `ledgerBalance` and `availableBalance` are the `account` row's `ledger_balance` and `available_balance` in the account currency (`704`).
 2. `holds` is always `[]`, because no PREAUTH flow ships yet (MCN-603; the `ponytail:` note in `cardDetail()`). The dev:mock card 4417 has one hold, as in the canvas (Ruling R9).
 3. `limits` holds the `card_limit` rows with `txn_type = 'ALL'`. A missing row reads as `amount: 0`, and the UI shows "Chưa đặt" for it (Ruling R6).
-4. `usedToday` = `SUM(velocity_counter.txn_amount)` for the card, with `period = 'DAILY'` and `period_key` = the issuer JVM's `LocalDate.now()`. That's the host's calendar day, not the ISO business date (§9 CARDS-G12).
+4. `usedToday` = `SUM(velocity_counter.txn_amount)` for the card, with `period = 'DAILY'` and `period_key` = `system_state.current_business_date` (CARDS-G12). While no cutover has written that row, it falls back to the calendar date, which is also what the ISO path keys the counters with.
 5. Only masked card data is returned: no PAN, CVV, track data, PIN data or key material.
-6. **ETag.** `"` + hex SHA-256 over `PERIOD:maxAmount:maxCount;` for each limit row sorted by period + `"`. The ETag covers the limits only: status, balances and holds don't change it. **Every card without limit rows shares the same ETag, `"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"` (SHA-256 of the empty string).** On the local stack, 4 of the 6 cards return that value.
-7. **Conditional GET.** The issuer answers `304 Not Modified` to a matching `If-None-Match` (verified: 304). The BFF doesn't forward `If-None-Match` (Release R5.2), so the browser always gets `200` with a full body. A client that calls :8081 directly can get a 304 for a card whose balance or status changed (§9 CARDS-G1).
+6. **ETag.** `"<limits version>-<representation hash>"`. The limits version is the hex SHA-256 over `PERIOD:maxAmount:maxCount;` for each limit row sorted by period; the representation hash is the first 16 hex of the SHA-256 of the response body. **The ETag versions the limits:** If-Match (§4.6) compares only the first part, so a status or balance change doesn't fail a limits save. The second part makes the whole value change with the body (CARDS-G1).
+7. **Caching.** Every `/v1/cards*` response is `Cache-Control: no-store`. The issuer still answers `304` to a matching `If-None-Match`, but because the ETag covers the whole body, a 304 now means nothing changed; a changed balance or status gets `200` (CARDS-G1). The BFF doesn't forward `If-None-Match` (Release R5.2).
 
 **Errors.**
 
@@ -156,7 +156,7 @@ GET /api/v1/cards/crd_nope0000000
 {"type":"https://mcn.local/problems/not-found","title":"card not found","status":404,"detail":"card not found: crd_nope0000000","instance":"/v1/cards/crd_nope0000000","traceId":"bb9bb3e6e18f4837a32ea9f49d976751"}
 ```
 
-**Notes.** Query key `["cards", cardRef]`. `useCard` returns `{ card, etag }`, with `etag` read from the raw `Response`. TanStack defaults apply. The provider sends no `Cache-Control`. Rate limit: not enforced.
+**Notes.** Query key `["cards", cardRef]`. `useCard` returns `{ card, etag }`, with `etag` read from the raw `Response`. TanStack defaults apply. The provider sends `Cache-Control: no-store`. Rate limit: not enforced.
 
 ### 4.3 GET /v1/cards/{cardRef}/ledger
 
@@ -196,7 +196,7 @@ GET /api/v1/cards/crd_nope0000000
 | HTTP status | problem `type` slug | when | UI behaviour |
 | --- | --- | --- | --- |
 | 404 | `not-found` | unknown `cardRef` | the ledger panel shows "Chưa có bút toán nào" (the detail call fails first and replaces the panel) |
-| 500 | none (plain text `Server Error`) | `limit` or `cursor` not an integer; `limit=0` | same empty state (the UI never sends these values) |
+| 400 | `validation-error` (`errors[]` on `limit` / `cursor`) | `limit` outside 1–200, or `cursor` not a positive integer (CARDS-G8) | same empty state (the UI never sends these values) |
 
 **Example** (real, local stack 2026-09-25, `limit=2`):
 ```http
@@ -230,14 +230,14 @@ Body:
 
 | field | type | required | constraints | notes |
 | --- | --- | --- | --- | --- |
-| `reason` | enum `CUSTOMER_REQUEST`, `LOST`, `STOLEN`, `FRAUD_SUSPECTED` | ✓ (contract) | the provider doesn't validate or store it | the UI always sends `CUSTOMER_REQUEST` (Ruling R4) |
+| `reason` | enum `CUSTOMER_REQUEST`, `LOST`, `STOLEN`, `FRAUD_SUSPECTED` | ✓ | anything else → `400 validation-error` (CARDS-G5) | the UI always sends `CUSTOMER_REQUEST` (Ruling R4) |
 
-**Response.** `200`, `CardDetail` with `status: "BLOCKED"`. The fields are as in §4.2; the response has no `ETag` header.
+**Response.** `200`, `CardDetail` with the new status: `LOST` for `LOST`, `STOLEN` for `STOLEN`, `BLOCKED` for `FRAUD_SUSPECTED` and `CUSTOMER_REQUEST`. The fields are as in §4.2; the response has no `ETag` header.
 
 **Provider rules.**
-1. **Order of checks.** (a) `Idempotency-Key` present; (b) replay lookup on (key, `"POST /v1/cards/{cardRef}/blocks"`); (c) card exists; (d) current `status == ACTIVE`.
-2. **Replay.** Same key, same route, same body hash → the stored status and body, byte for byte. Same key, different body → `422`. Stored records never expire (docs/04 §2 says 24 h; §9 CARDS-G10).
-3. The status update, the `audit_log` row (`action = CARD_BLOCKED`, `entity_type = card`, `entity_id = cardRef`, before `{"status":"ACTIVE"}`, after `{"status":"BLOCKED"}`) and the idempotency record commit in one transaction.
+1. **Order of checks.** (a) `cardRef` pattern; (b) `Idempotency-Key` present; (c) replay lookup on (key, `"POST /v1/cards/{cardRef}/blocks"`); (d) `reason` in the enum; (e) card exists and, under `SELECT … FOR UPDATE` on the card, its status as read (§4.2 rule 3) is `ACTIVE`.
+2. **Replay.** Same key, same route, same body hash → the stored status and body, byte for byte. Same key, different body → `422`. Records expire after 24 h (docs/04 §2): an older record is ignored, so the key counts as new, and each admin write purges expired records (CARDS-G10).
+3. The status update, the `audit_log` row (`action = CARD_BLOCKED`, `entity_type = card`, `entity_id = cardRef`, before `{"status":"ACTIVE"}`, after `{"status":"<new status>","reason":"<reason>"}`) and the idempotency record commit in one transaction.
 4. `audit_log.actor` = the `X-Actor` header, or `"unknown"`. The BFF neither sends nor forwards `X-Actor`, so every audit row from the page says `unknown` (§9 CARDS-G3).
 5. Effect on authorization: the issuer's Validate participant declines the next 0100/0200 for this card with RC `62` (the Expert description says so).
 
@@ -247,7 +247,8 @@ Body:
 | --- | --- | --- | --- |
 | 400 | `insufficient-idempotency-key` | header missing or blank | "Không đổi được trạng thái thẻ: {detail}" under the panel |
 | 404 | `not-found` | unknown card | same, with the detail |
-| 409 | `conflict` | card isn't `ACTIVE` (detail: `card {cardRef} is {status}, cannot block it`) | same |
+| 400 | `validation-error` | `reason` missing or outside the enum (`errors[0].field = reason`), or a malformed `cardRef` | same |
+| 409 | `conflict` | card isn't `ACTIVE`, including an expired card (detail: `card {cardRef} is {status}, cannot block it`) | same |
 | 422 | `idempotency-key-mismatch` | key reused with a different body | same |
 | 502 | `upstream-unavailable` (BFF) | issuer not reachable | same |
 
@@ -274,7 +275,7 @@ Content-Type: application/json
 
 **Response.** `200`, `CardDetail` with `status: "ACTIVE"`.
 
-**Provider rules.** The same as §4.4 with these differences: the precondition is `status == BLOCKED`, the action is `CARD_UNBLOCKED`, and the replay route is `"DELETE /v1/cards/{cardRef}/blocks"`. The UI offers "Mở khóa thẻ" for every locked kind (`BLOCKED`, `LOST`, `STOLEN`, `PIN_BLOCKED`), but only `BLOCKED` passes. The others get `409 conflict` (§9 CARDS-G5).
+**Provider rules.** The same as §4.4 with these differences: the precondition is `status == BLOCKED`, the action is `CARD_UNBLOCKED`, and the replay route is `"DELETE /v1/cards/{cardRef}/blocks"`. Only a card that reads `BLOCKED` can be unblocked. `LOST`, `STOLEN`, `PIN_BLOCKED` and `EXPIRED` get `409 conflict` (CARDS-G5). The UI still offers "Mở khóa thẻ" for every locked kind; hiding it is the WEB half of CARDS-G5.
 
 **Errors.** As §4.4, where 409 means the card isn't `BLOCKED` (detail `card {cardRef} is {status}, cannot unblock it`).
 
@@ -292,38 +293,37 @@ Content-Type: application/json
 | --- | --- | --- | --- | --- | --- |
 | `cardRef` | path | string | ✓ | as §4.2 | |
 | `Idempotency-Key` | header | UUID | ✓ | non-blank | new per save |
-| `If-Match` | header | string | ✓ | must equal the current ETag exactly, quotes included | the UI sends the ETag from its last §4.2 read, or `""` when it had none |
+| `If-Match` | header | string | ✓ | its limits version (the part before `-`, §4.2 rule 6) must equal the current one; a limits-only ETag from before #115 is also accepted | the UI sends the ETag from its last §4.2 read, or `""` when it had none |
 | `Content-Type` | header | string | ✓ | `application/json` | |
 
 Body (`CardLimits`):
 
 | field | type | required | constraints | notes |
 | --- | --- | --- | --- | --- |
-| `dailyAmount.amount` | int64 | ✓ | > 0 | the UI's slider range is 1 000 000–50 000 000 |
-| `dailyAmount.currency` | string | ✓ (contract) | ignored by the provider | the UI echoes the card's currency |
-| `perTransactionAmount.amount` | int64 | ✓ | > 0 | UI range 500 000–20 000 000 |
-| `perTransactionAmount.currency` | string | ✓ (contract) | ignored | |
-| `dailyCount` | integer \| null | – | not validated | the UI echoes the current value unchanged |
+| `dailyAmount.amount` | int64 | ✓ | integer > 0 (`card_limit` CHECK) | the UI's slider range is 1 000 000–50 000 000 |
+| `dailyAmount.currency` | string | ✓ | must equal the card's currency | the UI echoes the card's currency |
+| `perTransactionAmount.amount` | int64 | ✓ | integer > 0 and ≤ `dailyAmount.amount` | UI range 500 000–20 000 000 |
+| `perTransactionAmount.currency` | string | ✓ | must equal the card's currency | |
+| `dailyCount` | integer \| null | – | null or an integer > 0 | the UI echoes the current value unchanged |
 
 **Response.** `200`, `CardDetail` with the new `limits`, plus a new `ETag` header.
 
 **Provider rules.**
-1. **Order of checks.** (a) `Idempotency-Key` present; (b) card exists; (c) `If-Match` equals the ETag of the current limits; (d) the body is valid JSON with both amounts > 0; (e) replay lookup.
-2. **ETag.** As §4.2 rule 6. A save that changes only `dailyCount` still changes the ETag. A block or unblock doesn't.
+1. **Order of checks.** (a) `cardRef` pattern; (b) `Idempotency-Key` present; (c) replay lookup, so a retried successful save gets its stored `200` even though its If-Match is now stale; (d) card exists; (e) body validation (§4.6 body table), every failure listed in `errors[]`; (f) inside the write transaction, under `SELECT … FOR UPDATE` on the card, the If-Match limits version equals the current one.
+2. **ETag.** As §4.2 rule 6. A save that changes only `dailyCount` still changes the limits version. A block or unblock doesn't.
 3. The upsert of both `card_limit` rows (`txn_type = ALL`, periods `PER_TXN` and `DAILY`, with `max_count = dailyCount` on DAILY), the `audit_log` row (`CARD_LIMITS_UPDATED`, before/after limit maps) and the idempotency record commit in one transaction.
-4. Because the If-Match check (c) runs before the replay lookup (e), a client retry of a save that succeeded gets `412`, not the stored `200` (§9 CARDS-G6).
-5. The If-Match comparison runs outside the write transaction and without a row lock (§9 CARDS-G6).
-6. The provider doesn't enforce `perTransactionAmount ≤ dailyAmount`: `crd_normal0001` on the local stack holds 9 500 000 per transaction against 8 000 000 per day (§9 CARDS-G7).
+4. Of two concurrent saves carrying the same ETag, exactly one succeeds; the other reads the winner's limits under the lock and gets `412` (CARDS-G6).
+5. `perTransactionAmount ≤ dailyAmount` is enforced for new saves (CARDS-G7). Rows saved before #115 can still break it (`crd_normal0001` on the local stack: 9 500 000 per transaction against 8 000 000 per day) until they are saved again.
 
 **Errors.**
 
 | HTTP status | problem `type` slug | when | UI behaviour |
 | --- | --- | --- | --- |
 | 400 | `insufficient-idempotency-key` | header missing or blank | "Không lưu được hạn mức: {detail}" |
-| 400 | `validation-error` | invalid JSON, or an amount ≤ 0 or missing (detail `dailyAmount.amount and perTransactionAmount.amount must be > 0`; no `errors[]`) | same |
+| 400 | `validation-error` | the body isn't a JSON object, or fields fail the body table; `errors[]` has one `{field, message}` per failure (for example `dailyAmount.amount`, `perTransactionAmount.currency`, `dailyCount`) | same |
 | 404 | `not-found` | unknown card | same |
 | 412 | `precondition-failed` | `If-Match` missing or stale | banner "Someone changed this card. Reload to continue." with "Tải lại" (MCN-309-AC3); "Tải lại" drops the drafts and refetches §4.2 |
-| 422 | `idempotency-key-mismatch` | key reused with a different body (only after the If-Match check passed) | "Không lưu được hạn mức: {detail}" |
+| 422 | `idempotency-key-mismatch` | key reused with a different body (checked before If-Match) | "Không lưu được hạn mức: {detail}" |
 
 **Example** (dev:mock; the mock ETag is a version counter `"v1"`, not a hash):
 ```http
@@ -356,7 +356,7 @@ None. The page consumes no WebSocket events. Balances change only on refetch (mo
 | PAN | Only `maskedPan` (first 6 + last 4) crosses the API. The markup renders the **last 4 only** (`CardVisual.tsx`, `CardList.tsx`). No full PAN, CVV, track data, PIN or PIN block is ever returned. |
 | Identifiers | Cards are addressed by `cardRef`, never by PAN. `ACC-<cardRef>` account numbers carry no card data. |
 | Key material | None on this page. |
-| Audit | Block, unblock and limit changes each write one `audit_log` row (before/after JSON) in the same transaction as the change (MCN-308-AC2). `audit_log` is append-only (docs/05 §2). The actor is `unknown` today (CARDS-G3). The UI's audit line is a session echo, not a read of `audit_log` (Ruling R5). |
+| Audit | Block, unblock and limit changes each write one `audit_log` row (before/after JSON) in the same transaction as the change (MCN-308-AC2). `audit_log` is append-only (docs/05 §2). The actor is `unknown` today (CARDS-G3). The rows can be read through `GET /v1/cards/{cardRef}/audit` (#115); the UI's audit line is still a session echo (Ruling R5). |
 | Destructive actions | Block and unblock need an inline confirmation ("Khóa thẻ •••• {last4}? Mọi giao dịch mới sẽ bị từ chối cho tới khi mở khóa." / "Mở khóa thẻ •••• {last4}? Thẻ sẽ dùng lại được ngay."), and the confirm button is disabled while pending. Expired cards get no toggle. |
 | Idempotency | Every write carries a fresh UUID `Idempotency-Key` per user action (docs/04 §2). |
 
@@ -372,7 +372,7 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | 4.4–4.6 writes | not measured (no writes on the shared stack) | – | ≈ 0.4 KB |
 
 - Polling: none. Load is one list call plus one detail call plus one ledger page per card view, and more on window focus.
-- Pagination: the ledger uses 8 per page from the UI. The contract maximum of 200 isn't enforced: `limit=1000` returns 200 OK.
+- Pagination: the ledger uses 8 per page from the UI. The provider enforces the contract range 1–200: `limit=1000` gets `400 validation-error` (CARDS-G8).
 
 ## 8. UI states
 
@@ -391,20 +391,20 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 
 | ID | Gap | Evidence | Owner lane | Proposed fix / story |
 | --- | --- | --- | --- | --- |
-| CARDS-G1 | The ETag covers the limits only, so every card without limits shares `"e3b0c442…b855"`, and the issuer answers 304 to a matching `If-None-Match`. A direct caller can get a stale 304 after a balance or status change. The BFF is safe only because it drops `If-None-Match`. | `CardAdminController.java:350-363`; 4 of 6 local cards return the same ETag; direct `If-None-Match` → `304` | ISS | Add `Cache-Control: no-store` to the card GETs (R5.2 "Still open"), or ETag over status + balances + limits for GET and keep a limits-only validator for If-Match |
-| CARDS-G2 | No audit read API; the UI echoes this session's actions only | `CardDetail.tsx:24`; R5.3 "Still open" | ISS | `GET /v1/cards/{cardRef}/audit` (contract PR first) |
+| CARDS-G1 | The ETag covers the limits only, so every card without limits shares `"e3b0c442…b855"`, and the issuer answers 304 to a matching `If-None-Match`. A direct caller can get a stale 304 after a balance or status change. The BFF is safe only because it drops `If-None-Match`. | `CardAdminController.java:350-363`; 4 of 6 local cards return the same ETag; direct `If-None-Match` → `304` | ISS | **Fixed** in #115: Every `/v1/cards*` response sends `Cache-Control: no-store`; the ETag is `"<limits version>-<representation hash>"`, so If-None-Match never 304s a changed card and If-Match still versions the limits (§4.2 rules 6–7) |
+| CARDS-G2 | No audit read API; the UI echoes this session's actions only | `CardDetail.tsx:24`; R5.3 "Still open" | ISS | **Fixed** in #115: `GET /v1/cards/{cardRef}/audit`, newest first, id cursor, actor/before/after from `audit_log`. Consuming it in the UI is WEB work |
 | CARDS-G3 | `audit_log.actor` is always `unknown`: the BFF never sets `X-Actor` and doesn't forward it. The Expert audit line claims "actor ops". | `route.ts:9`; `CardAdminController.java:365-368`; docs/04 §2 "Actor" | WEB | BFF sets `X-Actor` (and adds it to the forwarded headers) |
-| CARDS-G4 | Expiry isn't applied by the issuer: `crd_expird0004` (`08/26`) reads `ACTIVE` on 2026-09-25. The UI derives "Đã hết hạn" (Ruling R3). | live `GET /v1/cards` | ISS | Derive `EXPIRED` on read, or a batch job |
-| CARDS-G5 | `reason` isn't validated or persisted. A block always sets `BLOCKED`, so `LOST`, `STOLEN` and `FRAUD_SUSPECTED` are lost. The UI offers "Mở khóa thẻ" for `LOST`, `STOLEN` and `PIN_BLOCKED`, which the provider refuses with 409. | `CardAdminController.java:90-121`; `cards-model.ts` `statusKind` | ISS + WEB | Validate the enum (400 `validation-error`), map the reason to a status, and store it in the audit `after`; the UI hides unblock for non-`BLOCKED` |
-| CARDS-G6 | PUT limits checks If-Match before the idempotency replay, so a retried successful save gets 412. The If-Match check isn't atomic with the upsert (no row lock or version column), so two concurrent PUTs with the same ETag can both succeed. | `CardAdminController.java:171-199` | ISS | Replay first; compare the ETag inside the transaction under `SELECT … FOR UPDATE` on the card (CLAUDE.md §6 rule 9) |
-| CARDS-G7 | Limit validation is thin: no `errors[]`, `currency` ignored, `dailyCount` unchecked, and `perTransactionAmount > dailyAmount` accepted | `CardAdminController.java:185-194`; live `crd_normal0001` 9 500 000 / 8 000 000 | ISS | Field-level `validation-error` with `errors[]` and the cross-field rule |
-| CARDS-G8 | Ledger query parameters aren't validated: a non-integer `limit` or `cursor`, or `limit=0`, gives a plain-text `500 Server Error`, and there's no cap at 200 | live `?limit=abc`, `?limit=0`, `?cursor=abc` → 500; `?limit=1000` → 200 | ISS | 400 `validation-error`; clamp to 1–200 |
-| CARDS-G9 | Issuer problems use `Content-Type: application/json`, not `application/problem+json`. `traceId` is a random UUID, not the request's trace. No `X-Trace-Id` header. | live 404 headers; `CardAdminController.java:392-401` | ISS | Set the content type after `json()`; take the trace id from `traceparent` |
-| CARDS-G10 | Idempotency records never expire (docs/04 §2: 24 h) | `IdempotencyRepository` has no TTL column or filter | ISS | Add `created_at` filter + purge |
+| CARDS-G4 | Expiry isn't applied by the issuer: `crd_expird0004` (`08/26`) reads `ACTIVE` on 2026-09-25. The UI derives "Đã hết hạn" (Ruling R3). | live `GET /v1/cards` | ISS | **Fixed** in #115: `EXPIRED` derived on read (domain `CardLifecycle`); the row isn't changed |
+| CARDS-G5 | `reason` isn't validated or persisted. A block always sets `BLOCKED`, so `LOST`, `STOLEN` and `FRAUD_SUSPECTED` are lost. The UI offers "Mở khóa thẻ" for `LOST`, `STOLEN` and `PIN_BLOCKED`, which the provider refuses with 409. | `CardAdminController.java:90-121`; `cards-model.ts` `statusKind` | ISS + WEB | **Fixed** in #115: Issuer side: the reason is validated (400), mapped to a status, and stored in the audit `after`; unblocking anything but `BLOCKED` gets 409. The WEB half (hide unblock) is still open |
+| CARDS-G6 | PUT limits checks If-Match before the idempotency replay, so a retried successful save gets 412. The If-Match check isn't atomic with the upsert (no row lock or version column), so two concurrent PUTs with the same ETag can both succeed. | `CardAdminController.java:171-199` | ISS | **Fixed** in #115: Replay before If-Match; If-Match and the upsert run under `SELECT … FOR UPDATE` on the card; a concurrency test proves exactly one of N same-ETag saves wins |
+| CARDS-G7 | Limit validation is thin: no `errors[]`, `currency` ignored, `dailyCount` unchecked, and `perTransactionAmount > dailyAmount` accepted | `CardAdminController.java:185-194`; live `crd_normal0001` 9 500 000 / 8 000 000 | ISS | **Fixed** in #115: `errors[]` per field: positive amounts (`card_limit` CHECK), the card's currency, `dailyCount` null or > 0, `perTransaction ≤ daily` |
+| CARDS-G8 | Ledger query parameters aren't validated: a non-integer `limit` or `cursor`, or `limit=0`, gives a plain-text `500 Server Error`, and there's no cap at 200 | live `?limit=abc`, `?limit=0`, `?cursor=abc` → 500; `?limit=1000` → 200 | ISS | **Fixed** in #115: `limit` 1–200 and a positive integer `cursor` on ledger and audit, else 400 `validation-error` |
+| CARDS-G9 | Issuer problems use `Content-Type: application/json`, not `application/problem+json`. `traceId` is a random UUID, not the request's trace. No `X-Trace-Id` header. | live 404 headers; `CardAdminController.java:392-401` | ISS | **Fixed** in #115: One mapper (`ApiProblems`): `application/problem+json`, full-URI `type`, `instance`, `traceId` from `traceparent`, `X-Trace-Id` on every response, 500 `internal` for unexpected errors |
+| CARDS-G10 | Idempotency records never expire (docs/04 §2: 24 h) | `IdempotencyRepository` has no TTL column or filter | ISS | **Fixed** in #115: Records older than 24 h are ignored on read and purged on each admin write |
 | CARDS-G11 | `holds` is always `[]` (no PREAUTH, MCN-603). Journal descriptions are always generated, so real rows show only the type name. | `CardAdminController.java:283-284, 316` | ISS | MCN-603; description from merchant name |
-| CARDS-G12 | `usedToday` keys on the issuer JVM's calendar date, not the ISO business date | `CardLimitRepository.amountToday` | ISS | Use the business date from `system_state` |
-| CARDS-G13 | The provider doesn't enforce the `cardRef` pattern (any string → 404) | `CardAdminController.getCard` | ISS | 400 on a pattern mismatch (low priority) |
-| CARDS-G14 | The contract says the posting `account` is a "customer account number (masked)". The provider sends `ACC-<cardRef>`, which the UI relies on (Ruling R7). | `openapi.yaml` `JournalEntry`; `LedgerRepository.postingsForJournals` | PLAT (contracts) | Reword the contract to "`ACC-<cardRef>` or GL code" |
+| CARDS-G12 | `usedToday` keys on the issuer JVM's calendar date, not the ISO business date | `CardLimitRepository.amountToday` | ISS | **Fixed** in #115: Keyed by `system_state.current_business_date`, falling back to the calendar date while no cutover has written it |
+| CARDS-G13 | The provider doesn't enforce the `cardRef` pattern (any string → 404) | `CardAdminController.getCard` | ISS | **Fixed** in #115: 400 `validation-error` on a pattern mismatch |
+| CARDS-G14 | The contract says the posting `account` is a "customer account number (masked)". The provider sends `ACC-<cardRef>`, which the UI relies on (Ruling R7). | `openapi.yaml` `JournalEntry`; `LedgerRepository.postingsForJournals` | PLAT (contracts) | **Fixed** in #115: No provider change needed: it already sends `ACC-<cardRef>`, which the reworded contract (#111) describes |
 | CARDS-G15 | Two strings in `vi.json` are English: `cards.limits.stale` ("Someone changed this card. Reload to continue.", the MCN-309-AC3 wording) and `cards.ledger.expert.more` ("Load more") | `web-next/messages/vi.json` | WEB | Translate, keeping AC3's meaning |
 
 ## 10. Change log
@@ -412,3 +412,4 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | Version | Date | Change |
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack (GET only). |
+| 1.1 | 2026-09-25 | Issuer gap fixes in #115: CARDS-G1, G2, G4, G5 (issuer half), G6, G7, G8, G9, G10, G12 and G13 are marked Fixed, and G14 needed no provider change. §4 provider rules, request tables and error tables now describe the new behaviour. |
