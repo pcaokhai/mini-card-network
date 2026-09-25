@@ -1206,6 +1206,136 @@
       "ariaLabel": "Waiting for the issuer to respond"
     }
   },
+  "settlement": {
+    "title": "End of day and reconciliation",
+    "subtitle": "At the end of each day the two banks close their books, compare every transaction, and only then move real money.",
+    "loading": "Loading the settlement day…",
+    "next": {
+      "cutover": "Run step 1: close the day",
+      "waitTotals": "Sending the totals…",
+      "reconcile": "Run step 3: reconcile",
+      "generate": "Run step 4: produce the file"
+    },
+    "steps": {
+      "label": "End-of-day progress",
+      "status": {
+        "done": "Done",
+        "current": "Next",
+        "pending": "Waiting"
+      },
+      "cutover": {
+        "title": "Close the books for {day}",
+        "easy": "New transactions now count towards {nextDay}.",
+        "expert": "0800 · field 70 = 201 · field 15 = {nextMmdd}"
+      },
+      "totals": {
+        "title": "Send the totals",
+        "easy": "The acquiring bank sends its transaction count and total so both sides can compare quickly.",
+        "expert": "0500 · fields 74–89, 97 → 0510 RC 95 (out of balance)"
+      },
+      "reconcile": {
+        "title": "Reconcile every transaction",
+        "easy": "Compare each transaction on both sides to find exactly where they differ.",
+        "expert": "recon_run · match key (acquirer, TID, STAN, field 7)"
+      },
+      "file": {
+        "title": "Produce the clearing file",
+        "easy": "Create the file for the settlement bank so real money can move.",
+        "expert": "clearing_file · totals trailer · SHA-256"
+      }
+    },
+    "totals": {
+      "label": "Totals",
+      "titleEasy": "Quick comparison of both sides' totals",
+      "titleExpert": "0500 versus the issuer's figures",
+      "matched": "{matched} / {total} transactions match",
+      "empty": "The totals appear after step 2, once the acquiring bank sends its figures.",
+      "colMetric": "Figure",
+      "colAcquirerEasy": "Acquiring bank",
+      "colAcquirerExpert": "Acquirer (0500)",
+      "colIssuerEasy": "Issuing bank",
+      "colIssuerExpert": "Issuer",
+      "colCompare": "Compare",
+      "match": "Match",
+      "mismatch": "Differs",
+      "metric": {
+        "DEBITS_COUNT": {
+          "easy": "Number of debits",
+          "expert": "Debits, number"
+        },
+        "DEBITS_AMOUNT": {
+          "easy": "Total debited",
+          "expert": "Debits, amount"
+        },
+        "DEBIT_REVERSALS_COUNT": {
+          "easy": "Number of cancellations",
+          "expert": "Debits reversal, number"
+        },
+        "DEBIT_REVERSALS_AMOUNT": {
+          "easy": "Total cancelled",
+          "expert": "Debits reversal, amount"
+        },
+        "NET_AMOUNT": {
+          "easy": "Net amount to settle",
+          "expert": "Net settlement amount"
+        }
+      }
+    },
+    "breaks": {
+      "label": "Breaks",
+      "title": "Breaks to resolve",
+      "open": "{count} open",
+      "allResolved": "All resolved",
+      "empty": "Breaks appear after step 3, once every transaction has been compared on both sides.",
+      "refEasy": "Reference {rrn}",
+      "refExpert": "RRN {rrn}",
+      "type": {
+        "MISSING_AT_ISSUER": "Missing at the issuing bank",
+        "MISSING_AT_ACQUIRER": "Missing at the acquiring bank",
+        "AMOUNT_MISMATCH": "Amount differs",
+        "STATUS_MISMATCH": "Status differs",
+        "DUPLICATE": "Duplicate transaction"
+      },
+      "action": {
+        "MISSING_AT_ISSUER": "Ask the issuing bank to check",
+        "MISSING_AT_ACQUIRER": "Ask the acquiring bank to check",
+        "AMOUNT_MISMATCH": "Adjust to the final amount",
+        "STATUS_MISMATCH": "Re-match when the cancellation arrives",
+        "DUPLICATE": "Remove the duplicate"
+      },
+      "done": {
+        "MISSING_AT_ISSUER": "Check requested",
+        "MISSING_AT_ACQUIRER": "Check requested",
+        "AMOUNT_MISMATCH": "Adjusted",
+        "STATUS_MISMATCH": "Re-matched",
+        "DUPLICATE": "Duplicate removed"
+      }
+    },
+    "net": {
+      "label": "Settlement position",
+      "titleEasy": "The acquiring bank will receive",
+      "titleExpert": "net_position · participant 970499 · {day}",
+      "descEasy": "This is what the issuing bank must pay the acquiring bank after netting off cancelled transactions.",
+      "descExpert": "Σ debits − Σ reversals from the reconciled figures. Real money moves through the settlement bank at T+1.",
+      "unknown": "Not known yet"
+    },
+    "file": {
+      "label": "Clearing file",
+      "title": "Clearing file",
+      "empty": "The file is produced in step 4, once every break has been resolved.",
+      "summary": "{records} rows · {total}",
+      "records": "Rows",
+      "recordsValue": "{records} + trailer",
+      "total": "Total",
+      "hashEasy": "File checksum",
+      "hashExpert": "SHA-256"
+    },
+    "unavailable": {
+      "title": "No settlement service on this stack yet",
+      "body": "End of day and reconciliation need the settlement service, which arrives in release R7 with MCN‑702 and MCN‑704. Run pnpm dev:mock to see this screen with sample figures.",
+      "detail": "Response from the stack: {detail}"
+    }
+  },
   "sidebar": {
     "businessDate": "Business date",
     "cutoverAt": "Cutover at {time}"

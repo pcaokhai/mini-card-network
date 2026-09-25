@@ -1206,6 +1206,136 @@
       "ariaLabel": "Đang chờ phản hồi từ ngân hàng phát hành"
     }
   },
+  "settlement": {
+    "title": "Chốt ngày và đối soát",
+    "subtitle": "Cuối mỗi ngày, hai ngân hàng khóa sổ, so với nhau từng giao dịch, rồi mới chuyển tiền thật.",
+    "loading": "Đang tải số liệu chốt ngày…",
+    "next": {
+      "cutover": "Chạy bước 1: khóa sổ",
+      "waitTotals": "Đang gửi tổng kết…",
+      "reconcile": "Chạy bước 3: đối soát",
+      "generate": "Chạy bước 4: xuất file"
+    },
+    "steps": {
+      "label": "Tiến trình chốt ngày",
+      "status": {
+        "done": "Xong",
+        "current": "Tiếp theo",
+        "pending": "Chờ"
+      },
+      "cutover": {
+        "title": "Khóa sổ ngày {day}",
+        "easy": "Giao dịch mới từ giờ được tính cho ngày {nextDay}.",
+        "expert": "0800 · field 70 = 201 · field 15 = {nextMmdd}"
+      },
+      "totals": {
+        "title": "Gửi bảng tổng kết",
+        "easy": "Ngân hàng thanh toán gửi tổng số giao dịch và tổng tiền để hai bên so nhanh.",
+        "expert": "0500 · fields 74–89, 97 → 0510 RC 95 (out of balance)"
+      },
+      "reconcile": {
+        "title": "Đối soát từng giao dịch",
+        "easy": "So từng giao dịch giữa hai bên để tìm đúng chỗ lệch.",
+        "expert": "recon_run · khóa ghép (acquirer, TID, STAN, field 7)"
+      },
+      "file": {
+        "title": "Xuất file quyết toán",
+        "easy": "Tạo file gửi ngân hàng quyết toán để chuyển tiền thật.",
+        "expert": "clearing_file · trailer tổng · SHA-256"
+      }
+    },
+    "totals": {
+      "label": "Bảng tổng kết",
+      "titleEasy": "So nhanh tổng số liệu hai bên",
+      "titleExpert": "So sánh 0500 và số liệu issuer",
+      "matched": "Khớp {matched} / {total} giao dịch",
+      "empty": "Bảng tổng kết sẽ có sau bước 2, khi ngân hàng thanh toán gửi số liệu của mình sang.",
+      "colMetric": "Chỉ tiêu",
+      "colAcquirerEasy": "Ngân hàng thanh toán",
+      "colAcquirerExpert": "Acquirer (0500)",
+      "colIssuerEasy": "Ngân hàng phát hành",
+      "colIssuerExpert": "Issuer",
+      "colCompare": "So sánh",
+      "match": "Khớp",
+      "mismatch": "Lệch",
+      "metric": {
+        "DEBITS_COUNT": {
+          "easy": "Số giao dịch ghi nợ",
+          "expert": "Debits, number"
+        },
+        "DEBITS_AMOUNT": {
+          "easy": "Tổng tiền ghi nợ",
+          "expert": "Debits, amount"
+        },
+        "DEBIT_REVERSALS_COUNT": {
+          "easy": "Số giao dịch đã hủy",
+          "expert": "Debits reversal, number"
+        },
+        "DEBIT_REVERSALS_AMOUNT": {
+          "easy": "Tổng tiền đã hủy",
+          "expert": "Debits reversal, amount"
+        },
+        "NET_AMOUNT": {
+          "easy": "Tiền quyết toán ròng",
+          "expert": "Net settlement amount"
+        }
+      }
+    },
+    "breaks": {
+      "label": "Chênh lệch",
+      "title": "Các chênh lệch cần xử lý",
+      "open": "{count} chưa xử lý",
+      "allResolved": "Đã xử lý hết",
+      "empty": "Danh sách chênh lệch sẽ có sau bước 3, khi hệ thống so từng giao dịch giữa hai bên.",
+      "refEasy": "Mã tra soát {rrn}",
+      "refExpert": "RRN {rrn}",
+      "type": {
+        "MISSING_AT_ISSUER": "Thiếu ở ngân hàng phát hành",
+        "MISSING_AT_ACQUIRER": "Thiếu ở ngân hàng thanh toán",
+        "AMOUNT_MISMATCH": "Lệch số tiền",
+        "STATUS_MISMATCH": "Lệch trạng thái",
+        "DUPLICATE": "Giao dịch bị trùng"
+      },
+      "action": {
+        "MISSING_AT_ISSUER": "Yêu cầu ngân hàng phát hành kiểm tra",
+        "MISSING_AT_ACQUIRER": "Yêu cầu ngân hàng thanh toán kiểm tra",
+        "AMOUNT_MISMATCH": "Điều chỉnh theo số tiền chốt",
+        "STATUS_MISMATCH": "Khớp lại khi lệnh hủy tới nơi",
+        "DUPLICATE": "Loại bỏ bản trùng"
+      },
+      "done": {
+        "MISSING_AT_ISSUER": "Đã gửi yêu cầu kiểm tra",
+        "MISSING_AT_ACQUIRER": "Đã gửi yêu cầu kiểm tra",
+        "AMOUNT_MISMATCH": "Đã điều chỉnh",
+        "STATUS_MISMATCH": "Đã tự khớp lại",
+        "DUPLICATE": "Đã loại bỏ bản trùng"
+      }
+    },
+    "net": {
+      "label": "Vị thế quyết toán",
+      "titleEasy": "Ngân hàng thanh toán sẽ nhận",
+      "titleExpert": "net_position · participant 970499 · {day}",
+      "descEasy": "Đây là số tiền ngân hàng phát hành phải chuyển cho ngân hàng thanh toán sau khi bù trừ các giao dịch đã hủy.",
+      "descExpert": "Σ debits − Σ reversals theo số liệu đã đối soát. Chuyển tiền thật qua ngân hàng quyết toán T+1.",
+      "unknown": "Chưa có số liệu"
+    },
+    "file": {
+      "label": "File quyết toán",
+      "title": "File quyết toán",
+      "empty": "File sẽ được tạo ở bước 4, sau khi mọi chênh lệch đã được xử lý.",
+      "summary": "{records} dòng · {total}",
+      "records": "Số dòng",
+      "recordsValue": "{records} + trailer",
+      "total": "Tổng tiền",
+      "hashEasy": "Mã kiểm tra file",
+      "hashExpert": "SHA-256"
+    },
+    "unavailable": {
+      "title": "Chưa có dịch vụ đối soát trên hệ thống này",
+      "body": "Chốt ngày và đối soát cần dịch vụ settlement, sẽ có từ bản R7 cùng MCN‑702 và MCN‑704. Chạy pnpm dev:mock để xem màn hình này với số liệu mẫu.",
+      "detail": "Phản hồi từ hệ thống: {detail}"
+    }
+  },
   "sidebar": {
     "businessDate": "Ngày giao dịch",
     "cutoverAt": "Chốt ngày lúc {time}"
