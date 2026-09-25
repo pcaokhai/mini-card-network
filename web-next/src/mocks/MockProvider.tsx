@@ -13,10 +13,11 @@ export function MockProvider({ children }: { children: ReactNode }) {
     // answer with schema-shaped noise rather than the design canvas's numbers.
     void Promise.all([
       import("msw/browser"),
+      import("@/mocks/journey-handlers"),
       import("@/mocks/scenario-handlers"),
       import("@/mocks/generated/handlers"),
-    ]).then(([{ setupWorker }, { scenarioHandlers }, { handlers }]) =>
-      setupWorker(...scenarioHandlers, ...handlers)
+    ]).then(([{ setupWorker }, { journeyHandlers }, { scenarioHandlers }, { handlers }]) =>
+      setupWorker(...journeyHandlers, ...scenarioHandlers, ...handlers)
         .start({ onUnhandledRequest: "bypass" })
         .then(() => setReady(true)),
     );

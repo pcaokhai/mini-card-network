@@ -1578,6 +1578,19 @@ export function getGetTransactionJourney200Response() {
           "REVERSAL",
           "INFO",
         ]),
+        code: faker.helpers.arrayElement([
+          "POS_REQUEST",
+          "REQUEST_SENT",
+          "LOCAL_DECLINE",
+          "ISSUER_APPROVED",
+          "ISSUER_DECLINED",
+          "NO_RESPONSE",
+          "REVERSAL_QUEUED",
+          "POS_RESULT",
+          "REVERSAL_SENT",
+          "REVERSAL_CONFIRMED",
+          "LATE_RESPONSE",
+        ]),
         message: faker.helpers.arrayElement([
           {
             mti: faker.lorem.words(),

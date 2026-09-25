@@ -1,70 +1,157 @@
-@keyframes journey-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.7;
-    transform: scale(1.04);
-  }
+/* Journey screen, per the design canvas (project/Journey.dc.html). Motion animates only transform and
+   opacity (rules/web/performance.md); globals.css zeroes durations under prefers-reduced-motion. */
+
+[data-tone="ok"] { --tone-fg: var(--color-ok); --tone-bg: var(--color-ok-soft); }
+[data-tone="bad"] { --tone-fg: var(--color-bad); --tone-bg: var(--color-bad-soft); }
+[data-tone="warn"] { --tone-fg: var(--color-warn); --tone-bg: var(--color-warn-soft); }
+[data-tone="rev"] { --tone-fg: var(--color-rev); --tone-bg: var(--color-rev-soft); }
+[data-tone="info"] { --tone-fg: var(--color-muted); --tone-bg: #efede6; }
+
+.journey-icon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--tone-bg);
+  color: var(--tone-fg);
 }
 
-.step-timeline li[data-state="current"] {
-  animation: journey-pulse 1.6s ease-in-out infinite;
+.journey-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 1px solid #efede6;
+  padding-left: 20px;
 }
 
-.step-timeline li[data-state="future"] {
-  border-style: dashed;
-  background-color: transparent;
+/* Actor chips: one colour per party, as in the canvas's `actors` table. */
+.journey-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #efede6;
+  color: #3a3c43;
+}
+.journey-chip[data-actor="ACQUIRER"] { background: var(--color-accent-soft); color: #0b5a60; }
+.journey-chip[data-actor="ISSUER"] { background: var(--color-rev-soft); color: var(--color-rev); }
+.journey-chip[data-actor="SAF"] { background: var(--color-warn-soft); color: var(--color-warn); }
+.journey-chip[data-actor="NETWORK"],
+.journey-chip[data-actor="SWITCH"] { background: #f0eee8; color: var(--color-muted); }
+
+.journey-step {
+  display: grid;
+  grid-template-columns: 78px 24px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  padding: 12px 10px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--color-ink);
+  text-align: left;
+  transition:
+    opacity 0.35s ease,
+    background-color 0.35s ease;
+}
+.journey-step[aria-current="step"] { background: #eef6f6; }
+.journey-step[data-future="true"] { opacity: 0.38; }
+.journey-step:hover:not([aria-current="step"]) { background: #f7f6f2; }
+
+.journey-dot {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--tone-fg);
+  box-shadow: 0 0 0 4px var(--tone-bg);
+}
+/* The canvas pulses a box-shadow ring; the same ring as a scaled, fading pseudo-element stays on
+   the compositor. */
+.journey-dot[data-current="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: journey-ring 1.4s ease-out infinite;
+}
+@keyframes journey-ring {
+  from { transform: scale(1); opacity: 0.45; }
+  to { transform: scale(3); opacity: 0; }
 }
 
-.step-timeline li[data-kind="WARN"] {
-  border-color: var(--color-warn);
-  background-color: var(--color-warn-soft);
+.journey-button {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid #d6d3ca;
+  border-radius: 9px;
+  background: var(--color-surface);
+  font-size: 13px;
+  font-weight: 600;
+}
+.journey-button:disabled { opacity: 0.45; cursor: default; }
+.journey-button[data-variant="play"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+.journey-button[data-variant="primary"] {
+  padding: 0 14px;
+  border: none;
+  background: var(--color-accent);
+  color: #ffffff;
 }
 
-.step-timeline li[data-kind="REVERSAL"] {
-  border-color: var(--color-rev);
-  background-color: var(--color-rev-soft);
+.journey-fields {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #efede6;
+  border-radius: 10px;
 }
-
-.step-timeline li[data-kind="BAD"] {
-  border-color: var(--color-bad);
-  background-color: var(--color-bad-soft);
+.journey-field {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 170px;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 12px;
 }
+.journey-field:nth-child(even) { background: #faf9f6; }
 
-[data-sign="credit"] {
-  color: var(--color-ok);
+.journey-money-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 0;
+  border-top: 1px solid #f0eee8;
+  font-size: 14px;
+  transition: opacity 0.45s ease;
 }
-
-[data-sign="debit"] {
-  color: var(--color-muted);
+.journey-money-row[data-reached="false"] { opacity: 0.35; }
+.journey-money-row[data-kind="final"] { font-weight: 700; }
+.journey-money-row[data-kind="debit"] .journey-money-value { color: var(--color-bad); }
+.journey-money-row[data-kind="credit"] .journey-money-value { color: var(--color-rev); }
+.journey-money-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
+.journey-money-row[data-kind="final"] .journey-money-value { font-weight: 700; }
 
-@media (prefers-reduced-motion: reduce) {
-  .step-timeline li[data-state="current"] {
-    animation: none;
-    outline: 2px solid var(--color-accent, oklch(68% 0.21 250));
-    outline-offset: 2px;
-  }
-}
-
+/* MCN-406-AC2: the 30 s timeout, accelerated to one autoplay step. */
 @keyframes countdown-ring {
-  from {
-    stroke-dashoffset: 0;
-  }
-  to {
-    stroke-dashoffset: 113;
-  }
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 113; }
 }
-
 .countdown-ring-track {
   fill: none;
   stroke: var(--color-border);
   stroke-width: 3;
 }
-
 .countdown-ring-progress {
   fill: none;
   stroke: var(--color-warn);
@@ -75,10 +162,4 @@
   animation-name: countdown-ring;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .countdown-ring-progress {
-    animation: none;
-  }
 }

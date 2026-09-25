@@ -1,6 +1,11 @@
-import { releaseFor } from "@/shared/navigation/nav-items";
-import { ComingSoon } from "@/shared/ui/ComingSoon";
+import { Suspense } from "react";
+import { JourneyIndexScreen } from "./JourneyIndexScreen";
 
+// useSearchParams needs a Suspense boundary to render the rest of the route statically.
 export default function Page() {
-  return <ComingSoon release={releaseFor("/transactions")} />;
+  return (
+    <Suspense>
+      <JourneyIndexScreen />
+    </Suspense>
+  );
 }

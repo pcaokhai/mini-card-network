@@ -721,6 +721,11 @@ export interface components {
         Actor: "POS" | "ACQUIRER" | "ISSUER" | "SAF" | "NETWORK" | "SWITCH";
         /** @enum {string} */
         StepKind: "OK" | "WARN" | "BAD" | "REVERSAL" | "INFO";
+        /**
+         * @description What a journey step is, independent of language. Clients render their own Easy/Expert copy from it; title/easyText/technicalText stay as the provider's English fallback.
+         * @enum {string}
+         */
+        StepCode: "POS_REQUEST" | "REQUEST_SENT" | "LOCAL_DECLINE" | "ISSUER_APPROVED" | "ISSUER_DECLINED" | "NO_RESPONSE" | "REVERSAL_QUEUED" | "POS_RESULT" | "REVERSAL_SENT" | "REVERSAL_CONFIRMED" | "LATE_RESPONSE";
         IsoField: {
             /** @description 'MTI' or data element number */
             de: string;
@@ -743,6 +748,7 @@ export interface components {
             easyText: string;
             technicalText: string;
             kind: components["schemas"]["StepKind"];
+            code?: components["schemas"]["StepCode"];
             message?: components["schemas"]["IsoMessage"] | null;
         };
         Journey: {

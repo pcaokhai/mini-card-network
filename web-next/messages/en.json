@@ -365,26 +365,193 @@
   },
   "journey": {
     "title": "Transaction journey",
-    "controls": {
-      "restart": "Restart",
-      "back": "Back",
-      "play": "Play",
-      "pause": "Pause",
-      "next": "Next"
+    "breadcrumbHome": "Overview",
+    "viewJourney": "View journey",
+    "tabs": {
+      "label": "Choose a transaction",
+      "approved": "Approved",
+      "declined": "Declined",
+      "reversed": "Reversed"
     },
-    "money": {
-      "heading": "Money movement"
+    "empty": {
+      "title": "No transaction of this kind yet",
+      "body": "Make a transaction on the POS and its journey appears here.",
+      "cta": "Open the POS"
+    },
+    "notFound": "Transaction {rrn} was not found.",
+    "loadError": "The journey could not be loaded. Try reloading the page.",
+    "summary": {
+      "label": "Transaction summary",
+      "headline": {
+        "approved": "{type} of {amount} approved",
+        "declined": "{type} of {amount} declined",
+        "autoReversed": "Transaction of {amount} reversed automatically",
+        "cancelled": "Transaction of {amount} cancelled",
+        "reversing": "Transaction of {amount} being reversed",
+        "pending": "{type} of {amount} awaiting a result"
+      },
+      "type": {
+        "PURCHASE": "Purchase",
+        "PREAUTH": "Pre-authorisation",
+        "COMPLETION": "Completion",
+        "REFUND": "Refund",
+        "BALANCE": "Balance inquiry",
+        "REVERSAL": "Reversal"
+      },
+      "card": "Card •••• {last4}",
+      "rrnEasy": "Reference {rrn}",
+      "rrnExpert": "RRN {rrn}",
+      "total": "Total time",
+      "totalExpert": "Total time (end-to-end)",
+      "messages": "Exchanges between the banks",
+      "messagesExpert": "ISO 8583 messages",
+      "money": "Customer's money",
+      "moneyValue": {
+        "approved": "{amount} debited",
+        "declined": "Nothing debited",
+        "autoReversed": "Nothing lost",
+        "cancelled": "{amount} returned",
+        "reversing": "Being returned",
+        "pending": "Pending"
+      },
+      "seconds": "{value} s"
+    },
+    "steps": {
+      "label": "Steps",
+      "heading": "Step by step, over time",
+      "counter": "Step {current}/{total}"
+    },
+    "controls": {
+      "play": "Autoplay",
+      "playing": "Playing…",
+      "restart": "From the start",
+      "back": "Previous step",
+      "next": "Next step"
+    },
+    "actor": {
+      "POS": "POS terminal",
+      "ACQUIRER": "Acquirer",
+      "ISSUER": "Issuer",
+      "SAF": "Retry queue",
+      "NETWORK": "Network",
+      "SWITCH": "Switch"
+    },
+    "actorExpert": {
+      "POS": "POS terminal",
+      "ACQUIRER": "Acquirer gateway (Go)",
+      "ISSUER": "Issuer host (jPOS)",
+      "SAF": "SAF queue",
+      "NETWORK": "Network (Toxiproxy)",
+      "SWITCH": "Switch"
+    },
+    "step": {
+      "POS_REQUEST": {
+        "title": "The POS sends the request",
+        "easy": "The customer uses card •••• {last4} at {merchant}. The POS asks to pay {amount}."
+      },
+      "REQUEST_SENT": {
+        "title": "Packed and sent to the issuer",
+        "easy": "The acquirer adds a trace number and a reference, signs the message against tampering and sends it."
+      },
+      "LOCAL_DECLINE": {
+        "title": "The issuer can't be reached",
+        "easy": "The link to the issuer is down, so the request was never sent. Nothing was debited."
+      },
+      "ISSUER_APPROVED": {
+        "title": "The issuer approves",
+        "easy": "The card is valid, the account has the funds and no limit is exceeded. The issuer debits the account, books it and returns an approval code."
+      },
+      "ISSUER_DECLINED": {
+        "title": "The issuer declines",
+        "easy": "Reason: {reason}. Nothing was debited."
+      },
+      "NO_RESPONSE": {
+        "title": "No answer in time",
+        "easy": "After 30 seconds without an answer the acquirer can't tell whether the money was taken. To protect the customer it assumes it was."
+      },
+      "REVERSAL_QUEUED": {
+        "title": "Reversal saved before sending",
+        "easy": "The reversal is written to the database first, so it can never be lost, even if the server restarts."
+      },
+      "POS_RESULT": {
+        "approved": {
+          "title": "The POS prints the receipt",
+          "easy": "The customer gets the goods. The whole journey took {total}."
+        },
+        "declined": {
+          "title": "The POS shows the decline",
+          "easy": "The POS tells the customer. Nothing was debited."
+        },
+        "failed": {
+          "title": "The POS shows a failure",
+          "easy": "The customer is told the payment didn't go through and can try again. No money will be lost."
+        }
+      },
+      "REVERSAL_SENT": {
+        "title": "Reversal sent",
+        "easy": "The reversal carries the original transaction's identity so the issuer finds the right one."
+      },
+      "REVERSAL_REPEAT": {
+        "title": "Reversal sent again",
+        "easy": "The previous attempt wasn't confirmed, so it is sent again, marked as a repeat so it is never processed twice."
+      },
+      "REVERSAL_CONFIRMED": {
+        "title": "The issuer returns the money",
+        "easy": "The original transaction was found and {amount} returned to the customer's account. The reversal leaves the queue."
+      },
+      "LATE_RESPONSE": {
+        "title": "The old answer arrives late",
+        "easy": "The answer to the original request only arrives now. The transaction is already being reversed, so it is just recorded."
+      }
     },
     "detail": {
-      "empty": "This step carries no ISO message.",
-      "de": "DE",
-      "name": "Field",
-      "value": "Value"
+      "label": "Step detail",
+      "message": "Message {mti} content",
+      "messageExpert": "Message {mti} · {count} elements",
+      "openInLab": "Open in the message lab"
+    },
+    "field": {
+      "MTI": "Message type",
+      "2": "Card number (masked)",
+      "3": "Transaction type",
+      "4": "Amount",
+      "7": "Sent at",
+      "11": "Trace number",
+      "12": "Time at the POS",
+      "13": "Date at the POS",
+      "15": "Settlement date",
+      "22": "How the card was read",
+      "25": "POS condition",
+      "32": "Acquirer code",
+      "37": "Reference",
+      "38": "Approval code",
+      "39": "Result code",
+      "41": "POS ID",
+      "42": "Merchant ID",
+      "49": "Currency",
+      "52": "Encrypted PIN",
+      "64": "Anti-tamper signature",
+      "90": "Original transaction",
+      "128": "Anti-tamper signature"
+    },
+    "money": {
+      "heading": "Money in the customer's account",
+      "before": "Before the transaction",
+      "debit": "Purchase debit",
+      "credit": "Returned",
+      "final": "Final balance",
+      "note": {
+        "approved": "The transaction completed: money was taken exactly once and the customer got the goods.",
+        "declined": "The issuer declined, so nothing was booked: the customer's money is unchanged.",
+        "autoReversed": "The money was only taken temporarily and then returned in full. This is why every card network needs automatic reversals.",
+        "cancelled": "Approved and then cancelled: the money was taken once and returned in full.",
+        "reversing": "The reversal is waiting for the issuer's confirmation and is resent until the money is returned.",
+        "pending": "No result from the issuer yet."
+      }
     },
     "countdown": {
-      "ariaLabel": "Waiting for issuer response"
-    },
-    "viewJourney": "View journey"
+      "ariaLabel": "Waiting for the issuer to respond"
+    }
   },
   "sidebar": {
     "businessDate": "Business date",

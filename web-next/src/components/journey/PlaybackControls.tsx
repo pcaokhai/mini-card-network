@@ -1,49 +1,47 @@
 import { useTranslations } from "next-intl";
+import "./journey.css";
 
 interface PlaybackControlsProps {
   currentStep: number;
   totalSteps: number;
   isPlaying: boolean;
   onStepChange: (step: number) => void;
-  onTogglePlay: () => void;
+  onPlay: () => void;
   onRestart: () => void;
 }
 
-export function PlaybackControls({
-  currentStep,
-  totalSteps,
-  isPlaying,
-  onStepChange,
-  onTogglePlay,
-  onRestart,
-}: PlaybackControlsProps) {
-  const t = useTranslations("journey.controls");
-  const atStart = currentStep <= 0;
-  const atEnd = currentStep >= totalSteps - 1;
-
+/** The canvas's step counter and Tự phát / Xem từ đầu / Bước trước / Bước tiếp buttons. */
+export function PlaybackControls({ currentStep, totalSteps, isPlaying, onStepChange, onPlay, onRestart }: PlaybackControlsProps) {
+  const t = useTranslations("journey");
   return (
-    <div className="playback-controls flex items-center gap-2">
-      <button type="button" data-testid="journey-restart" onClick={onRestart}>
-        {t("restart")}
+    <div className="flex flex-wrap items-center gap-2 min-[1400px]:flex-nowrap">
+      <span className="mr-1 text-[13px] text-muted" aria-live="polite">
+        {t("steps.counter", { current: currentStep + 1, total: totalSteps })}
+      </span>
+      <button type="button" className="journey-button" data-variant="play" data-testid="journey-toggle-play" onClick={onPlay}>
+        {isPlaying ? t("controls.playing") : t("controls.play")}
+      </button>
+      <button type="button" className="journey-button" data-testid="journey-restart" onClick={onRestart}>
+        {t("controls.restart")}
       </button>
       <button
         type="button"
+        className="journey-button"
         data-testid="journey-back"
         onClick={() => onStepChange(currentStep - 1)}
-        disabled={atStart}
+        disabled={currentStep <= 0}
       >
-        {t("back")}
-      </button>
-      <button type="button" data-testid="journey-toggle-play" onClick={onTogglePlay}>
-        {isPlaying ? t("pause") : t("play")}
+        {t("controls.back")}
       </button>
       <button
         type="button"
+        className="journey-button"
+        data-variant="primary"
         data-testid="journey-next"
         onClick={() => onStepChange(currentStep + 1)}
-        disabled={atEnd}
+        disabled={currentStep >= totalSteps - 1}
       >
-        {t("next")}
+        {t("controls.next")}
       </button>
     </div>
   );
