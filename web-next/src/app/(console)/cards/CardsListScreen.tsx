@@ -22,26 +22,29 @@ export function CardsListScreen() {
       <h1 id="cards-heading" className="text-2xl font-bold">
         {t("title")}
       </h1>
-      {cards !== undefined && cards.length === 0 && <p className="text-sm text-muted">{t("list.empty")}</p>}
-      <table className="w-full text-sm">
-        <tbody>
-          {cards?.map((card) => (
-            <tr key={card.cardRef} className="border-t border-border">
-              <td className="py-2">
-                <Link href={`/cards/${card.cardRef}`} className="font-medium text-accent hover:underline">
-                  {card.maskedPan}
-                </Link>
-              </td>
-              <td className="py-2">{card.holderName}</td>
-              <td className="py-2">
-                <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_CLASSES[card.status]}`}>
-                  {t(`status.${card.status}`)}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <section aria-label={t("list.heading")} className="rounded-card border border-border bg-surface p-4">
+        <h2 className="mb-3 text-base font-semibold">{t("list.heading")}</h2>
+        {cards !== undefined && cards.length === 0 && <p className="text-sm text-muted">{t("list.empty")}</p>}
+        <table className="w-full text-sm">
+          <tbody>
+            {cards?.map((card) => (
+              <tr key={card.cardRef} className="border-t border-border">
+                <td className="py-2">
+                  <Link href={`/cards/${card.cardRef}`} className="font-medium text-accent hover:underline">
+                    {card.maskedPan}
+                  </Link>
+                </td>
+                <td className="py-2">{card.holderName}</td>
+                <td className="py-2">
+                  <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_CLASSES[card.status]}`}>
+                    {t(`status.${card.status}`)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
     </section>
   );
 }

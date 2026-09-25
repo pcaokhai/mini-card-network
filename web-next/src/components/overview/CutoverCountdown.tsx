@@ -31,7 +31,7 @@ export function CutoverCountdown() {
   }, []);
 
   return (
-    <div>
+    <div className="rounded-card bg-ink p-4 text-white">
       <h2 className="mb-1 text-lg font-semibold">{t("heading")}</h2>
       <p>
         {t("label")} <span data-testid="cutover-remaining">{formatDuration(remainingMs)}</span>

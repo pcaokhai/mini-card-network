@@ -67,7 +67,7 @@ export function ChaosLabScreen() {
         ))}
       </div>
 
-      <div className="flex items-end gap-3 rounded-lg border border-canvas p-4">
+      <div className="flex items-end gap-3 rounded-card border border-border bg-surface p-4">
         <label className="flex flex-col gap-1 text-sm">
           {t("runControl.label")}
           <input

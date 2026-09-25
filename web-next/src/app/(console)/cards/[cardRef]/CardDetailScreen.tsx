@@ -79,28 +79,45 @@ export function CardDetailScreen({ cardRef }: { cardRef: string }) {
           </div>
         )}
       </div>
-      <BalanceLines ledgerBalance={card.ledgerBalance} availableBalance={card.availableBalance} holds={card.holds} />
+      <section aria-label={t("statusHeading")} className="rounded-card border border-border bg-surface p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">{t("statusHeading")}</h2>
+          <span className="text-sm font-medium">{t(`status.${card.status}`)}</span>
+        </div>
+        {showBlockDialog ? (
+          <BlockConfirmDialog
+            action={isBlocked ? "unblock" : "block"}
+            onConfirm={isBlocked ? handleUnblockConfirm : handleBlockConfirm}
+            onCancel={() => setShowBlockDialog(false)}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowBlockDialog(true)}
+            className="rounded-lg border border-border px-4 py-2 text-sm font-semibold"
+          >
+            {t(isBlocked ? "actions.unblock" : "actions.block")}
+          </button>
+        )}
+        {audit.map((entry, i) => (
+          <AuditLine key={i} entry={entry} />
+        ))}
+      </section>
+      <section aria-label={t("balanceHeading")} className="rounded-card border border-border bg-surface p-5">
+        <h2 className="mb-3 text-base font-semibold">{t("balanceHeading")}</h2>
+        <BalanceLines ledgerBalance={card.ledgerBalance} availableBalance={card.availableBalance} holds={card.holds} />
+      </section>
       {staleError && <p role="alert">{t("errors.staleCard")}</p>}
-      <LimitsSliders limits={card.limits} usedToday={card.usedToday} onSave={handleSaveLimits} />
-      {showBlockDialog ? (
-        <BlockConfirmDialog
-          action={isBlocked ? "unblock" : "block"}
-          onConfirm={isBlocked ? handleUnblockConfirm : handleBlockConfirm}
-          onCancel={() => setShowBlockDialog(false)}
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={() => setShowBlockDialog(true)}
-          className="rounded-lg border border-border px-4 py-2 text-sm font-semibold"
-        >
-          {t(isBlocked ? "actions.unblock" : "actions.block")}
-        </button>
+      <section aria-label={t("limitsHeading")} className="rounded-card border border-border bg-surface p-5">
+        <h2 className="mb-3 text-base font-semibold">{t("limitsHeading")}</h2>
+        <LimitsSliders limits={card.limits} usedToday={card.usedToday} onSave={handleSaveLimits} />
+      </section>
+      {ledger !== undefined && (
+        <section aria-label={t("ledger.title")} className="rounded-card border border-border bg-surface p-5">
+          <h2 className="mb-3 text-base font-semibold">{t("ledger.title")}</h2>
+          <LedgerTable entries={ledger} />
+        </section>
       )}
-      {audit.map((entry, i) => (
-        <AuditLine key={i} entry={entry} />
-      ))}
-      {ledger !== undefined && <LedgerTable entries={ledger} />}
     </section>
   );
 }

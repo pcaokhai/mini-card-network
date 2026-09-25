@@ -35,7 +35,7 @@ export function MoneyVerificationPanel({ run }: { run: ChaosRun | undefined }) {
       aria-labelledby="chaos-money-heading"
       data-testid="money-verification"
       data-result={result}
-      className={flash ? "money-verification--flash rounded-lg border border-canvas p-4" : "rounded-lg border border-canvas p-4"}
+      className={flash ? "money-verification--flash rounded-card border border-border bg-surface p-4" : "rounded-card border border-border bg-surface p-4"}
     >
       <h2 id="chaos-money-heading" className="mb-2 text-sm font-semibold">
         {t("heading")}

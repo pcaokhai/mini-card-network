@@ -51,6 +51,9 @@
     }
   },
   "lab": {
+    "rawHeading": "Raw message, exactly as sent on the wire",
+    "bitmapHeading": "Bitmap grid",
+    "fieldsHeading": "Field list",
     "de": "DE",
     "name": "Field",
     "format": "Format",
@@ -66,6 +69,7 @@
   },
   "network": {
     "title": "Network operations",
+    "linksHeading": "Connections",
     "statusPill": {
       "SIGNED_ON": "Signed on",
       "CONNECTED": "Connected",
@@ -91,6 +95,8 @@
   },
   "pos": {
     "title": "POS terminal",
+    "cardSectionLabel": "Card and scenario",
+    "paymentSectionLabel": "Payment",
     "amount": "Amount",
     "rrn": "RRN",
     "pay": "Pay",
@@ -138,8 +144,12 @@
   },
   "cards": {
     "title": "Cards and accounts",
+    "statusHeading": "Card status",
+    "balanceHeading": "Balance",
+    "limitsHeading": "Limits",
     "list": {
-      "empty": "No cards yet"
+      "empty": "No cards yet",
+      "heading": "Customer cards"
     },
     "status": {
       "ACTIVE": "Active",
@@ -219,6 +229,7 @@
       "source_issuer": "Issuer"
     },
     "rotation": {
+      "heading": "Rotate key",
       "rotate": "Rotate key",
       "rotating": "Rotating…",
       "step_GENERATE": "Generate",

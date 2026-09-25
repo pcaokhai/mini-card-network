@@ -53,7 +53,7 @@ export function LiveFeed({ expertMode = false }: { expertMode?: boolean }) {
   });
 
   return (
-    <div>
+    <div className="rounded-card border border-border bg-surface p-4">
       <h2 className="mb-2 text-lg font-semibold">{t("heading")}</h2>
       <ul aria-label={t("heading")} data-testid="live-feed-list" className="space-y-1">
         {rows.length === 0 && <li className="text-sm text-muted">{t("empty")}</li>}

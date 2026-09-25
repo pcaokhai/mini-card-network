@@ -6,7 +6,7 @@ export function ThroughputChart({ throughput }: { throughput: Overview["throughp
   const maxTps = Math.max(1, ...throughput.map((sample) => sample.tps));
 
   return (
-    <div>
+    <div className="rounded-card border border-border bg-surface p-4">
       <h2 className="mb-2 text-lg font-semibold">{t("heading")}</h2>
       <div
         className="throughput-chart"

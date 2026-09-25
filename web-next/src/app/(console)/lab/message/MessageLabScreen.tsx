@@ -47,23 +47,32 @@ export function MessageLabScreen() {
         />
         {decoded && (
           <>
-            <RawSegments />
-            <div role="tablist" hidden={!decoded.secondaryBitmap}>
-              <button role="tab" aria-selected={tab === "primary"} onClick={() => setTab("primary")}>
-                {t("primaryBitmap")}
-              </button>
-              {decoded.secondaryBitmap && (
-                <button role="tab" aria-selected={tab === "secondary"} onClick={() => setTab("secondary")}>
-                  {t("secondaryBitmap")}
+            <section aria-label={t("rawHeading")} className="rounded-card border border-border bg-surface p-4">
+              <h2 className="mb-3 text-base font-semibold">{t("rawHeading")}</h2>
+              <RawSegments />
+            </section>
+            <section aria-label={t("bitmapHeading")} className="rounded-card border border-border bg-surface p-4">
+              <h2 className="mb-3 text-base font-semibold">{t("bitmapHeading")}</h2>
+              <div role="tablist" hidden={!decoded.secondaryBitmap} className="mb-3">
+                <button role="tab" aria-selected={tab === "primary"} onClick={() => setTab("primary")}>
+                  {t("primaryBitmap")}
                 </button>
-              )}
-            </div>
-            <BitmapGrid page={decoded.secondaryBitmap ? tab : "primary"} />
-            <FieldTable />
+                {decoded.secondaryBitmap && (
+                  <button role="tab" aria-selected={tab === "secondary"} onClick={() => setTab("secondary")}>
+                    {t("secondaryBitmap")}
+                  </button>
+                )}
+              </div>
+              <BitmapGrid page={decoded.secondaryBitmap ? tab : "primary"} />
+            </section>
+            <section aria-label={t("fieldsHeading")} className="rounded-card border border-border bg-surface p-4">
+              <h2 className="mb-3 text-base font-semibold">{t("fieldsHeading")}</h2>
+              <FieldTable />
+            </section>
           </>
         )}
       </div>
-      <aside className="rounded-card border border-border bg-surface p-4">
+      <aside className="rounded-card bg-ink p-4 text-white">
         <DetailPanel />
       </aside>
     </div>
