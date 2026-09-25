@@ -11,13 +11,7 @@ const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 // See network-client.ts: pass a thunk so requests use the current global fetch (MSW patches it in tests).
 const liveFetch = (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args);
 
-export interface CreatePurchaseVars {
-  terminalId: string;
-  cardToken: string;
-  entryMode: EntryMode;
-  encryptedPinBlock: string;
-  amount: { amount: number; currency: string };
-}
+export type CreatePurchaseVars = components["schemas"]["PurchaseRequest"];
 
 export function useCreatePurchase() {
   return useMutation({

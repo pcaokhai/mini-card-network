@@ -1,155 +1,186 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslations } from "next-intl";
+import { useQueryClient } from "@tanstack/react-query";
 import { CardPicker } from "@/components/pos/CardPicker";
-import { PinPad } from "@/components/pos/PinPad";
-import { ScenarioButtons, SCENARIO_PRESETS, type Scenario } from "@/components/pos/ScenarioButtons";
+import type { KeypadKey } from "@/components/pos/Keypad";
+import { PosDevice } from "@/components/pos/PosDevice";
 import { ResultPanel } from "@/components/pos/ResultPanel";
-import { TransactionTypeSelector, type TransactionType } from "@/components/pos/TransactionTypeSelector";
-import { encryptPinBlockForSimulator } from "@/components/pos/pinblock";
+import { ReadingPanel } from "@/components/pos/ReadingPanel";
+import type { Scenario } from "@/components/pos/ScenarioButtons";
+import { TransactionTypeSelector } from "@/components/pos/TransactionTypeSelector";
 import {
+  type CardToken,
+  DISPLAY_CARDS,
+  ENTRY_MODES,
+  type EntryId,
+  type ScenarioId,
+  type TransactionType,
+  nextAmount,
+} from "@/components/pos/pos-model";
+import { type PosResult, describeResult } from "@/components/pos/result-view";
+import { useCard } from "@/shared/api/cards-client";
+import {
+  type Transaction,
   useCreateBalanceInquiry,
   useCreateCompletion,
   useCreatePreAuth,
   useCreatePurchase,
   useCreateRefund,
-  type Transaction,
 } from "@/shared/api/pos-client";
 import { useDisplayMode } from "@/shared/state/display-mode";
+import "@/components/pos/pos.css";
 
-const TERMINAL_ID = "00000042";
+// contracts/fixtures/cards.json terminal 00000042.
+const TERMINAL = { terminalId: "00000042", merchantName: "Cà phê Góc Phố" };
+const CURRENCY = "704";
 
-export function PosScreen() {
-  const t = useTranslations("pos");
-  const { mode } = useDisplayMode();
-  const [txnType, setTxnType] = useState<TransactionType>("PURCHASE");
-  const [cardToken, setCardToken] = useState<string | null>(null);
-  const [amount, setAmount] = useState("");
-  const [rrn, setRrn] = useState("");
-  const [pinEntered, setPinEntered] = useState(false);
-  const [result, setResult] = useState<Transaction | null>(null);
+interface Draft {
+  type: TransactionType;
+  cardToken: CardToken;
+  entry: EntryId;
+  amount: number;
+  rrn: string;
+}
+
+function useSubmitTransaction() {
   const purchase = useCreatePurchase();
   const preAuth = useCreatePreAuth();
   const completion = useCreateCompletion();
   const refund = useCreateRefund();
-  const balanceInquiry = useCreateBalanceInquiry();
-  const pending =
-    purchase.isPending || preAuth.isPending || completion.isPending || refund.isPending || balanceInquiry.isPending;
-  // Kept out of state (never re-rendered) and cleared immediately in handleSubmit, before the
-  // network call, per AC4: PIN digits must not linger in component state.
-  const pinRef = useRef<string | null>(null);
+  const balance = useCreateBalanceInquiry();
+  const pending = [purchase, preAuth, completion, refund, balance].some((m) => m.isPending);
 
-  const isCompletion = txnType === "COMPLETION";
-  const needsAmount = txnType !== "BALANCE";
-  const needsCardPresent = !isCompletion;
+  function submit(draft: Draft): Promise<Transaction> {
+    const money = { amount: draft.amount, currency: CURRENCY };
+    if (draft.type === "COMPLETION") return completion.mutateAsync({ rrn: draft.rrn, amount: money });
+    // No PIN block: the gateway does not forward one yet (risk R-12, plan Ruling R1).
+    const entryMode = ENTRY_MODES.find((e) => e.id === draft.entry)?.entryMode ?? "CHIP_NO_PIN";
+    const card = { terminalId: TERMINAL.terminalId, cardToken: draft.cardToken, entryMode };
+    if (draft.type === "BALANCE") return balance.mutateAsync(card);
+    const mutation = { PURCHASE: purchase, PREAUTH: preAuth, REFUND: refund }[draft.type];
+    return mutation.mutateAsync({ ...card, amount: money });
+  }
+  return { submit, pending };
+}
 
-  function handlePinSubmit(pin: string) {
-    pinRef.current = pin;
-    setPinEntered(true);
+function problemDetail(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null) {
+    const problem = error as { detail?: unknown; title?: unknown };
+    return String(problem.detail ?? problem.title ?? JSON.stringify(error));
+  }
+  return String(error);
+}
+
+export function PosScreen() {
+  const t = useTranslations("pos");
+  const expert = useDisplayMode((s) => s.mode === "expert");
+  const queryClient = useQueryClient();
+  const { submit, pending } = useSubmitTransaction();
+  const [type, setType] = useState<TransactionType>("PURCHASE");
+  const [cardToken, setCardToken] = useState<CardToken>("tok_normal");
+  const [entry, setEntry] = useState<EntryId>("chip");
+  const [amount, setAmount] = useState("250000");
+  const [scenario, setScenario] = useState<ScenarioId | null>("normal");
+  const [rrn, setRrn] = useState("");
+  const [result, setResult] = useState<PosResult | null>(null);
+
+  const isBalance = type === "BALANCE";
+  const isCompletion = type === "COMPLETION";
+
+  const pressKey = useCallback((key: KeypadKey) => {
+    setAmount((current) => nextAmount(current, key));
+    setResult(null);
+  }, []);
+
+  function pickScenario(picked: Scenario) {
+    setType("PURCHASE");
+    setScenario(picked.id);
+    setCardToken(picked.cardToken);
+    setAmount(String(picked.amount));
+    setResult(null);
   }
 
-  function applyScenario(scenario: Scenario) {
-    const preset = SCENARIO_PRESETS[scenario];
-    setCardToken(preset.cardToken);
-    setAmount(String(preset.amount));
-  }
-
-  async function buildCardPresentData() {
-    const pin = pinRef.current;
-    if (!cardToken || !pin) return null;
-    // Lab simplification: the frontend never holds the real PAN the gateway alone resolves
-    // (see docs/plans/MCN-305.md Task 5), so the PIN block is built against a per-card
-    // placeholder value derived from cardToken. This demonstrates the real ISO 9564-1 shape
-    // (AC4's intent) without shipping real PANs to the browser.
-    const encryptedPinBlock = await encryptPinBlockForSimulator(pin, cardToken.padEnd(16, "0").slice(0, 16));
-    pinRef.current = null;
-    return { terminalId: TERMINAL_ID, cardToken, entryMode: "MANUAL_PIN" as const, encryptedPinBlock };
-  }
-
-  async function handleSubmit() {
-    if (isCompletion) {
-      if (!rrn || !amount) return;
-      const transaction = await completion.mutateAsync({ rrn, amount: { amount: Number(amount), currency: "704" } });
-      setResult(transaction);
-      return;
+  async function pay() {
+    if (pending) return;
+    setResult(null);
+    if (!isBalance && Number(amount) <= 0) return setResult({ kind: "invalidAmount" });
+    try {
+      const tx = await submit({ type, cardToken, entry, amount: Number(amount), rrn });
+      await queryClient.invalidateQueries({ queryKey: ["cards"] });
+      setResult({ kind: "tx", tx, entry, last4: tx.maskedPan.slice(-4), balance: null });
+      if (tx.type === "PREAUTH" && tx.status === "APPROVED") setRrn(tx.rrn);
+    } catch (error) {
+      setResult({ kind: "requestFailed", detail: problemDetail(error) });
     }
-    const cardPresent = await buildCardPresentData();
-    if (!cardPresent) return;
-    if (txnType === "BALANCE") {
-      const transaction = await balanceInquiry.mutateAsync(cardPresent);
-      setResult(transaction);
-      return;
-    }
-    if (!amount) return;
-    const withAmount = { ...cardPresent, amount: { amount: Number(amount), currency: "704" } };
-    const transaction = await (txnType === "PREAUTH"
-      ? preAuth.mutateAsync(withAmount)
-      : txnType === "REFUND"
-        ? refund.mutateAsync(withAmount)
-        : purchase.mutateAsync(withAmount));
-    setResult(transaction);
   }
 
-  const canSubmit = isCompletion
-    ? Boolean(rrn && amount)
-    : Boolean(cardToken && pinEntered && (!needsAmount || amount)) && !pending;
-
+  // The result reads the paid card's balance live, so it follows the tiles' refetches.
+  const selectedCard = DISPLAY_CARDS.find((c) => c.cardToken === cardToken) ?? DISPLAY_CARDS[0];
+  const liveBalance = useCard(selectedCard.cardRef).data?.card?.availableBalance?.amount;
+  const shownResult: PosResult | null =
+    result?.kind === "tx" && result.last4 === selectedCard.last4 ? { ...result, balance: liveBalance ?? null } : result;
+  const view = shownResult && describeResult(shownResult, (key, values) => t(`result.${key}`, values));
+  const balanceShown = result?.kind === "tx" ? result.tx.balance?.amount : undefined;
   return (
-    <section aria-labelledby="pos-heading" className="space-y-6">
-      <h1 id="pos-heading" className="text-2xl font-bold">
-        {t("title")}
-      </h1>
-      <TransactionTypeSelector value={txnType} onChange={setTxnType} />
-      <section aria-label={t("cardSectionLabel")} className="rounded-card border border-border bg-surface p-5">
-        {isCompletion ? (
-          <div>
-            <label htmlFor="pos-rrn" className="mb-1 block text-sm font-medium text-muted">
-              {t("rrn")}
-            </label>
-            <input
-              id="pos-rrn"
-              type="text"
-              value={rrn}
-              onChange={(e) => setRrn(e.target.value)}
-              className="w-64 rounded-lg border border-border bg-surface px-3 py-2 text-lg"
-            />
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <ScenarioButtons onPick={applyScenario} />
-            <CardPicker selected={cardToken} onSelect={setCardToken} />
-          </div>
-        )}
-      </section>
-      <section aria-label={t("paymentSectionLabel")} className="rounded-card border border-border bg-surface p-5 space-y-4">
-        {needsAmount && (
-          <div>
-            <label htmlFor="pos-amount" className="mb-1 block text-sm font-medium text-muted">
-              {t("amount")}
-            </label>
-            <input
-              id="pos-amount"
-              type="text"
-              inputMode="numeric"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value.replace(/\D/g, ""))}
-              className="w-40 rounded-lg border border-border bg-surface px-3 py-2 text-lg"
-            />
-          </div>
-        )}
-        {needsCardPresent && <PinPad onSubmit={handlePinSubmit} />}
-        <div aria-live="polite">{pending && t("processing")}</div>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={!canSubmit}
-          className="w-full rounded-lg bg-accent py-2.5 text-sm font-semibold text-white disabled:opacity-40"
-        >
-          {t("pay")}
-        </button>
-      </section>
-      <ResultPanel transaction={result} expertMode={mode === "expert"} />
+    <section aria-labelledby="pos-heading" className="pos-root flex flex-col gap-[22px]">
+      <div>
+        <h1 id="pos-heading" className="text-[30px] font-bold tracking-[-0.01em]">
+          {t("title")}
+        </h1>
+        <p className="mt-1.5 text-[15px] text-muted">{t("subtitle")}</p>
+      </div>
+      <div className="flex">
+        <TransactionTypeSelector
+          value={type}
+          onChange={(next) => {
+            setType(next);
+            setResult(null);
+          }}
+        />
+      </div>
+      <div className="pos-columns">
+        <PosDevice
+          {...TERMINAL}
+          label={isBalance ? t("device.balance") : t("device.amount")}
+          amountText={
+            isBalance
+              ? balanceShown === undefined
+                ? "—"
+                : balanceShown.toLocaleString("vi-VN")
+              : Number(amount).toLocaleString("vi-VN")
+          }
+          message={view?.screen ?? t("device.idle")}
+          messageKind={view?.kind ?? null}
+          processing={pending}
+          keypadDisabled={isBalance}
+          payDisabled={pending || (isCompletion && rrn.length === 0)}
+          onKey={pressKey}
+          onPay={() => void pay()}
+        />
+        <div className="flex min-w-0 flex-col gap-[18px]">
+          <CardPicker
+            selected={cardToken}
+            onSelect={(token) => {
+              setCardToken(token);
+              setResult(null);
+            }}
+          />
+          <ReadingPanel
+            expert={expert}
+            isCompletion={isCompletion}
+            entry={entry}
+            onEntry={setEntry}
+            rrn={rrn}
+            onRrn={setRrn}
+            scenario={scenario}
+            onScenario={pickScenario}
+          />
+          <ResultPanel processing={pending} result={shownResult} expert={expert} type={type} />
+        </div>
+      </div>
     </section>
   );
 }

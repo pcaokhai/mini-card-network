@@ -1,18 +1,483 @@
-/* Compositor-friendly only (rules/web/performance.md): transform/opacity. Global reduced-motion
-   media query in globals.css already zeroes animation-duration, so no extra guard is needed here. */
-@keyframes pos-shake {
-  10%, 90% { transform: translateX(-1px); }
-  20%, 80% { transform: translateX(2px); }
-  30%, 50%, 70% { transform: translateX(-4px); }
-  40%, 60% { transform: translateX(4px); }
+/* POS screen, from the design canvas (POS.dc.html). Motion animates transform/opacity only; the
+   global prefers-reduced-motion rule in globals.css collapses every duration and delay. */
+.pos-root {
+  --pos-device: #1c1e24;
+  --pos-device-meta: #9ea1aa;
+  --pos-lcd: #e8efe6;
+  --pos-lcd-label: #3e4a3c;
+  --pos-key: #2b2e36;
+  --pos-key-back: #3a3d46;
+  --pos-key-clear: #5a3a12;
+  --pos-key-clear-ink: #fbe3bd;
+  --pos-seg-track: #efede6;
+  --pos-line: #d6d3ca;
+  --pos-divider: #f0eee8;
+  --pos-body: #4a4c54;
+  --pos-pill-ink: #3a3c43;
 }
+
+.pos-columns {
+  display: grid;
+  grid-template-columns: 400px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+
+/* ---- Terminal ---------------------------------------------------------------------------- */
+.pos-device {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px;
+  border-radius: 28px;
+  background: var(--pos-device);
+}
+.pos-device__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--pos-device-meta);
+}
+.pos-device__tid {
+  font-family: var(--font-mono);
+}
+.pos-lcd {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 132px;
+  padding: 18px 20px;
+  border-radius: 14px;
+  background: var(--pos-lcd);
+}
+.pos-lcd__label {
+  font-size: 13px;
+  color: var(--pos-lcd-label);
+}
+.pos-lcd__amount {
+  font-family: var(--font-mono);
+  font-size: 38px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+}
+.pos-lcd__msg {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pos-lcd-label);
+}
+.pos-lcd__msg[data-kind="ok"] {
+  color: var(--color-ok);
+}
+.pos-lcd__msg[data-kind="bad"] {
+  color: var(--color-bad);
+}
+.pos-lcd__msg[data-kind="rev"] {
+  color: var(--color-rev);
+}
+.pos-dot {
+  animation: pos-dots 1s infinite;
+}
+.pos-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.pos-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.pos-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.pos-key {
+  height: 56px;
+  border: none;
+  border-radius: 12px;
+  font-size: 22px;
+  font-weight: 500;
+  color: #fff;
+  background: var(--pos-key);
+}
+.pos-key--back {
+  background: var(--pos-key-back);
+}
+.pos-key--clear {
+  color: var(--pos-key-clear-ink);
+  background: var(--pos-key-clear);
+}
+.pos-key:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pos-pay {
+  height: 60px;
+  border: none;
+  border-radius: 14px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--color-accent);
+}
+.pos-pay:disabled {
+  cursor: progress;
+}
+
+/* ---- Right column panels ---------------------------------------------------------------- */
+.pos-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+.pos-panel__heading {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* Six fixture cards where the canvas shows four, so three per row instead of four. */
+.pos-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.pos-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  height: 112px;
+  padding: 14px 16px;
+  border: none;
+  border-radius: 14px;
+  text-align: left;
+  color: #fff;
+}
+.pos-card[data-tag="normal"] {
+  background: #0b4f55;
+}
+.pos-card[data-tag="low"] {
+  background: #2f3340;
+}
+.pos-card[data-tag="blocked"] {
+  background: #7a2e24;
+}
+.pos-card[data-tag="expired"] {
+  background: #55585f;
+}
+.pos-card[data-tag="limit"] {
+  background: #6b4a12;
+}
+.pos-card[data-tag="rich"] {
+  background: #3a3480;
+}
+.pos-card[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 3px #fff,
+    0 0 0 6px var(--color-accent);
+}
+.pos-card__tag {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.pos-card__pan {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+.pos-card__balance {
+  font-size: 12px;
+}
+
+.pos-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+.pos-row__label {
+  min-width: 110px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* The canvas's on/off segmented control, the same look as the header's Easy/Expert toggle. */
+.pos-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--pos-seg-track);
+}
+.pos-seg--fit {
+  align-self: flex-start;
+}
+.pos-seg__btn {
+  height: 32px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-muted);
+  background: transparent;
+}
+.pos-seg__btn[aria-pressed="true"] {
+  font-weight: 600;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgb(23 24 28 / 0.14);
+}
+
+.pos-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pos-pill {
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--pos-line);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pos-pill-ink);
+  background: var(--color-surface);
+}
+.pos-pill[aria-pressed="true"] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.pos-input {
+  width: 220px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--pos-line);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  background: var(--color-surface);
+}
+
+/* ---- Result ------------------------------------------------------------------------------ */
+.pos-result {
+  gap: 16px;
+  min-height: 360px;
+  padding: 20px 22px;
+}
+.pos-result__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 318px;
+  text-align: center;
+  color: var(--color-muted);
+}
+.pos-result__center--processing {
+  gap: 14px;
+  animation: pos-fade 0.25s ease both;
+}
+.pos-result__center-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+.pos-result__center-desc {
+  max-width: 420px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.pos-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--color-accent-soft);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: pos-spin 0.8s linear infinite;
+}
+
+.pos-result__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.pos-result__icon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  animation: pos-pop 0.42s var(--ease-out-design) both;
+}
+[data-kind="ok"] .pos-result__icon {
+  color: var(--color-ok);
+  background: var(--color-ok-soft);
+}
+[data-kind="rev"] .pos-result__icon {
+  color: var(--color-rev);
+  background: var(--color-rev-soft);
+}
+[data-kind="bad"] .pos-result__icon {
+  color: var(--color-bad);
+  background: var(--color-bad-soft);
+  animation:
+    pos-pop 0.42s var(--ease-out-design) both,
+    pos-shake 0.28s ease 0.42s 2;
+}
+.pos-result__text {
+  display: flex;
+  flex-grow: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+.pos-result__title {
+  font-size: 18px;
+  font-weight: 700;
+}
+.pos-result__desc {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--pos-body);
+}
+.pos-result__tech {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--pos-body);
+  background: var(--color-canvas);
+}
+.pos-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pos-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--pos-divider);
+  animation: pos-fade-up 0.32s var(--ease-out-design) both;
+  animation-delay: calc(160ms + var(--step-index, 0) * 110ms);
+}
+.pos-step__dot {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: 50%;
+}
+.pos-step__dot[data-kind="ok"] {
+  background: var(--color-ok);
+  box-shadow: 0 0 0 4px var(--color-ok-soft);
+}
+.pos-step__dot[data-kind="bad"] {
+  background: var(--color-bad);
+  box-shadow: 0 0 0 4px var(--color-bad-soft);
+}
+.pos-step__dot[data-kind="warn"] {
+  background: var(--color-warn);
+  box-shadow: 0 0 0 4px var(--color-warn-soft);
+}
+.pos-step__dot[data-kind="rev"] {
+  background: var(--color-rev);
+  box-shadow: 0 0 0 4px var(--color-rev-soft);
+}
+.pos-step__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pos-step__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.pos-step__desc {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+.pos-result__link {
+  align-self: flex-start;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+.pos-result__link:hover {
+  color: #08545a;
+}
+
 @keyframes pos-pop {
-  0% { transform: scale(0.9); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
-.result-panel[data-outcome="DECLINED"] {
-  animation: pos-shake 300ms cubic-bezier(0.16, 1, 0.3, 1);
+@keyframes pos-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
 }
-.result-panel[data-outcome="APPROVED"] {
-  animation: pos-pop 300ms cubic-bezier(0.16, 1, 0.3, 1);
+@keyframes pos-dots {
+  0%,
+  80%,
+  100% {
+    opacity: 0.15;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+@keyframes pos-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pos-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pos-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

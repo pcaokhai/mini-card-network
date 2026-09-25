@@ -33,3 +33,40 @@ describe("dev:mock scenario transactions", () => {
     }
   });
 });
+
+describe("dev:mock POS outcomes", () => {
+  async function purchase(cardToken: string, amount: number, idempotencyKey = crypto.randomUUID()) {
+    const res = await fetch("http://localhost/v1/transactions/purchases", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ terminalId: "00000042", cardToken, entryMode: "CHIP_NO_PIN", amount: { amount, currency: "704" } }),
+    });
+    return (await res.json()) as components["schemas"]["Transaction"];
+  }
+  async function balance(cardRef: string) {
+    const res = await fetch(`http://localhost/v1/cards/${cardRef}`);
+    return ((await res.json()) as components["schemas"]["CardDetail"]).availableBalance.amount;
+  }
+
+  it("MCN-305: each fixture card declines the way the real issuer does", async () => {
+    expect((await purchase("tok_low", 350_000)).responseCode).toBe("51");
+    expect((await purchase("tok_blocked", 90_000)).responseCode).toBe("62");
+    expect((await purchase("tok_expired", 150_000)).responseCode).toBe("54");
+    expect((await purchase("tok_limit", 600_000)).responseCode).toBe("61");
+  });
+
+  it("MCN-305: an approved purchase lowers the card's available balance", async () => {
+    const before = await balance("crd_normal0001");
+    const tx = await purchase("tok_normal", 250_000);
+    expect(tx).toMatchObject({ status: "APPROVED", responseCode: "00", maskedPan: "970436******4417" });
+    expect(await balance("crd_normal0001")).toBe(before - 250_000);
+  });
+
+  it("replays a repeated Idempotency-Key instead of charging twice", async () => {
+    const before = await balance("crd_second0006");
+    const first = await purchase("tok_second", 100_000, "same-key");
+    const again = await purchase("tok_second", 100_000, "same-key");
+    expect(again.rrn).toBe(first.rrn);
+    expect(await balance("crd_second0006")).toBe(before - 100_000);
+  });
+});

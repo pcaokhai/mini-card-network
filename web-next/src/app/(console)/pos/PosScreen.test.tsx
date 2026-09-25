@@ -1,135 +1,134 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { NextIntlClientProvider } from "next-intl";
 import { HttpResponse, delay, http } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import en from "../../../../messages/en.json";
-import { handlers } from "@/mocks/generated/handlers";
+import { renderWithIntl } from "@/test/render";
+import type { Transaction } from "@/shared/api/pos-client";
 import { PosScreen } from "./PosScreen";
 
-const server = setupServer(...handlers);
+const approved: Transaction = {
+  rrn: "626807000301",
+  stan: "000301",
+  type: "PURCHASE",
+  status: "APPROVED",
+  responseCode: "00",
+  authCode: "A00301",
+  amount: { amount: 250_000, currency: "704" },
+  maskedPan: "970436******4417",
+  terminalId: "00000042",
+  merchantName: "Cà phê Góc Phố",
+  createdAt: "2026-09-25T07:00:00Z",
+};
+
+let bodies: { path: string; body: Record<string, unknown> }[] = [];
+
+function answer(type: Transaction["type"], waitMs = 0) {
+  return async ({ request }: { request: Request }) => {
+    bodies.push({ path: new URL(request.url).pathname, body: (await request.json()) as Record<string, unknown> });
+    await delay(waitMs);
+    return HttpResponse.json({ ...approved, type }, { status: 201 });
+  };
+}
+
+const server = setupServer(
+  http.get("*/v1/cards/:cardRef", () => new HttpResponse(null, { status: 404 })),
+  http.post("*/v1/transactions/purchases", answer("PURCHASE", 30)),
+  http.post("*/v1/transactions/pre-authorizations", answer("PREAUTH")),
+  http.post("*/v1/transactions/refunds", answer("REFUND")),
+  http.post("*/v1/transactions/balance-inquiries", answer("BALANCE")),
+  http.post("*/v1/transactions/:rrn/completions", answer("COMPLETION")),
+);
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
-afterEach(() => server.resetHandlers());
+afterEach(() => {
+  bodies = [];
+});
 afterAll(() => server.close());
 
-function renderScreen() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <NextIntlClientProvider locale="en" messages={en}>
-        <PosScreen />
-      </NextIntlClientProvider>
-    </QueryClientProvider>,
-  );
-}
-
-async function enterPin(user: ReturnType<typeof userEvent.setup>) {
-  for (const digit of ["1", "2", "3", "4"]) {
-    await user.click(screen.getByRole("button", { name: digit }));
-  }
-  await user.click(screen.getByRole("button", { name: /confirm/i }));
-}
+const pay = () => screen.getByRole("button", { name: /^(Thanh toán|Đang xử lý…)$/ });
 
 describe("PosScreen", () => {
-  it("locks the pay button while processing and shows a result after", async () => {
-    const user = userEvent.setup();
-    renderScreen();
-
-    server.use(
-      http.post("/api/v1/transactions/purchases", async () => {
-        await delay(50);
-        return HttpResponse.json(
-          {
-            rrn: "x",
-            type: "PURCHASE",
-            status: "APPROVED",
-            responseCode: "00",
-            responseLabel: "Approved",
-            amount: { amount: 1000, currency: "704" },
-            maskedPan: "970436******4417",
-            terminalId: "00000042",
-            merchantName: "Ca phe Goc Pho",
-            createdAt: new Date().toISOString(),
-          },
-          { status: 201 },
-        );
-      }),
-    );
-
-    await user.click(screen.getByRole("radiogroup", { name: /test card/i }).querySelectorAll("[role=radio]")[0]);
-    await user.type(screen.getByLabelText(/amount/i), "1000");
-    await enterPin(user);
-
-    const payButton = screen.getByRole("button", { name: /^pay$/i });
-    expect(payButton).not.toBeDisabled();
-    await user.click(payButton);
-
-    expect(payButton).toBeDisabled();
-    await waitFor(() => expect(payButton).not.toBeDisabled());
-    expect(document.querySelector(".result-panel")).toBeInTheDocument();
+  it("has a single heading naming the screen and starts on the canvas's default sale", () => {
+    renderWithIntl(<PosScreen />);
+    expect(screen.getByRole("heading", { level: 1, name: "Máy POS giả lập" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("250.000 ₫");
+    expect(screen.getByRole("button", { name: /4417/ })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("has a single accessible heading naming the screen", () => {
-    renderScreen();
-    expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
+  it("MCN-305-AC2 locks Pay and shows the processing state until the API answers", async () => {
+    const user = userEvent.setup();
+    renderWithIntl(<PosScreen />);
+    await user.click(pay());
+
+    expect(pay()).toBeDisabled();
+    expect(pay()).toHaveTextContent("Đang xử lý…");
+    expect(screen.getByRole("status")).toHaveTextContent("Đang xử lý");
+    expect(await screen.findByText("Thanh toán thành công")).toBeInTheDocument();
+    expect(pay()).not.toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Giao dịch thành công");
   });
 
-  it("hides card/PIN fields and shows RRN+amount for COMPLETION", async () => {
+  it("MCN-305-AC4 (Ruling R1) sends a chip read with no PIN block", async () => {
     const user = userEvent.setup();
-    renderScreen();
+    renderWithIntl(<PosScreen />);
+    await user.click(pay());
+    await screen.findByText("Thanh toán thành công");
 
-    await user.click(screen.getByRole("radio", { name: /completion/i }));
-
-    expect(screen.queryByRole("radiogroup", { name: /test card/i })).toBeNull();
-    expect(screen.queryByRole("status", { name: /pin/i })).toBeNull();
-    expect(screen.getByLabelText(/rrn/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/amount/i)).toBeInTheDocument();
+    expect(bodies[0]?.body).toEqual({
+      terminalId: "00000042",
+      cardToken: "tok_normal",
+      entryMode: "CHIP_NO_PIN",
+      amount: { amount: 250_000, currency: "704" },
+    });
   });
 
-  it("hides the amount field for BALANCE", async () => {
+  it("MCN-305-AC1 manual entry, keypad digits and a scenario preset shape the request", async () => {
     const user = userEvent.setup();
-    renderScreen();
+    renderWithIntl(<PosScreen />);
+    await user.click(screen.getByRole("button", { name: "Không đủ tiền" }));
+    expect(screen.getByRole("status")).toHaveTextContent("350.000 ₫");
+    await user.click(screen.getByRole("button", { name: "Nhập tay" }));
+    await user.click(screen.getByRole("button", { name: "Xóa một số" }));
+    await user.click(pay());
+    await screen.findByText("Thanh toán thành công");
 
-    await user.click(screen.getByRole("radio", { name: /balance inquiry/i }));
-
-    expect(screen.queryByLabelText(/amount/i)).toBeNull();
-    expect(screen.getByRole("radiogroup", { name: /test card/i })).toBeInTheDocument();
+    expect(bodies[0]?.body).toMatchObject({ cardToken: "tok_low", entryMode: "MANUAL_NO_PIN", amount: { amount: 35_000 } });
   });
 
-  it("dispatches to the pre-authorizations endpoint when type is PREAUTH and Pay is pressed", async () => {
+  it("MCN-604 completes a pre-auth by its original RRN", async () => {
     const user = userEvent.setup();
-    renderScreen();
+    renderWithIntl(<PosScreen />);
+    await user.click(screen.getByRole("button", { name: "Hoàn tất" }));
+    expect(pay()).toBeDisabled();
+    await user.type(screen.getByLabelText("Mã tra soát gốc"), "626807000290");
+    await user.click(pay());
+    await screen.findByText("Đã hoàn tất giao dịch");
 
-    let hitPreAuth = false;
-    server.use(
-      http.post("/api/v1/transactions/pre-authorizations", async () => {
-        hitPreAuth = true;
-        return HttpResponse.json(
-          {
-            rrn: "x",
-            type: "PREAUTH",
-            status: "APPROVED",
-            responseLabel: "Approved",
-            amount: { amount: 1000, currency: "704" },
-            maskedPan: "970436******4417",
-            terminalId: "00000042",
-            merchantName: "Ca phe Goc Pho",
-            createdAt: new Date().toISOString(),
-          },
-          { status: 201 },
-        );
-      }),
-    );
+    expect(bodies[0]).toEqual({
+      path: "/api/v1/transactions/626807000290/completions",
+      body: { amount: { amount: 250_000, currency: "704" } },
+    });
+  });
 
-    await user.click(screen.getByRole("radio", { name: /pre-auth/i }));
-    await user.click(screen.getByRole("radiogroup", { name: /test card/i }).querySelectorAll("[role=radio]")[0]);
-    await user.type(screen.getByLabelText(/amount/i), "1000");
-    await enterPin(user);
-    await user.click(screen.getByRole("button", { name: /^pay$/i }));
+  it("MCN-604 a balance inquiry sends no amount", async () => {
+    const user = userEvent.setup();
+    renderWithIntl(<PosScreen />);
+    await user.click(screen.getByRole("button", { name: "Tra cứu số dư" }));
+    await user.click(pay());
+    await screen.findByText("Tra cứu số dư thành công");
 
-    await waitFor(() => expect(document.querySelector(".result-panel")).toBeInTheDocument());
-    expect(hitPreAuth).toBe(true);
+    expect(bodies[0]?.path).toBe("/api/v1/transactions/balance-inquiries");
+    expect(bodies[0]?.body).not.toHaveProperty("amount");
+  });
+
+  it("an amount of 0 is refused on the terminal without sending anything", async () => {
+    const user = userEvent.setup();
+    renderWithIntl(<PosScreen />);
+    await user.click(screen.getByRole("button", { name: "Xóa hết" }));
+    await user.click(pay());
+
+    expect(screen.getByText("Số tiền chưa hợp lệ")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Nhập số tiền"));
+    expect(bodies).toHaveLength(0);
   });
 });
