@@ -128,7 +128,7 @@ Processing is by MTI class: `01` authorization, `02` financial, `04` reversal, `
 | --- | --- | --- |
 | 001 | Sign-on | Acquirer on connect |
 | 002 | Sign-off | Acquirer before disconnect |
-| 161 | Key change (new ZPK/ZAK in DE 48 under ZMK, key index in DE 53) | Issuer or acquirer |
+| 161 | Key change (new ZPK/ZAK in DE 48 under ZMK, key type as a `ZPK:`/`ZAK:` prefix in DE 48) | Issuer or acquirer |
 | 201 | Cutover (DE 15 = new business date) | Acquirer |
 | 301 | Echo test | Either side |
 
@@ -210,7 +210,7 @@ ISO messages carry no trace headers. Each host logs `trace_id` with (DE 11, DE 7
 - **PIN block:** ISO 9564-1 format 0: `0` + PIN length (hex) + PIN + `F` padding, XOR `0000` + 12 rightmost PAN digits excluding the check digit. Encrypted under TPK at the POS, translated to ZPK by the gateway, verified via PVV by the issuer.
 - **MAC:** ISO 9797-1 algorithm 3 (Retail MAC, "X9.19") over the full packed message excluding the MAC field, using ZAK; last 8 bytes placed in DE 64 (or DE 128 when secondary bitmap present). A MAC failure is answered with RC `96` and counted in `mcn_mac_failure_total`.
 - **EMV (DE 55):** TLV; v1 recognizes tags 9F26 (ARQC), 9F27 (CID), 9F10 (IAD), 9F36 (ATC), 9F37 (unpredictable number), 95 (TVR), 9A (date), 9C (type), 5F2A (currency). ARQC verification is simulated with a keyed HMAC in the lab; ARPC returned in tag 91.
-- **Key change:** new double-length key as a cryptogram under ZMK in DE 48 (format in §3), key index in DE 53. The receiver activates the key after 0810 RC `00` and keeps the previous key for 5 minutes.
+- **Key change:** new double-length key as a cryptogram under ZMK in DE 48, as `<KEYTYPE>:<cryptogram hex>` (`ZPK:` or `ZAK:`). DE 53 is not sent (MCN-504 ruling, PRs #60/#61: the key type travels in DE 48 so both packagers need no extra field). The receiver activates the key after 0810 RC `00` and keeps the previous key for 5 minutes.
 
 ## 12. Golden vectors
 

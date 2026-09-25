@@ -51,17 +51,26 @@ WebSocket: the browser connects directly to `ws://localhost:8080/v1/stream?token
 }
 ```
 
-| `type` suffix | Status | When |
+Every provider emits `type` as the full URI `https://mcn.local/problems/<slug>`, with `title`, `status`, `detail`, `instance` and `traceId` (the request's W3C trace id), as `application/problem+json`. `detail` is written for an operator and never carries raw driver or parser errors. Every service maps errors to problems in exactly one place (root CLAUDE.md §6.8). The catalogue:
+
+| `type` slug | Status | When |
 | --- | --- | --- |
-| `validation-error` | 400 | Body/params invalid (`errors[]` filled) |
-| `insufficient-idempotency-key` | 400 | Missing header |
-| `not-found` | 404 | Resource does not exist |
+| `validation-error` | 400 | Body, path or query invalid (`errors[]` filled) |
+| `insufficient-idempotency-key` | 400 | `Idempotency-Key` missing or not a UUID |
+| `not-found` | 404 | Resource does not exist (transaction, card, link, rotation, run…) |
 | `precondition-failed` | 412 | ETag mismatch |
-| `conflict` | 409 | State transition not allowed (e.g. unblock an expired card) |
+| `conflict` | 409 | State transition not allowed (e.g. unblock an expired card, a settlement step out of order) |
 | `open-breaks` | 409 | Clearing file requested while breaks are open |
+| `not-reversible` | 409 | Cancellation of a transaction that is not an APPROVED purchase |
+| `link-not-ready` | 409 | A link action (echo, sign-on, sign-off) while the link has no connection |
+| `unknown-terminal` | 422 | `terminalId` is not a configured terminal |
+| `unknown-card-token` | 422 | `cardToken` is not a simulator card |
 | `idempotency-key-mismatch` | 422 | Same key, different request |
-| `link-down` | 503 | ISO link not signed on (transaction still recorded as declined RC 91) |
+| `scenario-unavailable` | 501 | A chaos scenario this stack cannot run (e.g. `DROP_RESPONSE` without a fake issuer) |
 | `internal` | 500 | Unexpected; body contains only `traceId` |
+| `upstream-unavailable` | 502 | The BFF could not reach the service |
+
+A link that is down is **not** an HTTP error for a transaction: the gateway records it and answers `201` with `status: DECLINED`, `responseCode: "91"` (MCN-303-AC4).
 
 A **declined or timed-out transaction is not an HTTP error**: it returns 201 with the transaction resource (`status: DECLINED | TIMED_OUT | REVERSAL_PENDING`) so the POS can show the result.
 

@@ -117,6 +117,7 @@ paths:
         - { name: last4, in: query, schema: { type: string, pattern: '^[0-9]{4}$' } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: reversalReason, in: query, schema: { $ref: '#/components/schemas/ReversalReason' } }
       responses:
         '200':
           description: Page of transactions, newest first
@@ -248,7 +249,7 @@ paths:
                 type: object
                 required: [depth, deadCount, items]
                 properties:
-                  depth: { type: integer, minimum: 0 }
+                  depth: { type: integer, minimum: 0, description: Advices still owed (PENDING + IN_FLIGHT); DEAD rows are counted in deadCount only. }
                   deadCount: { type: integer, minimum: 0 }
                   items: { type: array, items: { $ref: '#/components/schemas/SafItem' } }
   /v1/network/events:
@@ -296,6 +297,18 @@ paths:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ChaosScenario' } } } }
         default: { $ref: '#/components/responses/Problem' }
   /v1/chaos/runs:
+    get:
+      tags: [chaos]
+      operationId: listChaosRuns
+      description: Recent runs, newest first. Runs are kept in memory by the gateway, so the list is empty after a restart.
+      parameters: [{ $ref: '#/components/parameters/Limit' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: '#/components/schemas/ChaosRun' } } } }
+        default: { $ref: '#/components/responses/Problem' }
     post:
       tags: [chaos]
       operationId: startChaosRun
@@ -375,6 +388,24 @@ paths:
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CardDetail' } } } }
         default: { $ref: '#/components/responses/Problem' }
+  /v1/cards/{cardRef}/audit:
+    get:
+      tags: [cards]
+      operationId: getCardAudit
+      description: Admin actions on the card (block, unblock, limit changes), newest first.
+      parameters: [{ $ref: '#/components/parameters/CardRef' }, { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+                  nextCursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Problem' }
   /v1/cards/{cardRef}/ledger:
     get:
       tags: [cards]
@@ -438,17 +469,21 @@ paths:
     post:
       tags: [settlement]
       operationId: triggerCutover
+      description: Allowed only in stage OPEN.
       parameters: [{ $ref: '#/components/parameters/BusinessDate' }, { $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '202': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/SettlementDay' } } } }
+        '409': { description: 'conflict: the day is past OPEN', content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
         default: { $ref: '#/components/responses/Problem' }
   /v1/settlement/days/{businessDate}/reconciliations:
     post:
       tags: [settlement]
       operationId: runReconciliation
+      description: Allowed only in stage TOTALS_EXCHANGED.
       parameters: [{ $ref: '#/components/parameters/BusinessDate' }, { $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '202': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/SettlementDay' } } } }
+        '409': { description: 'conflict: the day is not in TOTALS_EXCHANGED', content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
         default: { $ref: '#/components/responses/Problem' }
   /v1/settlement/days/{businessDate}/breaks:
     get:
@@ -474,14 +509,17 @@ paths:
                 note: { type: string, maxLength: 500 }
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ReconBreak' } } } }
+        '409': { description: 'conflict: the break is already resolved, or its day is not RECONCILED', content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
         default: { $ref: '#/components/responses/Problem' }
   /v1/settlement/days/{businessDate}/clearing-files:
     post:
       tags: [settlement]
       operationId: generateClearingFile
+      description: Allowed only in stage RECONCILED with no open breaks.
       parameters: [{ $ref: '#/components/parameters/BusinessDate' }, { $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/ClearingFile' } } } }
+        '409': { description: 'open-breaks: breaks are still open (detail says how many); conflict: the day is not RECONCILED', content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
         default: { $ref: '#/components/responses/Problem' }
 
 components:
@@ -555,6 +593,11 @@ components:
         merchantName: { type: string }
         latencyMs: { type: [integer, 'null'] }
         createdAt: { type: string, format: date-time }
+        reversalReason: { oneOf: [{ $ref: '#/components/schemas/ReversalReason' }, { type: 'null' }] }
+    ReversalReason:
+      type: string
+      description: Why a reversal (0420) was queued, from its DE 39 reason code. Null when the transaction was never reversed.
+      enum: [CUSTOMER_CANCELLATION, TIMEOUT, MAC_FAILURE, SEND_FAILURE]
     Transaction:
       allOf:
         - { $ref: '#/components/schemas/TransactionSummary' }
@@ -645,6 +688,9 @@ components:
             required: [key, text]
             properties: { key: { type: string }, text: { type: string } }
         fields: { type: array, items: { $ref: '#/components/schemas/IsoField' } }
+        packed:
+          type: [string, 'null']
+          description: The packed wire message (encode only; null on decode). PAN masked, PIN block and MAC redacted, as everywhere in the Lab.
     Terminal:
       type: object
       required: [terminalId, merchantId, merchantName, mcc]
@@ -689,8 +735,13 @@ components:
         id: { type: string }
         occurredAt: { type: string, format: date-time }
         severity: { type: string, enum: [INFO, OK, WARN, ERROR] }
+        code: { $ref: '#/components/schemas/NetworkEventCode' }
         easyText: { type: string }
         technicalText: { type: string }
+    NetworkEventCode:
+      type: string
+      description: What happened, independent of language. Clients render their own copy from it; easyText/technicalText are the provider's English fallback.
+      enum: [LINK_UP, LINK_DOWN, SIGNED_ON, SIGNED_OFF, SIGNED_ON_AGAIN, SIGN_ON_FAILED, ECHO_OK, ECHO_FAILED, LATE_RESPONSE]
     SwitchStatus:
       type: object
       required: [circuit, stipActive, stipLimit, stipApprovedCount]
@@ -722,6 +773,13 @@ components:
         openingBalanceTotal: { type: integer, format: int64 }
         closingBalanceTotal: { type: integer, format: int64 }
         ledgerDiscrepancy: { type: integer, format: int64, description: must be 0 }
+        failureKind:
+          type: [string, 'null']
+          enum: [LEDGER_MISMATCH, RUN_ERROR, null]
+          description: Set when status is FAILED. LEDGER_MISMATCH means the issuer's balances moved differently from the run's outcomes; RUN_ERROR means the run could not complete (infrastructure), not a money problem.
+        failureDetail: { type: [string, 'null'] }
+        startedAt: { type: string, format: date-time }
+        seq: { type: integer, minimum: 0, description: Increases with every snapshot of this run; clients ignore a snapshot older than one they hold. }
     Overview:
       type: object
       required: [transactionsToday, approvalRate, p99LatencyMs, ledgerMatches, throughput, declineReasons]
@@ -791,9 +849,19 @@ components:
             type: object
             required: [account, direction, amount]
             properties:
-              account: { type: string, description: 'customer account number (masked) or GL code' }
+              account: { type: string, description: "customer account id (ACC-<cardRef>, never a card or account number) or a GL code" }
               direction: { type: string, enum: [DEBIT, CREDIT] }
               amount: { $ref: '#/components/schemas/Money' }
+    AuditEntry:
+      type: object
+      required: [auditId, occurredAt, actor, action]
+      properties:
+        auditId: { type: string }
+        occurredAt: { type: string, format: date-time }
+        actor: { type: string, description: The X-Actor the BFF sent }
+        action: { type: string, enum: [CARD_BLOCKED, CARD_UNBLOCKED, CARD_LIMITS_UPDATED] }
+        before: { type: [object, 'null'], additionalProperties: true }
+        after: { type: [object, 'null'], additionalProperties: true }
     KeyInfo:
       type: object
       required: [keyType, kcv, status, daysRemaining, lifetimeDays]
@@ -844,6 +912,8 @@ components:
         openBreaks: { type: integer }
         netPosition: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
         clearingFile: { oneOf: [{ $ref: '#/components/schemas/ClearingFile' }, { type: 'null' }] }
+        participantId: { type: string, description: 'Acquirer institution id (DE 32), e.g. "970499"' }
+        currency: { type: string, pattern: '^[0-9]{3}$', description: ISO 4217 numeric currency of every TotalsRow amount }
     ReconBreak:
       type: object
       required: [breakId, breakType, rrn, amountDiff, resolution]
