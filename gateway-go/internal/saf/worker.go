@@ -180,18 +180,27 @@ func (w *Worker) assignNetworkIdentity(ctx context.Context, id int64, adv *advic
 }
 
 // frame is what goes on the wire for one attempt: the stored fields plus DE 2 from the card token
-// and a MAC over the rest of the message, MTI included. DE 90 sets the secondary bitmap, so the
-// MAC is DE 128 (docs/03 §11). An unresolvable token can never succeed, so it dead-letters.
+// and a MAC over the rest of the message, MTI included. Only the completion advice (0220/0221)
+// goes without a PAN: it names the pre-auth by DE 37 and its terminal (docs/03 §3), while a STIP
+// advice (0120) still carries its card.
+// The MAC is DE 128 when a field above 64 (DE 90) sets the secondary bitmap, else DE 64 (docs/03
+// §11). An unresolvable token can never succeed, so it dead-letters.
 func (w *Worker) frame(mti string, adv advice) (map[int]string, error) {
 	frame := make(map[int]string, len(adv.Fields)+2)
+	macField := 64
 	for n, v := range adv.Fields {
 		frame[n] = v
+		if n > 64 {
+			macField = 128
+		}
 	}
-	pan, ok := w.cards.PAN(adv.CardToken)
-	if !ok {
-		return nil, fmt.Errorf("unknown card token %q: cannot build DE 2", adv.CardToken)
+	if !strings.HasPrefix(mti, "022") {
+		pan, ok := w.cards.PAN(adv.CardToken)
+		if !ok {
+			return nil, fmt.Errorf("unknown card token %q: cannot build DE 2", adv.CardToken)
+		}
+		frame[2] = pan
 	}
-	frame[2] = pan
 
 	packed, err := iso8583.Pack(mti, frame)
 	if err != nil {
@@ -201,7 +210,7 @@ func (w *Worker) frame(mti string, adv advice) (map[int]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("compute MAC: %w", err)
 	}
-	frame[128] = strings.ToUpper(hex.EncodeToString(mac))
+	frame[macField] = strings.ToUpper(hex.EncodeToString(mac))
 	return frame, nil
 }
 

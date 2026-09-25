@@ -127,22 +127,35 @@ func (r *SafRepository) MarkAcked(ctx context.Context, id int64) error {
 		return err
 	}
 	// An acknowledged 0420 means the issuer has reversed the money, so the acquirer's record
-	// finishes the reversal in the same transaction; advices (0120/0220) don't change state.
-	if mti == mtiReversalAdvice {
-		tag, err := tx.Exec(ctx,
-			`UPDATE tran_log SET state = 'REVERSED' WHERE id = $1 AND state = 'REVERSAL_PENDING'`, tranID)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 1 {
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO tran_state_history (tran_id, from_state, to_state) VALUES ($1, 'REVERSAL_PENDING', 'REVERSED')`,
-				tranID); err != nil {
-				return err
-			}
-		}
+	// finishes the reversal in the same transaction. An acknowledged 0220 whose first delivery was
+	// unknown (TIMED_OUT) is now recorded by the issuer, which never declines an advice (docs/03
+	// §7.4); an advice whose row already has its outcome keeps it.
+	switch mti {
+	case mtiReversalAdvice:
+		err = finishOnAck(ctx, tx, tranID, "REVERSAL_PENDING", "REVERSED",
+			`UPDATE tran_log SET state = 'REVERSED' WHERE id = $1 AND state = $2`)
+	case mtiCompletionAdvice:
+		err = finishOnAck(ctx, tx, tranID, "TIMED_OUT", "APPROVED",
+			`UPDATE tran_log SET state = 'APPROVED', response_code = '00', responded_at = now() WHERE id = $1 AND state = $2`)
+	}
+	if err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// mtiCompletionAdvice is the completion advice whose ACK approves an unknown completion.
+const mtiCompletionAdvice = "0220"
+
+// finishOnAck runs update (id $1, expected state $2) and, when it moved the row, records from->to
+// in its history.
+func finishOnAck(ctx context.Context, tx pgx.Tx, tranID int64, from, to, update string) error {
+	tag, err := tx.Exec(ctx, update, tranID, from)
+	if err != nil || tag.RowsAffected() == 0 {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO tran_state_history (tran_id, from_state, to_state) VALUES ($1, $2, $3)`, tranID, from, to)
+	return err
 }
 
 // MarkDead marks id DEAD after max_attempts were exhausted without an ACK (MCN-401-AC3).

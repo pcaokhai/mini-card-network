@@ -22,10 +22,7 @@ func (s *Service) CreateRefund(ctx context.Context, req RefundRequest, idempoten
 	}
 	maskedPAN := obs.MaskPAN(card.PAN)
 
-	stan, ok := s.mux.NextSTAN()
-	if !ok {
-		return Transaction{}, fmt.Errorf("advtxn: no STAN available")
-	}
+	stan, linkUp := s.nextSTAN()
 	now := time.Now().UTC()
 	rrn := purchase.BuildRRN(now, stan)
 
@@ -46,7 +43,8 @@ func (s *Service) CreateRefund(ctx context.Context, req RefundRequest, idempoten
 
 	return s.send(ctx, sendParams{
 		mti: "0200", txnType: tranTypeRefund, route: routeRefund, fields: fields,
-		rrn: rrn, stan: stan, maskedPAN: maskedPAN, terminalID: req.TerminalID,
+		rrn: rrn, stan: stan, linkUp: linkUp, sentAt: now, maskedPAN: maskedPAN, terminalID: req.TerminalID,
+		cardToken: req.CardToken, posEntryMode: fields[22],
 		requestedAmt: req.Amount, idempotencyKey: idempotencyKey, requestHash: hashRequest(req),
 	})
 }
