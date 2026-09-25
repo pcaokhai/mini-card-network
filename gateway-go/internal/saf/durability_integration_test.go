@@ -24,19 +24,24 @@ func TestSafWorker_survivesRestart_deliversEveryPendingReversal__MCN_401_AC4(t *
 
 	tranID, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000999", Type: tranTypePurchase, Status: "TIMED_OUT", Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000999"})
 	require.NoError(t, err)
-	id, err := safRepo.Enqueue(ctx, tranID, "0420", []byte("{}"))
+	adv, err := reversalAdvice(goldenOriginal(), "68")
+	require.NoError(t, err)
+	payload, err := encodePayload(nil, adv)
+	require.NoError(t, err)
+	id, err := safRepo.Enqueue(ctx, tranID, "0420", payload)
 	require.NoError(t, err)
 
 	// Simulate a worker that died right after claiming: ClaimDue flips it to IN_FLIGHT, and
-	// nothing ever acks or dead-letters it.
-	claimed, err := safRepo.ClaimDue(ctx, 10)
+	// nothing ever acks or dead-letters it. A zero lease stands for one that has since run out.
+	claimed, err := safRepo.ClaimDue(ctx, 10, 0)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
 	require.Equal(t, id, claimed[0].ID)
 
 	// A fresh Worker instance recovers the stale IN_FLIGHT row and delivers it.
 	mux := &fakeMux{response: map[int]string{39: "00"}}
-	w := NewWorker(mux, safRepo, nil, isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
+	w := NewWorker(mux, fakeCards{testCardToken: testPAN}, &recordingHSM{}, make([]byte, 16), safRepo, nil,
+		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
 	require.NoError(t, w.deliverOnce(ctx))
 
 	require.Equal(t, []string{"0420"}, mux.sentMTIs)

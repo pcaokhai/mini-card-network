@@ -26,6 +26,12 @@ func (r *CardTokenRegistry) Resolve(token string) (CardFixture, bool) {
 	return c, ok
 }
 
+// PAN returns the fixture PAN for token, for a reversal advice's DE 2 (saf.CardPANs).
+func (r *CardTokenRegistry) PAN(token string) (string, bool) {
+	c, ok := r.byToken[token]
+	return c.PAN, ok
+}
+
 // DefaultCardTokens returns the registry generated from contracts/fixtures/cards.json.
 func DefaultCardTokens() *CardTokenRegistry {
 	return &CardTokenRegistry{byToken: defaultCards}

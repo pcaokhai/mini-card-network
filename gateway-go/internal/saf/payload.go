@@ -7,10 +7,10 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
-// encodePayload JSON-encodes fields and, when key is non-empty, seals it with
-// store.EncryptBytes for saf_queue.payload_enc (may embed the PAN via DE 2).
-func encodePayload(key []byte, fields map[int]string) ([]byte, error) {
-	plain, err := json.Marshal(fields)
+// encodePayload JSON-encodes adv and, when key is non-empty, seals it with store.EncryptBytes for
+// saf_queue.payload_enc. adv never holds a PAN: DE 2 is added only in the frame being sent.
+func encodePayload(key []byte, adv advice) ([]byte, error) {
+	plain, err := json.Marshal(adv)
 	if err != nil {
 		return nil, fmt.Errorf("encode saf fields: %w", err)
 	}
@@ -20,22 +20,25 @@ func encodePayload(key []byte, fields map[int]string) ([]byte, error) {
 	return store.EncryptBytes(key, plain)
 }
 
-// decodePayload reverses encodePayload. An empty payload decodes to an empty field map.
-func decodePayload(key, payload []byte) (map[int]string, error) {
+// decodePayload reverses encodePayload. An empty payload decodes to an advice with no fields.
+func decodePayload(key, payload []byte) (advice, error) {
 	if len(payload) == 0 {
-		return map[int]string{}, nil
+		return advice{Fields: map[int]string{}}, nil
 	}
 	plain := payload
 	if len(key) > 0 {
 		decrypted, err := store.DecryptBytes(key, payload)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt saf payload: %w", err)
+			return advice{}, fmt.Errorf("decrypt saf payload: %w", err)
 		}
 		plain = decrypted
 	}
-	var fields map[int]string
-	if err := json.Unmarshal(plain, &fields); err != nil {
-		return nil, fmt.Errorf("decode saf fields: %w", err)
+	var adv advice
+	if err := json.Unmarshal(plain, &adv); err != nil {
+		return advice{}, fmt.Errorf("decode saf payload: %w", err)
 	}
-	return fields, nil
+	if adv.Fields == nil {
+		adv.Fields = map[int]string{}
+	}
+	return adv, nil
 }

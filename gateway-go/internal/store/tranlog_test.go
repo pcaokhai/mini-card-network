@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 const (
 	testMerchantID   = "GOCPHO000000001"
+	testMaskedPAN    = "970436******4417"
 	statusApproved   = "APPROVED"
 	tranTypePurchase = "PURCHASE"
 )
@@ -19,7 +21,7 @@ func TestTranLogRepository_insertUpdateAndGet__MCN_303(t *testing.T) {
 	repo := NewTranLogRepository(pool)
 	ctx := context.Background()
 
-	row := TranLogRow{RRN: "626514000123", Type: tranTypePurchase, Status: "CREATED", Amount: 10000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID}
+	row := TranLogRow{RRN: "626514000123", Type: tranTypePurchase, Status: "CREATED", Amount: 10000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID}
 	id, err := repo.Insert(ctx, row)
 	require.NoError(t, err)
 
@@ -68,7 +70,7 @@ func TestTranLogRepository_listFiltersAndPaginates__MCN_304_AC1(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
-		row := TranLogRow{RRN: fmt.Sprintf("rrn-%d", i), Status: statusApproved, Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID, Type: tranTypePurchase}
+		row := TranLogRow{RRN: fmt.Sprintf("rrn-%d", i), Status: statusApproved, Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID, Type: tranTypePurchase}
 		_, err := repo.Insert(ctx, row)
 		require.NoError(t, err)
 	}
@@ -132,4 +134,47 @@ func TestTranLogRepository_listStateHistory__MCN_304_AC2(t *testing.T) {
 	require.Len(t, history, 2)
 	require.Equal(t, "SENT", history[0].ToStatus)
 	require.Equal(t, statusApproved, history[1].ToStatus)
+}
+
+func TestTranLogRepository_roundTripsTheFieldsAReversalNeeds__MCN_401(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	sentAt := time.Date(2026, 9, 21, 7, 32, 44, 0, time.UTC)
+
+	_, err := repo.Insert(ctx, TranLogRow{
+		RRN: "626514000701", Type: tranTypePurchase, Status: "CREATED", Amount: 600000, Currency: "704",
+		MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000124",
+		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: "tok_normal",
+	})
+	require.NoError(t, err)
+
+	got, err := repo.Get(ctx, "626514000701")
+	require.NoError(t, err)
+	require.Equal(t, "000124", got.NetworkSTAN)
+	require.Equal(t, "000000", got.ProcessingCode)
+	require.Equal(t, "051", got.POSEntryMode)
+	require.Equal(t, "tok_normal", got.CardToken)
+	require.NotNil(t, got.SentAt)
+	require.True(t, got.SentAt.Equal(sentAt))
+
+	page, _, err := repo.List(ctx, TransactionFilter{})
+	require.NoError(t, err)
+	require.Equal(t, "000124", page[0].NetworkSTAN, "list rows carry the STAN too")
+}
+
+func TestTranLogRepository_lastSTANInTheHoursRRNPrefix__MCN_203(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	for _, rrn := range []string{"626805000007", "626805000248", "626804000999", "626806000001"} {
+		_, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "APPROVED", Amount: 1000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID})
+		require.NoError(t, err)
+	}
+
+	last, err := repo.LastSTANInRRNPrefix(ctx, "626805")
+	require.NoError(t, err)
+	require.Equal(t, int64(248), last)
+
+	none, err := repo.LastSTANInRRNPrefix(ctx, "626807")
+	require.NoError(t, err)
+	require.Zero(t, none)
 }

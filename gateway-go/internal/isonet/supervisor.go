@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mcn/gateway-go/internal/obs"
@@ -32,6 +34,9 @@ type Config struct {
 	EchoTimeout      time.Duration
 	EchoFailureLimit int
 	Backoff          Backoff
+	// LastSTAN reports the highest STAN already used under this hour's RRN prefix, so Run
+	// resumes past it after a restart (nil starts from 000001).
+	LastSTAN func(ctx context.Context) (int64, error)
 }
 
 const endpointName = "issuer" // v1 has exactly one link; the switch (Sprint 10) adds more.
@@ -60,6 +65,10 @@ type Supervisor struct {
 	// and the automatic echo ticker never send on the same Mux concurrently.
 	triggerMu sync.Mutex
 	mux       *Mux
+
+	// stan outlives each connection: the RRN (docs/03 §5) is the hour plus the STAN, so a count
+	// restarting on reconnect would reissue RRNs already used this hour.
+	stan atomic.Int64
 }
 
 // NewSupervisor builds a Supervisor that reports link state through store.
@@ -180,6 +189,16 @@ func (s *Supervisor) recordEvent(ctx context.Context, severity, easyText, techni
 
 // Run supervises the link until ctx is cancelled.
 func (s *Supervisor) Run(ctx context.Context) error {
+	if s.cfg.LastSTAN != nil {
+		last, err := s.cfg.LastSTAN(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil // shut down before the first connection
+			}
+			return fmt.Errorf("resume STAN count: %w", err)
+		}
+		s.ResumeSTANAfter(last)
+	}
 	attempt := 0
 	for {
 		select {
@@ -205,6 +224,19 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 }
 
+func (s *Supervisor) newMux(conn io.ReadWriter) *Mux { return newMuxCounting(conn, &s.stan) }
+
+// ResumeSTANAfter continues the STAN count after last, the highest STAN already used under this
+// hour's RRN prefix, so a restarted gateway never reissues an RRN. It never moves the count back.
+func (s *Supervisor) ResumeSTANAfter(last int64) {
+	for {
+		cur := s.stan.Load()
+		if last <= cur || s.stan.CompareAndSwap(cur, last) {
+			return
+		}
+	}
+}
+
 // runOnce connects, signs on, and echoes until the link fails or ctx is cancelled.
 func (s *Supervisor) runOnce(ctx context.Context) error {
 	conn, err := net.Dial("tcp", s.cfg.Addr)
@@ -214,7 +246,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	defer func() { _ = conn.Close() }()
 	s.setStatus(ctx, "CONNECTED")
 
-	mux := NewMux(conn)
+	mux := s.newMux(conn)
 	mux.OnLateResponse(func(mti string, fields map[int]string) {
 		obs.LateResponseTotal.Inc()
 		if s.onLateResponse != nil {
@@ -223,8 +255,16 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	})
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
+	// connCtx ends with the connection, so a request still waiting on a socket the peer has closed
+	// (Toxiproxy does this while the issuer is not up yet) fails at once and the link reconnects.
+	connCtx, connDown := context.WithCancel(ctx)
+	defer connDown()
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- mux.Serve(serveCtx) }()
+	go func() {
+		err := mux.Serve(serveCtx)
+		connDown()
+		serveErr <- err
+	}()
 
 	s.triggerMu.Lock()
 	s.mux = mux
@@ -235,7 +275,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		s.triggerMu.Unlock()
 	}()
 
-	if err := s.signOn(ctx); err != nil {
+	if err := s.signOn(connCtx); err != nil {
 		return err
 	}
 	obs.LinkUp.WithLabelValues(endpointName).Set(1)
@@ -272,7 +312,9 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 }
 
 func (s *Supervisor) signOn(ctx context.Context) error {
-	fields, err := s.mux.Send(ctx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "001"})
+	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.EchoTimeout)
+	defer cancel()
+	fields, err := s.mux.Send(sendCtx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "001"})
 	if err != nil {
 		return err
 	}

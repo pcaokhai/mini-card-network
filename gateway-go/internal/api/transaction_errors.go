@@ -14,6 +14,8 @@ func transactionProblem(w http.ResponseWriter, err error, fallbackType string) {
 	switch {
 	case errors.Is(err, store.ErrUnknownTerminal):
 		problem(w, http.StatusUnprocessableEntity, "unknown-terminal", err.Error())
+	case errors.Is(err, store.ErrNotReversible):
+		problem(w, http.StatusConflict, "not-reversible", err.Error())
 	case errors.Is(err, store.ErrNotFound):
 		problem(w, http.StatusNotFound, "unknown-transaction", err.Error())
 	default:

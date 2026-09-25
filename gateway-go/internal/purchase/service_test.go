@@ -238,7 +238,7 @@ func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC
 }
 
 func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Status: statusSent, Amount: 5000, Currency: "704"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "x", Type: tranTypePurchase, Status: statusApproved, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
 
@@ -250,7 +250,7 @@ func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testin
 }
 
 func TestCancelPurchase_replaysIdempotentRequest__MCN_401_AC5(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Status: statusSent, Amount: 5000, Currency: "704"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "y", Type: tranTypePurchase, Status: statusApproved, Amount: 5000, Currency: "704"}}}
 	reversal := &fakeReversal{}
 	idem := &fakeIdempotency{}
 	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, idem, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
@@ -262,6 +262,34 @@ func TestCancelPurchase_replaysIdempotentRequest__MCN_401_AC5(t *testing.T) {
 
 	require.Equal(t, first, second)
 	require.Len(t, reversal.calls, 1) // second call was a replay, not a re-queue
+}
+
+// Only an approved purchase holds the cardholder's money; a decline (including a link-down one
+// that was never sent) or a purchase already being reversed has nothing to cancel.
+func TestCancelPurchase_onlyAnApprovedPurchaseCanBeCancelled__MCN_401(t *testing.T) {
+	for _, status := range []string{statusDeclined, statusTimedOut, statusReversalPending, "REVERSED", statusSent} {
+		tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "v", Status: status}}}
+		reversal := &fakeReversal{}
+		svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+		_, err := svc.CancelPurchase(context.Background(), "v", "cancel-"+status)
+
+		require.ErrorIs(t, err, store.ErrNotReversible, status)
+		require.Empty(t, reversal.calls, status)
+	}
+}
+
+// A pre-auth or completion is reversed by its own flow: a 0420 naming a 0200 original would find
+// nothing at the issuer, be acknowledged anyway, and leave the hold in place.
+func TestCancelPurchase_refusesAnApprovedNonPurchase__MCN_401(t *testing.T) {
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "p", Type: "PREAUTH", Status: statusApproved}}}
+	reversal := &fakeReversal{}
+	svc := NewService(&fakeMux{linkSignedOn: true}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+	_, err := svc.CancelPurchase(context.Background(), "p", "cancel-preauth")
+
+	require.ErrorIs(t, err, store.ErrNotReversible)
+	require.Empty(t, reversal.calls)
 }
 
 func TestRecordLateResponse_setsColumnsWithoutChangingStatus__MCN_403_AC1(t *testing.T) {
@@ -418,4 +446,20 @@ func TestCreatePurchase_linkDownDeclineKeepsTerminalsMerchant__MCN_002(t *testin
 	require.NoError(t, err)
 	require.Equal(t, "ANHDUO000000001", tranLog.rows[0].MerchantID)
 	require.Equal(t, "Nhà sách Ánh Dương", txn.MerchantName)
+}
+
+func TestCreatePurchase_recordsWhatA0420MustRepeat__MCN_401(t *testing.T) {
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}}
+	tranLog := &fakeTranLog{}
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+
+	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-0420-fields")
+
+	require.NoError(t, err)
+	row := tranLog.rows[0]
+	require.Equal(t, "tok_normal", row.CardToken)
+	require.Equal(t, mux.lastFields[3], row.ProcessingCode)
+	require.Equal(t, mux.lastFields[22], row.POSEntryMode)
+	require.NotNil(t, row.SentAt)
+	require.Equal(t, mux.lastFields[7], row.SentAt.UTC().Format("0102150405"), "DE 90 repeats the DE 7 that was sent")
 }

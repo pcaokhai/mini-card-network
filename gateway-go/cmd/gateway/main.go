@@ -67,7 +67,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	defer pool.Close()
 	linkRepo := store.NewLinkRepository(pool)
-	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoFailureLimit: 3}, linkRepo)
+	lastSTAN := func(ctx context.Context) (int64, error) {
+		return store.NewTranLogRepository(pool).LastSTANInRRNPrefix(ctx, purchase.BuildRRN(time.Now().UTC(), ""))
+	}
+	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoFailureLimit: 3, LastSTAN: lastSTAN}, linkRepo)
 	hub := ws.NewHub()
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
@@ -84,7 +87,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	rotationRepo := rotation.NewRepository(pool)
 	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK)
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
-	safWorker := saf.NewWorker(supervisor, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
+	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, zak, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
+	safWorker.SetLogger(logger)
 
 	fakeIssuer, toxiproxyOpts, err := setupFakeIssuer(cfg)
 	if err != nil {

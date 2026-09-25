@@ -2,6 +2,7 @@ package isonet
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -300,4 +301,48 @@ func TestSupervisor_marksDownAfterThreeFailedEchoes__MCN_202_AC2(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return store.hasStatus("DOWN")
 	}, time.Second, 10*time.Millisecond)
+}
+
+// Like Toxiproxy before the issuer is up: the first connection is accepted and closed without an
+// answer; later ones behave. The supervisor must not wait for the sign-on timeout (60 s here) on
+// a connection that is already gone.
+func TestSupervisor_reconnectsWhenTheConnectionDiesDuringSignOn__MCN_202(t *testing.T) {
+	realAddr, closeReal := fakeIssuer(t)
+	defer closeReal()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = ln.Close() }()
+	go func() {
+		first := true
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if first {
+				first = false
+				_ = conn.Close()
+				continue
+			}
+			upstream, err := net.Dial("tcp", realAddr)
+			if err != nil {
+				_ = conn.Close()
+				continue
+			}
+			go func() { _, _ = io.Copy(upstream, conn) }()
+			go func() { _, _ = io.Copy(conn, upstream) }()
+		}
+	}()
+
+	store := &fakeLinkStore{}
+	sup := NewSupervisor(Config{Addr: ln.Addr().String(), EchoInterval: time.Minute, EchoFailureLimit: 3,
+		Backoff: Backoff{Base: 10 * time.Millisecond, Cap: 50 * time.Millisecond}}, store)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sup.Run(ctx) }()
+
+	require.Eventually(t, func() bool { return store.lastStatus() == signedOn }, 2*time.Second, 10*time.Millisecond)
+	cancel()
+	require.NoError(t, <-done)
 }

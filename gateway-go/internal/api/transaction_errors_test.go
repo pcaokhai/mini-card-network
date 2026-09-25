@@ -61,3 +61,13 @@ func TestPostRefund_unknownTerminalIs422__MCN_002(t *testing.T) {
 
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 }
+
+func TestPostCancellation_notReversibleIs409__MCN_401(t *testing.T) {
+	r := chi.NewRouter()
+	MountPurchases(r, &fakePurchaseService{cancelErr: fmt.Errorf("cancel: %w", store.ErrNotReversible)})
+
+	rec := postJSON(r, "/v1/transactions/626514000001/cancellations", `{}`)
+
+	require.Equal(t, http.StatusConflict, rec.Code)
+	require.Contains(t, rec.Body.String(), "not-reversible")
+}

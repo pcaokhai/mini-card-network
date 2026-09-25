@@ -26,19 +26,25 @@ type Mux struct {
 	pendingMu sync.Mutex
 	pending   map[muxKey]chan map[int]string
 
-	stan int64
+	stan *atomic.Int64
 
 	onLateResponse func(mti string, fields map[int]string)
 }
 
-// NewMux builds a Mux over conn. Call Serve in its own goroutine to start reading responses.
+// NewMux builds a Mux over conn with its own STAN count. Call Serve in its own goroutine to start
+// reading responses.
 func NewMux(conn io.ReadWriter) *Mux {
-	return &Mux{conn: conn, pending: make(map[muxKey]chan map[int]string)}
+	return newMuxCounting(conn, new(atomic.Int64))
 }
 
-// NextSTAN issues the next 6-digit STAN for this connection.
+// newMuxCounting builds a Mux that draws STANs from a counter shared with other connections.
+func newMuxCounting(conn io.ReadWriter, stan *atomic.Int64) *Mux {
+	return &Mux{conn: conn, pending: make(map[muxKey]chan map[int]string), stan: stan}
+}
+
+// NextSTAN issues the next 6-digit STAN.
 func (m *Mux) NextSTAN() string {
-	n := atomic.AddInt64(&m.stan, 1) % 1000000
+	n := m.stan.Add(1) % 1000000
 	return fmt.Sprintf("%06d", n)
 }
 

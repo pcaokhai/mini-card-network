@@ -38,7 +38,9 @@ func (r *SafRepository) Enqueue(ctx context.Context, tranID int64, mti string, p
 // next_retry_at - a worker that died mid-delivery leaves rows recoverable this way, MCN-401-AC4)
 // and flips them to IN_FLIGHT in the same statement, so no second worker can double-claim between
 // the claim and a later MarkInFlight call.
-func (r *SafRepository) ClaimDue(ctx context.Context, limit int) ([]SafRow, error) {
+// Each claimed row is leased until now + lease: if the worker dies, or its write after the send
+// fails, the row is claimed again only once the lease runs out.
+func (r *SafRepository) ClaimDue(ctx context.Context, limit int, lease time.Duration) ([]SafRow, error) {
 	rows, err := r.pool.Query(ctx,
 		`WITH claimed AS (
 			SELECT id FROM saf_queue
@@ -47,11 +49,11 @@ func (r *SafRepository) ClaimDue(ctx context.Context, limit int) ([]SafRow, erro
 			FOR UPDATE SKIP LOCKED
 			LIMIT $1
 		)
-		UPDATE saf_queue SET status = 'IN_FLIGHT'
+		UPDATE saf_queue SET status = 'IN_FLIGHT', next_retry_at = now() + $2 * interval '1 microsecond'
 		FROM claimed WHERE saf_queue.id = claimed.id
 		RETURNING saf_queue.id, saf_queue.tran_id, saf_queue.mti, saf_queue.payload_enc, saf_queue.status,
 			saf_queue.attempts, saf_queue.max_attempts, saf_queue.next_retry_at, coalesce(saf_queue.last_error, '')`,
-		limit)
+		limit, lease.Microseconds())
 	if err != nil {
 		return nil, err
 	}
@@ -69,12 +71,20 @@ func (r *SafRepository) ClaimDue(ctx context.Context, limit int) ([]SafRow, erro
 	return claimed, rows.Err()
 }
 
-// MarkInFlight records a failed delivery attempt and reschedules id for nextRetryAt, keeping it
-// IN_FLIGHT so ClaimDue's stale-recovery path also covers it if the worker dies before retrying.
-func (r *SafRepository) MarkInFlight(ctx context.Context, id int64, attempts int, nextRetryAt time.Time) error {
+// UpdatePayload stores id's re-encoded payload: the worker writes an advice's STAN and DE 7 back
+// before its first send so every repeat is the same message.
+func (r *SafRepository) UpdatePayload(ctx context.Context, id int64, payload []byte) error {
+	_, err := r.pool.Exec(ctx, `UPDATE saf_queue SET payload_enc = $2 WHERE id = $1`, id, payload)
+	return err
+}
+
+// MarkInFlight records a failed delivery attempt and why it failed, and reschedules id for
+// nextRetryAt, keeping it IN_FLIGHT so ClaimDue's stale-recovery path also covers it if the worker
+// dies before retrying.
+func (r *SafRepository) MarkInFlight(ctx context.Context, id int64, attempts int, nextRetryAt time.Time, lastError string) error {
 	_, err := r.pool.Exec(ctx,
-		`UPDATE saf_queue SET status = 'IN_FLIGHT', attempts = $2, next_retry_at = $3 WHERE id = $1`,
-		id, attempts, nextRetryAt)
+		`UPDATE saf_queue SET status = 'IN_FLIGHT', attempts = $2, next_retry_at = $3, last_error = $4 WHERE id = $1`,
+		id, attempts, nextRetryAt, lastError)
 	return err
 }
 

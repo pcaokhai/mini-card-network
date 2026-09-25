@@ -287,6 +287,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	row := store.TranLogRow{
 		RRN: rrn, Type: tranTypePurchase, Status: statusCreated, Amount: req.Amount.Amount, Currency: req.Amount.Currency,
 		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: merchant.MID, NetworkSTAN: stan,
+		ProcessingCode: fields[3], POSEntryMode: fields[22], SentAt: &now, CardToken: req.CardToken,
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {
@@ -559,6 +560,12 @@ func (s *Service) CancelPurchase(ctx context.Context, rrn string, idempotencyKey
 	row, err := s.tranLogGet.Get(ctx, rrn)
 	if err != nil {
 		return Transaction{}, fmt.Errorf("look up transaction %s: %w", rrn, err)
+	}
+	// Only an approval holds the cardholder's money. Declines (link-down ones were never even
+	// sent) have nothing to return; timeouts and MAC failures already queued their own reversal.
+	// Pre-auths and completions are not 0200s, so a 0420 naming a 0200 original would miss them.
+	if row.Type != tranTypePurchase || row.Status != statusApproved {
+		return Transaction{}, fmt.Errorf("cancel %s (%s): %w", rrn, row.Status, store.ErrNotReversible)
 	}
 	if err := s.reversal.Queue(ctx, row, reasonCancellation); err != nil {
 		return Transaction{}, fmt.Errorf("queue reversal for cancellation: %w", err)
