@@ -78,11 +78,42 @@ func (r *SafRepository) MarkInFlight(ctx context.Context, id int64, attempts int
 	return err
 }
 
+// mtiReversalAdvice is the reversal advice whose ACK completes a reversal (docs/03 §7.3).
+const mtiReversalAdvice = "0420"
+
 // MarkAcked marks id delivered (the issuer ACKed with 0430 - advices are never declined,
 // docs/03 §7.3).
 func (r *SafRepository) MarkAcked(ctx context.Context, id int64) error {
-	_, err := r.pool.Exec(ctx, `UPDATE saf_queue SET status = 'ACKED', acked_at = now() WHERE id = $1`, id)
-	return err
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var tranID int64
+	var mti string
+	if err := tx.QueryRow(ctx,
+		`UPDATE saf_queue SET status = 'ACKED', acked_at = now() WHERE id = $1 RETURNING tran_id, mti`, id,
+	).Scan(&tranID, &mti); err != nil {
+		return err
+	}
+	// An acknowledged 0420 means the issuer has reversed the money, so the acquirer's record
+	// finishes the reversal in the same transaction; advices (0120/0220) don't change state.
+	if mti == mtiReversalAdvice {
+		tag, err := tx.Exec(ctx,
+			`UPDATE tran_log SET state = 'REVERSED' WHERE id = $1 AND state = 'REVERSAL_PENDING'`, tranID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 1 {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO tran_state_history (tran_id, from_state, to_state) VALUES ($1, 'REVERSAL_PENDING', 'REVERSED')`,
+				tranID); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // MarkDead marks id DEAD after max_attempts were exhausted without an ACK (MCN-401-AC3).

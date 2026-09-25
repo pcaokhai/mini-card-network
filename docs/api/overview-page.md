@@ -223,7 +223,7 @@ A backend that adds a new RC must add it to docs/03 §8 and both message files; 
 | --- | --- | --- | --- | --- |
 | G1 | `GET /v1/network/switch` not implemented | `curl :8080/v1/network/switch` → 404; no route in `internal/api` | GW | MCN-802 AC1 (after MCN-801) |
 | G2 | ~~Throughput was 1-minute, sparse buckets over 30 minutes~~ | fixed: 24 dense × 150 s buckets, `tps = count/150` | GW | Done (MCN-002 seed work). Adding the bucket size to the schema description is still open |
-| G3 | `transaction.updated` never broadcast | only `BroadcastTransaction("transaction.created", …)` in `purchase`/`advtxn` | GW | Broadcast on every status transition, including SAF reversal completion |
+| G3 | `transaction.updated` never broadcast | only `BroadcastTransaction("transaction.created", …)` in `purchase`/`advtxn` | GW | Broadcast on every status transition, including SAF reversal completion. (The REST side is fixed: an acknowledged 0420 now moves `tran_log` from `REVERSAL_PENDING` to `REVERSED`; before, reversals stayed pending forever.) |
 | G4 | ~~`key_store` empty until the first rotation, so a fresh stack had no ZAK and every purchase failed its MAC~~ | fixed: startup registers `ZAK_HEX`/`ZPK_HEX` | GW | Done (MCN-002 seed work) |
 | G5 | Canvas groups the tail into "Lý do khác"; the UI lists every code | `DeclineReasonsBreakdown.tsx` renders all rows | WEB | Keep the provider presentation-free; fold everything after the top 4 into one "Lý do khác" row client-side |
 | G6 | `TransactionSummary.latencyMs` is always `null` | `toSummaryDTO` never sets it | GW | Not used by this page; fix with the Journey screen |
