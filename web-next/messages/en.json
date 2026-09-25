@@ -96,13 +96,8 @@
     }
   },
   "pos": {
-    "title": "POS terminal",
-    "cardSectionLabel": "Card and scenario",
-    "paymentSectionLabel": "Payment",
-    "amount": "Amount",
-    "rrn": "RRN",
-    "pay": "Pay",
-    "processing": "Processing...",
+    "title": "POS simulator",
+    "subtitle": "Pick a card, enter an amount and pay as you would at the counter. Or pick a ready-made scenario to see how the system handles it.",
     "transactionType": {
       "label": "Transaction type",
       "PURCHASE": "Purchase",
@@ -110,6 +105,123 @@
       "COMPLETION": "Completion",
       "REFUND": "Refund",
       "BALANCE": "Balance inquiry"
+    },
+    "device": {
+      "label": "POS terminal",
+      "terminal": "POS {terminalId}",
+      "amount": "Amount",
+      "balance": "Balance",
+      "idle": "Tap, swipe or insert card",
+      "processing": "Processing",
+      "keypad": "Keypad",
+      "clear": "Clear all",
+      "backspace": "Delete one digit",
+      "pay": "Pay",
+      "paying": "Processing…"
+    },
+    "cards": {
+      "heading": "Choose a card to pay with",
+      "sectionLabel": "Choose card",
+      "balance": "Balance {amount} ₫",
+      "tag": {
+        "normal": "Normal",
+        "low": "Low funds",
+        "blocked": "Blocked",
+        "expired": "Expired",
+        "limit": "Has a limit",
+        "rich": "High balance"
+      }
+    },
+    "reading": {
+      "sectionLabel": "Card reading and scenarios",
+      "entry": "Card reading",
+      "entryMode": {
+        "chip": "Chip",
+        "manual": "Manual entry"
+      },
+      "rrn": "Original RRN",
+      "rrnHint": "The RRN of the pre-auth to complete",
+      "scenarios": "Quick scenarios",
+      "scenario": {
+        "normal": "Normal purchase",
+        "low": "Insufficient funds",
+        "blocked": "Blocked card",
+        "expired": "Expired card",
+        "limit": "Over the limit"
+      }
+    },
+    "result": {
+      "sectionLabel": "Result",
+      "emptyTitle": "Make your first transaction",
+      "emptyDesc": "Pick a scenario or enter an amount, then press Pay. The result and the transaction's journey appear here.",
+      "procTitle": "Sending to the issuer…",
+      "procDesc": "The request is encrypted and on its way. The system is waiting for the answer.",
+      "procDescExpert": "{request} sent · MUX waiting for {response} (timeout 30 s)",
+      "viewJourney": "View the detailed journey",
+      "screenOk": "Transaction approved",
+      "screenDeclined": "Transaction declined",
+      "screenLink": "Connection error, please retry",
+      "screenInvalid": "Enter an amount",
+      "title": {
+        "approved": "{type, select, PREAUTH {Funds held} COMPLETION {Completion done} REFUND {Refund done} BALANCE {Balance retrieved} other {Payment approved}}",
+        "rc51": "Insufficient funds",
+        "rc54": "Card expired",
+        "rc61": "Over the transaction limit",
+        "rc62": "Card is blocked",
+        "rc91": "Issuer connection lost",
+        "declined": "Transaction declined",
+        "reversalPending": "Transaction is being reversed",
+        "reversed": "Transaction reversed automatically",
+        "invalidAmount": "Invalid amount",
+        "requestFailed": "Could not send the transaction"
+      },
+      "desc": {
+        "approved": "{type, select, PREAUTH {Held {amount} ₫ on the card. Use RRN {rrn} to complete it.} COMPLETION {Charged {amount} ₫ from the held funds.} REFUND {Refunded {amount} ₫ to the customer's account.} BALANCE {Available balance is {balance} ₫.} other {{balance, select, none {Charged {amount} ₫.} other {Charged {amount} ₫. Balance left {balance} ₫.}}}}",
+        "rc51": "{balance, select, none {The available balance is below the amount to pay.} other {The balance of {balance} ₫ is below the amount to pay.}}",
+        "rc54": "The card's expiry date has passed. The customer needs another card.",
+        "rc61": "The amount is over the card's per-transaction limit. The customer needs to pay a smaller amount.",
+        "rc62": "The cardholder or the bank has blocked this card. The customer should contact the bank.",
+        "rc91": "The link to the issuer is down, so the transaction was not sent. The customer was not charged.",
+        "declined": "The issuer did not accept this transaction. The customer was not charged.",
+        "reversalPending": "The issuer did not answer in time. The system is sending a reversal so the customer is not charged.",
+        "reversed": "The issuer did not answer in time. The system sent a reversal so the customer is not charged.",
+        "invalidAmount": "Enter an amount above 0 and try again.",
+        "requestFailed": "The server returned an error: {detail}"
+      },
+      "why": {
+        "approved": "{type, select, REFUND {The card is valid.} BALANCE {The card is valid.} other {The card is valid and the account has enough funds.}}",
+        "rc51": "The available balance is not enough.",
+        "rc54": "The expiry date is before today.",
+        "rc61": "The amount is above the per-transaction limit.",
+        "rc62": "The card status is blocked.",
+        "declined": "The request does not meet the card's conditions (code {rc})."
+      },
+      "tech": {
+        "localCheck": "POS-side check · no message sent",
+        "linkDown": "Link down · {request} not sent · RC 91"
+      },
+      "step": {
+        "posSent": "The POS sends the request",
+        "posSentDesc": "{entry, select, manual {Keys in card •••• {last4}, no PIN.} other {Reads the chip of card •••• {last4}, no PIN.}}",
+        "posSentCompletionDesc": "Uses RRN {rrn} of the pre-auth.",
+        "acquirer": "The acquirer forwards it",
+        "acquirerDesc": "Packs the request, tags it with an RRN and sends it.",
+        "linkCheck": "The acquirer checks the link",
+        "linkCheckDesc": "The link to the issuer is down, so the request is not sent.",
+        "issuerCheck": "The issuer checks it",
+        "returnOk": "Result back to the POS",
+        "returnOkDesc": "{type, select, PREAUTH {The POS prints a hold slip. Money moves only on completion.} COMPLETION {The POS prints a receipt for the held amount.} REFUND {The POS prints a refund slip.} BALANCE {The POS shows the balance.} other {The POS prints a receipt; the customer gets the goods.}}",
+        "returnBad": "Decline back to the POS",
+        "returnBadDesc": "The POS tells the customer; nothing is charged.",
+        "noResponse": "The issuer does not answer",
+        "noResponseDesc": "Waited 30 seconds with no answer.",
+        "reversed": "Automatic reversal",
+        "reversedDesc": "The reversal was sent and confirmed. The customer's money is safe.",
+        "reversalQueued": "Reversal waiting to send",
+        "reversalQueuedDesc": "The reversal is stored and retried until the issuer confirms it.",
+        "amountCheck": "The POS checks the amount",
+        "amountCheckDesc": "The amount is 0, so nothing is sent."
+      }
     }
   },
   "overview": {

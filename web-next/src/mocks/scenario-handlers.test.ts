@@ -33,3 +33,33 @@ describe("dev:mock scenario transactions", () => {
     }
   });
 });
+
+describe("dev:mock POS outcomes", () => {
+  async function purchase(cardToken: string, amount: number, idempotencyKey = crypto.randomUUID()) {
+    const res = await fetch("http://localhost/v1/transactions/purchases", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ terminalId: "00000042", cardToken, entryMode: "CHIP_NO_PIN", amount: { amount, currency: "704" } }),
+    });
+    return (await res.json()) as components["schemas"]["Transaction"];
+  }
+  it("MCN-305: each fixture card declines the way the real issuer does", async () => {
+    expect((await purchase("tok_low", 350_000)).responseCode).toBe("51");
+    expect((await purchase("tok_blocked", 90_000)).responseCode).toBe("62");
+    expect((await purchase("tok_expired", 150_000)).responseCode).toBe("54");
+    expect((await purchase("tok_limit", 600_000)).responseCode).toBe("61");
+  });
+
+  it("MCN-305: a normal card approves", async () => {
+    const tx = await purchase("tok_normal", 250_000);
+    expect(tx).toMatchObject({ status: "APPROVED", responseCode: "00", maskedPan: "970436******4417" });
+  });
+
+  it("replays a repeated Idempotency-Key instead of charging twice", async () => {
+    const first = await purchase("tok_low", 50_000, "same-key");
+    const again = await purchase("tok_low", 50_000, "same-key");
+    expect(again.rrn).toBe(first.rrn);
+    // tok_low holds 80 000 ₫: a second real charge of 50 000 would have declined 51.
+    expect((await purchase("tok_low", 50_000)).responseCode).toBe("51");
+  });
+});

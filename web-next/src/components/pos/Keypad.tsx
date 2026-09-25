@@ -1,54 +1,50 @@
 "use client";
 
 import { useEffect } from "react";
+import { useTranslations } from "next-intl";
 
-const DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"] as const;
+const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "⌫"] as const;
+export type KeypadKey = (typeof KEYS)[number];
 
-interface KeypadProps {
-  value: string;
-  onChange: (value: string) => void;
-  maxLength: number;
+const KEY_CLASS: Partial<Record<KeypadKey, string>> = { C: "pos-key pos-key--clear", "⌫": "pos-key pos-key--back" };
+const ARIA_KEY: Partial<Record<KeypadKey, "clear" | "backspace">> = { C: "clear", "⌫": "backspace" };
+
+function isTyping(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
 }
 
-/** Keyboard-accessible numeric entry (MCN-305-AC1): real <button>s plus physical keydown support. */
-export function Keypad({ value, onChange, maxLength }: KeypadProps) {
+/** The canvas terminal keypad (MCN-305-AC1): real buttons plus physical digit and Backspace keys. */
+export function Keypad({ onKey, disabled = false }: { onKey: (key: KeypadKey) => void; disabled?: boolean }) {
+  const t = useTranslations("pos.device");
+
   useEffect(() => {
+    if (disabled) return;
     function handleKeydown(event: KeyboardEvent) {
-      if (/^[0-9]$/.test(event.key) && value.length < maxLength) {
-        onChange(value + event.key);
-      } else if (event.key === "Backspace") {
-        onChange(value.slice(0, -1));
-      }
+      if (isTyping(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (/^[0-9]$/.test(event.key)) onKey(event.key as KeypadKey);
+      else if (event.key === "Backspace") onKey("⌫");
     }
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [value, maxLength, onChange]);
-
-  function appendDigit(digit: string) {
-    if (value.length >= maxLength) return;
-    onChange(value + digit);
-  }
+  }, [disabled, onKey]);
 
   return (
-    <div className="grid grid-cols-3 gap-2" role="group" aria-label="Keypad">
-      {DIGITS.map((digit) => (
-        <button
-          key={digit}
-          type="button"
-          onClick={() => appendDigit(digit)}
-          className="rounded-lg border border-border bg-surface py-3 text-lg font-semibold text-ink hover:bg-canvas"
-        >
-          {digit}
-        </button>
-      ))}
-      <button
-        type="button"
-        aria-label="Backspace"
-        onClick={() => onChange(value.slice(0, -1))}
-        className="rounded-lg border border-border bg-surface py-3 text-sm font-semibold text-muted hover:bg-canvas"
-      >
-        ⌫
-      </button>
+    <div role="group" aria-label={t("keypad")} className="pos-keypad">
+      {KEYS.map((key) => {
+        const aria = ARIA_KEY[key];
+        return (
+          <button
+            key={key}
+            type="button"
+            disabled={disabled}
+            aria-label={aria && t(aria)}
+            onClick={() => onKey(key)}
+            className={KEY_CLASS[key] ?? "pos-key"}
+          >
+            {key}
+          </button>
+        );
+      })}
     </div>
   );
 }

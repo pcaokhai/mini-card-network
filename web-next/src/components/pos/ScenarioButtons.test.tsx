@@ -1,19 +1,21 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { renderWithIntl } from "@/test/render";
 import { ScenarioButtons } from "./ScenarioButtons";
 
 describe("ScenarioButtons", () => {
-  it("renders all 5 one-click scenarios", () => {
-    render(<ScenarioButtons onPick={vi.fn()} />);
-    expect(screen.getAllByRole("button")).toHaveLength(5);
+  it("MCN-305-AC1 renders the five real-issuer scenarios as pills", () => {
+    renderWithIntl(<ScenarioButtons selected="normal" onPick={vi.fn()} />);
+    const labels = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(labels).toEqual(["Mua hàng bình thường", "Không đủ tiền", "Thẻ bị khóa", "Thẻ hết hạn", "Vượt hạn mức"]);
+    expect(screen.getByRole("button", { name: "Mua hàng bình thường" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("calls onPick with the scenario id", async () => {
-    const user = userEvent.setup();
+  it("reports the picked scenario", async () => {
     const onPick = vi.fn();
-    render(<ScenarioButtons onPick={onPick} />);
-    await user.click(screen.getByRole("button", { name: /approved/i }));
-    expect(onPick).toHaveBeenCalledWith("approved");
+    renderWithIntl(<ScenarioButtons selected={null} onPick={onPick} />);
+    await userEvent.click(screen.getByRole("button", { name: "Không đủ tiền" }));
+    expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: "low", cardToken: "tok_low", amount: 350_000 }));
   });
 });

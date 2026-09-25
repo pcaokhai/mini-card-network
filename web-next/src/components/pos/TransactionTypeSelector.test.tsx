@@ -1,27 +1,18 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { NextIntlClientProvider } from "next-intl";
 import { describe, expect, it, vi } from "vitest";
-import en from "../../../messages/en.json";
+import { renderWithIntl } from "@/test/render";
 import { TransactionTypeSelector } from "./TransactionTypeSelector";
 
-function renderSelector(onChange: (type: string) => void) {
-  return render(
-    <NextIntlClientProvider locale="en" messages={en}>
-      <TransactionTypeSelector value="PURCHASE" onChange={onChange} />
-    </NextIntlClientProvider>,
-  );
-}
-
 describe("TransactionTypeSelector", () => {
-  it("renders all five types and calls onChange on selection", async () => {
+  it("MCN-604 renders the five types as an on/off segmented control", async () => {
     const onChange = vi.fn();
-    renderSelector(onChange);
+    renderWithIntl(<TransactionTypeSelector value="PURCHASE" onChange={onChange} />);
 
-    expect(screen.getByRole("radio", { name: /purchase/i })).toHaveAttribute("aria-checked", "true");
-    await userEvent.click(screen.getByRole("radio", { name: /pre-auth/i }));
-
+    const group = screen.getByRole("group", { name: "Loại giao dịch" });
+    expect(group.querySelectorAll("button")).toHaveLength(5);
+    expect(screen.getByRole("button", { name: "Mua hàng" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Tiền ủy quyền trước" }));
     expect(onChange).toHaveBeenCalledWith("PREAUTH");
-    expect(screen.getAllByRole("radio")).toHaveLength(5);
   });
 });

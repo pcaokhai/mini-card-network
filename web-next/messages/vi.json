@@ -96,13 +96,8 @@
     }
   },
   "pos": {
-    "title": "Máy POS",
-    "cardSectionLabel": "Chọn thẻ và kịch bản",
-    "paymentSectionLabel": "Thanh toán",
-    "amount": "Số tiền",
-    "rrn": "Số RRN",
-    "pay": "Thanh toán",
-    "processing": "Đang xử lý...",
+    "title": "Máy POS giả lập",
+    "subtitle": "Chọn thẻ, nhập số tiền rồi thanh toán như tại quầy. Hoặc chọn một kịch bản có sẵn để xem hệ thống xử lý.",
     "transactionType": {
       "label": "Loại giao dịch",
       "PURCHASE": "Mua hàng",
@@ -110,6 +105,123 @@
       "COMPLETION": "Hoàn tất",
       "REFUND": "Hoàn tiền",
       "BALANCE": "Tra cứu số dư"
+    },
+    "device": {
+      "label": "Máy POS",
+      "terminal": "POS {terminalId}",
+      "amount": "Số tiền",
+      "balance": "Số dư",
+      "idle": "Mời chạm, quẹt hoặc cắm thẻ",
+      "processing": "Đang xử lý",
+      "keypad": "Bàn phím số",
+      "clear": "Xóa hết",
+      "backspace": "Xóa một số",
+      "pay": "Thanh toán",
+      "paying": "Đang xử lý…"
+    },
+    "cards": {
+      "heading": "Chọn thẻ để thanh toán",
+      "sectionLabel": "Chọn thẻ",
+      "balance": "Số dư {amount} ₫",
+      "tag": {
+        "normal": "Bình thường",
+        "low": "Sắp hết tiền",
+        "blocked": "Đã bị khóa",
+        "expired": "Đã hết hạn",
+        "limit": "Có hạn mức",
+        "rich": "Số dư lớn"
+      }
+    },
+    "reading": {
+      "sectionLabel": "Cách đọc thẻ và kịch bản",
+      "entry": "Cách đọc thẻ",
+      "entryMode": {
+        "chip": "Chạm chip",
+        "manual": "Nhập tay"
+      },
+      "rrn": "Mã tra soát gốc",
+      "rrnHint": "Mã của lần giữ tiền cần hoàn tất",
+      "scenarios": "Kịch bản nhanh",
+      "scenario": {
+        "normal": "Mua hàng bình thường",
+        "low": "Không đủ tiền",
+        "blocked": "Thẻ bị khóa",
+        "expired": "Thẻ hết hạn",
+        "limit": "Vượt hạn mức"
+      }
+    },
+    "result": {
+      "sectionLabel": "Kết quả",
+      "emptyTitle": "Thực hiện giao dịch đầu tiên",
+      "emptyDesc": "Chọn một kịch bản hoặc nhập số tiền, rồi bấm Thanh toán. Kết quả và hành trình của giao dịch sẽ hiện ở đây.",
+      "procTitle": "Đang gửi tới ngân hàng phát hành…",
+      "procDesc": "Yêu cầu đã được mã hóa và gửi đi. Hệ thống đang chờ câu trả lời.",
+      "procDescExpert": "{request} đã gửi · MUX chờ {response} (timeout 30 s)",
+      "viewJourney": "Xem hành trình chi tiết",
+      "screenOk": "Giao dịch thành công",
+      "screenDeclined": "Giao dịch bị từ chối",
+      "screenLink": "Lỗi kết nối, vui lòng thử lại",
+      "screenInvalid": "Nhập số tiền",
+      "title": {
+        "approved": "{type, select, PREAUTH {Đã giữ tiền thành công} COMPLETION {Đã hoàn tất giao dịch} REFUND {Hoàn tiền thành công} BALANCE {Tra cứu số dư thành công} other {Thanh toán thành công}}",
+        "rc51": "Tài khoản không đủ tiền",
+        "rc54": "Thẻ đã hết hạn",
+        "rc61": "Vượt hạn mức giao dịch",
+        "rc62": "Thẻ đang bị khóa",
+        "rc91": "Mất kết nối ngân hàng phát hành",
+        "declined": "Giao dịch bị từ chối",
+        "reversalPending": "Giao dịch đang được tự động hủy",
+        "reversed": "Giao dịch đã được tự động hủy",
+        "invalidAmount": "Số tiền chưa hợp lệ",
+        "requestFailed": "Không gửi được giao dịch"
+      },
+      "desc": {
+        "approved": "{type, select, PREAUTH {Đã tạm giữ {amount} ₫ trên thẻ. Dùng mã tra soát {rrn} để hoàn tất.} COMPLETION {Đã trừ {amount} ₫ từ khoản tiền giữ trước.} REFUND {Đã hoàn {amount} ₫ vào tài khoản của khách.} BALANCE {Số dư khả dụng là {balance} ₫.} other {{balance, select, none {Đã trừ {amount} ₫.} other {Đã trừ {amount} ₫. Số dư còn {balance} ₫.}}}}",
+        "rc51": "{balance, select, none {Số dư khả dụng thấp hơn số tiền cần thanh toán.} other {Số dư {balance} ₫ thấp hơn số tiền cần thanh toán.}}",
+        "rc54": "Ngày hết hạn trên thẻ đã qua. Khách cần dùng thẻ khác.",
+        "rc61": "Số tiền vượt hạn mức mỗi lần giao dịch của thẻ. Khách cần thanh toán số tiền nhỏ hơn.",
+        "rc62": "Chủ thẻ hoặc ngân hàng đã khóa thẻ này. Khách cần liên hệ ngân hàng.",
+        "rc91": "Đường truyền tới ngân hàng phát hành đang gián đoạn nên giao dịch chưa được gửi đi. Khách không bị trừ tiền.",
+        "declined": "Ngân hàng phát hành không chấp nhận giao dịch này. Khách không bị trừ tiền.",
+        "reversalPending": "Ngân hàng phát hành không phản hồi kịp. Hệ thống đang gửi lệnh hủy để chắc chắn khách không bị trừ tiền.",
+        "reversed": "Ngân hàng phát hành không phản hồi kịp. Hệ thống đã gửi lệnh hủy để chắc chắn khách không bị trừ tiền.",
+        "invalidAmount": "Nhập số tiền lớn hơn 0 rồi thử lại.",
+        "requestFailed": "Máy chủ trả lỗi: {detail}"
+      },
+      "why": {
+        "approved": "{type, select, REFUND {Thẻ hợp lệ.} BALANCE {Thẻ hợp lệ.} other {Thẻ hợp lệ, tài khoản đủ tiền.}}",
+        "rc51": "Số dư khả dụng không đủ.",
+        "rc54": "Ngày hết hạn nhỏ hơn hôm nay.",
+        "rc61": "Số tiền lớn hơn hạn mức mỗi giao dịch.",
+        "rc62": "Trạng thái thẻ là đã khóa.",
+        "declined": "Yêu cầu không đáp ứng điều kiện của thẻ (mã {rc})."
+      },
+      "tech": {
+        "localCheck": "Kiểm tra phía POS · không gửi message",
+        "linkDown": "Link down · {request} không gửi · RC 91"
+      },
+      "step": {
+        "posSent": "Máy POS gửi yêu cầu",
+        "posSentDesc": "{entry, select, manual {Nhập tay thẻ •••• {last4}, không cần PIN.} other {Đọc chip thẻ •••• {last4}, không cần PIN.}}",
+        "posSentCompletionDesc": "Dùng mã tra soát {rrn} của lần giữ tiền.",
+        "acquirer": "Ngân hàng thanh toán chuyển tiếp",
+        "acquirerDesc": "Đóng gói yêu cầu, gắn mã tra soát và gửi đi.",
+        "linkCheck": "Ngân hàng thanh toán kiểm tra kết nối",
+        "linkCheckDesc": "Đường truyền tới ngân hàng phát hành đang gián đoạn nên yêu cầu không được gửi.",
+        "issuerCheck": "Ngân hàng phát hành kiểm tra",
+        "returnOk": "Trả kết quả về máy POS",
+        "returnOkDesc": "{type, select, PREAUTH {Máy in phiếu giữ tiền. Tiền chỉ bị trừ khi hoàn tất.} COMPLETION {Máy in hóa đơn cho khoản tiền đã giữ.} REFUND {Máy in phiếu hoàn tiền cho khách.} BALANCE {Máy hiện số dư cho khách.} other {Máy in hóa đơn, khách nhận hàng.}}",
+        "returnBad": "Trả kết quả từ chối",
+        "returnBadDesc": "Máy POS báo cho khách, không trừ tiền.",
+        "noResponse": "Ngân hàng phát hành không phản hồi",
+        "noResponseDesc": "Đã chờ 30 giây mà không nhận được câu trả lời.",
+        "reversed": "Tự động hủy giao dịch",
+        "reversedDesc": "Lệnh hủy được gửi và xác nhận. Tiền của khách an toàn.",
+        "reversalQueued": "Lệnh hủy đang chờ gửi",
+        "reversalQueuedDesc": "Lệnh hủy đã được lưu và sẽ được gửi lại tới khi ngân hàng xác nhận.",
+        "amountCheck": "Máy POS kiểm tra số tiền",
+        "amountCheckDesc": "Số tiền bằng 0 nên giao dịch không được gửi đi."
+      }
     }
   },
   "overview": {
