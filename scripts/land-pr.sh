@@ -61,7 +61,9 @@ gh run watch "$RUN_ID" --exit-status >/dev/null
 
 echo "-- confirming a real CI run happened, not just a third-party check --"
 gh run list --branch "$BRANCH" --limit 3
-gh pr checks "$PR"
+# --watch also waits out third-party checks (GitGuardian) that are not part of the CI run; a
+# plain `gh pr checks` exits non-zero while any check is still pending.
+gh pr checks "$PR" --watch
 
 echo "-- merging --"
 # Merge first and delete the branch after the worktree is gone: a refused merge then leaves the
