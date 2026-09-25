@@ -712,6 +712,7 @@ components:
         transactionsDeltaPct: { type: number }
         approvalRate: { type: number, minimum: 0, maximum: 1 }
         p99LatencyMs: { type: integer }
+        p50LatencyMs: { type: integer, description: "Median SENT-to-terminal latency today, shown beside p99LatencyMs on the Overview latency card" }
         ledgerMatches: { type: boolean }
         throughput:
           type: array
