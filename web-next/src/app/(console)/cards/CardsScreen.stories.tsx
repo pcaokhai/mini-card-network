@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { LEDGER_PAGE_SIZE } from "@/components/cards/CardDetail";
 import { mockCardDetail, mockCardSummaries, mockLedger } from "@/mocks/pages/cards";
 import { useDisplayMode } from "@/shared/state/display-mode";
 import { CardsScreen } from "./CardsScreen";
@@ -11,7 +12,10 @@ function withSeededCards(Story: () => React.ReactElement) {
   client.setQueryData(["cards"], cards);
   for (const { cardRef } of cards) {
     client.setQueryData(["cards", cardRef], { card: mockCardDetail(cardRef), etag: '"v1"' });
-    client.setQueryData(["cards", cardRef, "ledger"], mockLedger(cardRef));
+    client.setQueryData(["cards", cardRef, "ledger", "pages", LEDGER_PAGE_SIZE], {
+      pages: [{ items: mockLedger(cardRef).slice(0, LEDGER_PAGE_SIZE), nextCursor: null }],
+      pageParams: [undefined],
+    });
   }
   return (
     <QueryClientProvider client={client}>

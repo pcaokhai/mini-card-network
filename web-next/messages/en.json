@@ -706,13 +706,15 @@
         "title": "Money in, money out",
         "note": "Every amount has a counterpart, so the ledger always balances",
         "a": "Type",
-        "b": "Amount"
+        "b": "Amount",
+        "more": "Show more"
       },
       "expert": {
         "title": "Double-entry journal",
         "note": "Each journal: Σ debit = Σ credit, checked at COMMIT",
         "a": "Debit leg",
-        "b": "Credit leg"
+        "b": "Credit leg",
+        "more": "Load more"
       },
       "time": "Time",
       "description": "Description",

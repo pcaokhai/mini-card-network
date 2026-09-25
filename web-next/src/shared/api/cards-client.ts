@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import createClient from "openapi-fetch";
 import { apiBaseUrl } from "@/shared/api/base-url";
 import type { paths, components } from "@/shared/api/generated/schema";
@@ -56,6 +56,23 @@ export function useCardLedger(cardRef: string) {
       if (error) throw error;
       return data.items;
     },
+  });
+}
+
+/** The ledger newest first, one `pageSize` page at a time, following the issuer's nextCursor. */
+export function useCardLedgerPages(cardRef: string, pageSize: number) {
+  return useInfiniteQuery({
+    queryKey: [...ledgerKey(cardRef), "pages", pageSize],
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) => {
+      const { data, error } = await client.GET("/v1/cards/{cardRef}/ledger", {
+        params: { path: { cardRef }, query: { limit: pageSize, cursor: pageParam } },
+        fetch: liveFetch,
+      });
+      if (error) throw error;
+      return data;
+    },
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
 }
 

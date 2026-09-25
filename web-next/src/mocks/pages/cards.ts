@@ -155,7 +155,16 @@ const staleEtag = () =>
 export const cardsHandlers = [
   http.get("*/v1/cards", () => HttpResponse.json(mockCardSummaries())),
   http.get("*/v1/cards/:cardRef", ({ params }) => detailResponse(String(params.cardRef))),
-  http.get("*/v1/cards/:cardRef/ledger", ({ params }) => HttpResponse.json({ items: mockLedger(String(params.cardRef)), nextCursor: null })),
+  // Pages like the issuer: `cursor` is the last journalId seen; nextCursor is set while a full page came back.
+  http.get("*/v1/cards/:cardRef/ledger", ({ params, request }) => {
+    const query = new URL(request.url).searchParams;
+    const all = mockLedger(String(params.cardRef));
+    const limit = Number(query.get("limit") ?? 50);
+    const cursor = query.get("cursor");
+    const start = cursor === null ? 0 : all.findIndex((e) => e.journalId === cursor) + 1;
+    const items = all.slice(start, start + limit);
+    return HttpResponse.json({ items, nextCursor: items.length === limit ? (items.at(-1)?.journalId ?? null) : null });
+  }),
   http.post("*/v1/cards/:cardRef/blocks", ({ params }) => {
     const cardRef = String(params.cardRef);
     withCard(cardRef, (c) => ({ ...c, status: "BLOCKED" }));

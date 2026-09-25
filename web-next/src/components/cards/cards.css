@@ -501,6 +501,25 @@
   font-weight: 400;
   color: var(--color-ink);
 }
+.cards-ledger__more {
+  align-self: flex-start;
+  height: 36px;
+  margin-top: 8px;
+  padding: 0 14px;
+  border: 1px solid var(--cards-line);
+  border-radius: 9px;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.cards-ledger__more:hover {
+  border-color: var(--color-accent);
+}
+.cards-ledger__more:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
 .cards-ledger__empty {
   margin: 0;
   padding: 10px 0;

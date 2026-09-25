@@ -72,6 +72,10 @@ The canvas is one screen: the card list (320 px) beside the selected card's deta
 - **R12, 1280 px.** The canvas is 1440 only. Below that, the Expert ledger legs shrink and wrap before the description does, and the available balance wraps under its label. There is no horizontal overflow.
 
 - **R13, holds shown.** The canvas lists holds as "auth_hold ACTIVE", each with an auto-release date. The earlier screen also listed COMPLETED, RELEASED and EXPIRED holds with a status pill. The screen now lists only ACTIVE holds, the same set the "Đang tạm giữ" line sums.
+- **R14, ledger length.**
+  - The canvas shows a short ledger, but on the real stack a busy card has dozens of journals.
+  - The screen fetches `limit=8` and shows the newest 8. A "Xem thêm" button ("Load more" in Expert mode, "Show more" in English Easy mode) fetches the next page with the issuer's `nextCursor`, and appears only while `nextCursor` is set. This is `useCardLedgerPages(cardRef, pageSize)`, an infinite query; `useCardLedger` is unchanged.
+  - dev:mock pages the same way the issuer does: `cursor` is the last journalId, and `nextCursor` is set while a full page came back.
 
 ## AC table
 

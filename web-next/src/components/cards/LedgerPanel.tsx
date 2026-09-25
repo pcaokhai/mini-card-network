@@ -11,7 +11,15 @@ function sign(effect: number) {
   return effect < 0 ? "out" : effect > 0 ? "in" : "none";
 }
 
-export function LedgerPanel({ entries, expert }: { entries: readonly JournalEntry[]; expert: boolean }) {
+interface LedgerPanelProps {
+  entries: readonly JournalEntry[];
+  expert: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}
+
+export function LedgerPanel({ entries, expert, hasMore, loadingMore, onLoadMore }: LedgerPanelProps) {
   const t = useTranslations("cards.ledger");
   const mode = expert ? "expert" : "easy";
 
@@ -62,6 +70,11 @@ export function LedgerPanel({ entries, expert }: { entries: readonly JournalEntr
         })}
       </div>
       {entries.length === 0 && <p className="cards-ledger__empty">{t("empty")}</p>}
+      {hasMore && (
+        <button type="button" className="cards-ledger__more" disabled={loadingMore} onClick={onLoadMore}>
+          {t(`${mode}.more`)}
+        </button>
+      )}
     </section>
   );
 }

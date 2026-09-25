@@ -706,13 +706,15 @@
         "title": "Lịch sử tiền vào, tiền ra",
         "note": "Mỗi khoản đều có đối ứng nên sổ luôn cân",
         "a": "Loại",
-        "b": "Số tiền"
+        "b": "Số tiền",
+        "more": "Xem thêm"
       },
       "expert": {
         "title": "Bút toán kép (journal)",
         "note": "Mỗi journal: Σ Nợ = Σ Có, kiểm tra lúc COMMIT",
         "a": "Vế Nợ",
-        "b": "Vế Có"
+        "b": "Vế Có",
+        "more": "Load more"
       },
       "time": "Giờ",
       "description": "Nội dung",

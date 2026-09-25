@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { useBlockCard, useCard, useCardLedger, useUnblockCard } from "@/shared/api/cards-client";
+import { useBlockCard, useCard, useCardLedgerPages, useUnblockCard } from "@/shared/api/cards-client";
 import { BalancePanel } from "./BalancePanel";
 import { type AuditEntry, CardStatusPanel, type ToggleAction } from "./CardStatusPanel";
 import { CardVisual } from "./CardVisual";
@@ -11,12 +11,14 @@ import { LimitsPanel } from "./LimitsPanel";
 import { statusKind } from "./cards-model";
 import { problemDetail } from "./problem-detail";
 
+// The canvas shows a short ledger; older journals load on demand.
+export const LEDGER_PAGE_SIZE = 8;
 const clock = new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 export function CardDetail({ cardRef, expert, today }: { cardRef: string; expert: boolean; today: Date }) {
   const t = useTranslations("cards");
   const cardQuery = useCard(cardRef);
-  const ledger = useCardLedger(cardRef);
+  const ledger = useCardLedgerPages(cardRef, LEDGER_PAGE_SIZE);
   const block = useBlockCard(cardRef);
   const unblock = useUnblockCard(cardRef);
   // The issuer writes audit_log itself but has no read API yet; this echoes what this session did.
@@ -59,7 +61,13 @@ export function CardDetail({ cardRef, expert, today }: { cardRef: string; expert
         <BalancePanel card={card} expert={expert} />
         <LimitsPanel card={card} etag={cardQuery.data?.etag ?? null} expert={expert} onReload={() => void cardQuery.refetch()} />
       </div>
-      <LedgerPanel entries={ledger.data ?? []} expert={expert} />
+      <LedgerPanel
+        entries={ledger.data?.pages.flatMap((p) => p.items) ?? []}
+        expert={expert}
+        hasMore={ledger.hasNextPage}
+        loadingMore={ledger.isFetchingNextPage}
+        onLoadMore={() => void ledger.fetchNextPage()}
+      />
     </div>
   );
 }

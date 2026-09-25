@@ -149,6 +149,57 @@ describe("CardsScreen (MCN-309, as in Cards.dc.html)", () => {
     expect(slider).toHaveValue("10000000");
   });
 
+  it("shows the newest 8 journals, then loads the next page by cursor MCN-309-AC1", async () => {
+    const all = Array.from({ length: 12 }, (_, i) => ({
+      journalId: String(100 - i),
+      occurredAt: "2026-09-25T07:00:00Z",
+      description: `Mua hàng · Cửa hàng ${i + 1}`,
+      entryType: "PURCHASE" as const,
+      rrn: null,
+      postings: [],
+    }));
+    const requested: string[] = [];
+    server.use(
+      http.get("*/v1/cards/:cardRef/ledger", ({ request }) => {
+        const url = new URL(request.url);
+        requested.push(url.search);
+        const limit = Number(url.searchParams.get("limit"));
+        const cursor = url.searchParams.get("cursor");
+        const start = cursor === null ? 0 : all.findIndex((e) => e.journalId === cursor) + 1;
+        const items = all.slice(start, start + limit);
+        return HttpResponse.json({ items, nextCursor: start + limit < all.length ? items.at(-1)?.journalId : null });
+      }),
+    );
+    const user = userEvent.setup();
+    await openCard("crd_normal0001");
+    const ledger = region("Lịch sử tiền vào, tiền ra");
+
+    expect(await within(ledger).findAllByRole("row")).toHaveLength(9); // header + 8
+    await user.click(within(ledger).getByRole("button", { name: "Xem thêm" }));
+    expect(await within(ledger).findByText("Mua hàng · Cửa hàng 12")).toBeInTheDocument();
+    expect(within(ledger).getAllByRole("row")).toHaveLength(13);
+    expect(within(ledger).queryByRole("button", { name: "Xem thêm" })).not.toBeInTheDocument();
+    expect(requested).toEqual(["?limit=8", "?limit=8&cursor=93"]);
+  });
+
+  it("offers no load-more when the ledger has no next cursor MCN-309-AC1", async () => {
+    await openCard("crd_normal0001");
+    const ledger = region("Lịch sử tiền vào, tiền ra");
+    expect(await within(ledger).findAllByRole("row")).toHaveLength(6);
+    expect(within(ledger).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("labels load-more for Expert mode", async () => {
+    useDisplayMode.setState({ mode: "expert" });
+    server.use(
+      http.get("*/v1/cards/:cardRef/ledger", () =>
+        HttpResponse.json({ items: [], nextCursor: "1" }),
+      ),
+    );
+    await openCard("crd_normal0001");
+    expect(await within(region("Bút toán kép (journal)")).findByRole("button", { name: "Load more" })).toBeInTheDocument();
+  });
+
   it("names the entry type when the issuer only generated a description", async () => {
     server.use(
       http.get("*/v1/cards/:cardRef/ledger", () =>
