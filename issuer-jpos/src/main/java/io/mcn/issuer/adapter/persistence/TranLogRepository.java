@@ -79,13 +79,33 @@ public class TranLogRepository {
       String authCode,
       String declineReason,
       Long balance) {
+    try (var conn = dataSource.getConnection()) {
+      updateOutcome(
+          conn, tranId, businessDate, status, responseCode, authCode, declineReason, balance);
+    } catch (SQLException e) {
+      throw new IllegalStateException("update tran_log outcome failed", e);
+    }
+  }
+
+  /**
+   * Same update on the caller's connection, so {@code Authorize} commits the outcome in the
+   * transaction that moves the money (S1, root CLAUDE.md §6.5).
+   */
+  public void updateOutcome(
+      Connection conn,
+      long tranId,
+      LocalDate businessDate,
+      String status,
+      String responseCode,
+      String authCode,
+      String declineReason,
+      Long balance) {
     String sql =
         """
         UPDATE tran_log SET status = ?, response_code = ?, auth_code = ?, decline_reason = ?,
                              balance = ?, updated_at = now()
         WHERE id = ? AND business_date = ?""";
-    try (var conn = dataSource.getConnection();
-        var stmt = conn.prepareStatement(sql)) {
+    try (var stmt = conn.prepareStatement(sql)) {
       stmt.setString(1, status);
       stmt.setString(2, responseCode);
       stmt.setString(3, authCode);
@@ -93,7 +113,9 @@ public class TranLogRepository {
       stmt.setObject(5, balance, java.sql.Types.BIGINT);
       stmt.setLong(6, tranId);
       stmt.setObject(7, businessDate);
-      stmt.executeUpdate();
+      if (stmt.executeUpdate() != 1) {
+        throw new IllegalStateException("tran_log " + tranId + " not found for its outcome");
+      }
     } catch (SQLException e) {
       throw new IllegalStateException("update tran_log outcome failed", e);
     }

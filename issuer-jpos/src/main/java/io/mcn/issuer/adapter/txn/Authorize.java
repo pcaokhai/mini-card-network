@@ -3,7 +3,9 @@ package io.mcn.issuer.adapter.txn;
 import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.persistence.AccountLockRepository;
 import io.mcn.issuer.adapter.persistence.AccountRow;
+import io.mcn.issuer.adapter.persistence.AccountSummary;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
+import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import java.io.Serializable;
 import java.sql.Connection;
@@ -51,6 +53,7 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
   private AccountLockRepository lockRepository;
   private LedgerRepository ledgerRepository;
   private VelocityCounterRepository velocityCounterRepository;
+  private TranLogRepository tranLogRepository;
   private final AuthCodeGenerator authCodeGenerator;
   private DataSource dataSource;
   private HikariDataSource ownedDataSource;
@@ -74,6 +77,23 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
       VelocityCounterRepository velocityCounterRepository,
       AuthCodeGenerator authCodeGenerator,
       DataSource dataSource) {
+    this(
+        lockRepository,
+        ledgerRepository,
+        velocityCounterRepository,
+        authCodeGenerator,
+        dataSource == null ? null : new TranLogRepository(dataSource),
+        dataSource);
+  }
+
+  public Authorize(
+      AccountLockRepository lockRepository,
+      LedgerRepository ledgerRepository,
+      VelocityCounterRepository velocityCounterRepository,
+      AuthCodeGenerator authCodeGenerator,
+      TranLogRepository tranLogRepository,
+      DataSource dataSource) {
+    this.tranLogRepository = tranLogRepository;
     this.lockRepository = lockRepository;
     this.ledgerRepository = ledgerRepository;
     this.velocityCounterRepository = velocityCounterRepository;
@@ -88,6 +108,7 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     this.lockRepository = new AccountLockRepository(this.dataSource);
     this.ledgerRepository = new LedgerRepository();
     this.velocityCounterRepository = new VelocityCounterRepository(this.dataSource);
+    this.tranLogRepository = new TranLogRepository(this.dataSource);
   }
 
   @Override
@@ -105,23 +126,48 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     }
     try (Connection conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
-      boolean approved =
-          switch (TxnTypes.of(ctx).customerEffect()) {
-            case DEBIT -> debit(conn, ctx);
-            case CREDIT -> credit(conn, ctx);
-            case NONE -> answerBalance(conn, ctx);
-          };
-      if (!approved) {
+      try {
+        return approveInOneTransaction(conn, ctx);
+      } catch (RuntimeException e) {
         conn.rollback();
-        return PREPARED;
+        throw e;
       }
-      conn.commit();
-      ctx.put(TxnContextKeys.RESPONSE_CODE, "00");
-      ctx.put(TxnContextKeys.AUTH_CODE, authCodeGenerator.generate());
-      return PREPARED;
     } catch (SQLException e) {
       throw new IllegalStateException("authorize failed", e);
     }
+  }
+
+  /**
+   * Moves the money and records the APPROVED outcome on the {@code tran_log} row in one transaction
+   * (S1, root CLAUDE.md §6.5): a crash can't leave money moved behind a RECEIVED row that every
+   * reversal would bounce off. {@code LogAndOutbox} later rewrites the same outcome and owns every
+   * decline's, where nothing moved.
+   */
+  private int approveInOneTransaction(Connection conn, Context ctx) throws SQLException {
+    boolean approved =
+        switch (TxnTypes.of(ctx).customerEffect()) {
+          case DEBIT -> debit(conn, ctx);
+          case CREDIT -> credit(conn, ctx);
+          case NONE -> answerBalance(conn, ctx);
+        };
+    if (!approved) {
+      conn.rollback();
+      return PREPARED;
+    }
+    String authCode = authCodeGenerator.generate();
+    tranLogRepository.updateOutcome(
+        conn,
+        tranId(ctx),
+        businessDate(ctx),
+        "APPROVED",
+        "00",
+        authCode,
+        null,
+        ctx.<Long>get(TxnContextKeys.BALANCE));
+    conn.commit();
+    ctx.put(TxnContextKeys.RESPONSE_CODE, "00");
+    ctx.put(TxnContextKeys.AUTH_CODE, authCode);
+    return PREPARED;
   }
 
   /**
@@ -163,14 +209,19 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
 
   /** Balance inquiry: answers the available balance in DE 54; posts and holds nothing. */
   private boolean answerBalance(Connection conn, Context ctx) {
-    long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
-    ctx.put(TxnContextKeys.BALANCE, lockRepository.lockAndGet(conn, accountId).availableBalance());
+    AccountSummary account = lockRepository.read(conn, ctx.get(TxnContextKeys.ACCOUNT_ID));
+    ctx.put(TxnContextKeys.BALANCE, account.availableBalance());
+    ctx.put(TxnContextKeys.BALANCE_CURRENCY, account.currency());
     return true;
   }
 
+  /** The row {@code LogAndOutbox} inserted; an approval with none has nothing to post against. */
   private static long tranId(Context ctx) {
     Long tranId = ctx.get(TxnContextKeys.TRAN_ID);
-    return tranId == null ? 0L : tranId;
+    if (tranId == null) {
+      throw new IllegalStateException("no tran_log row (TRAN_ID) to record the approval on");
+    }
+    return tranId;
   }
 
   private static LocalDate businessDate(Context ctx) {

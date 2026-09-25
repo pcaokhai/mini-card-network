@@ -185,7 +185,8 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
         ledgerRepository.postReversalOf(conn, original.id(), original.businessDate());
     for (var entry : deltas.entrySet()) {
       AccountRow after = accountLockRepository.adjust(conn, entry.getKey(), entry.getValue());
-      if (after.availableBalance() < -after.overdraftLimit()) {
+      boolean debitedTheCustomer = entry.getValue() < 0; // only a debit can cross the floor
+      if (debitedTheCustomer && after.availableBalance() < -after.overdraftLimit()) {
         recordNegativeBalance(conn, original, entry.getValue(), after);
       }
     }

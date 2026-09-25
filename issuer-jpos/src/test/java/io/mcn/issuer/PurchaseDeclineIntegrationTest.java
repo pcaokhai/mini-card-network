@@ -188,9 +188,14 @@ class PurchaseDeclineIntegrationTest {
   /** A 0420 (reason 17) for the 0200 sent with {@code originalStan} by {@link #financial}. */
   private static ISOMsg reversal(int stan, int originalStan, String processingCode, long amount)
       throws Exception {
+    return reversal("0420", stan, originalStan, processingCode, amount);
+  }
+
+  private static ISOMsg reversal(
+      String mti, int stan, int originalStan, String processingCode, long amount) throws Exception {
     ISOMsg request =
         buildIso(
-            "0420",
+            mti,
             Map.of(
                 3,
                 processingCode,
@@ -402,6 +407,7 @@ class PurchaseDeclineIntegrationTest {
 
     ISOMsg ack = reversal(23, 22, "200000", 40_000L);
 
+    assertThat(negativeBalanceEvents(accountId)).isZero(); // N4: a debit that stays above floor
     assertThat(ack.getMTI()).isEqualTo("0430");
     assertThat(accountBalance(accountId)).isEqualTo(before);
     assertThat(ledgerBalance(accountId)).isEqualTo(ledgerBefore);
@@ -424,6 +430,7 @@ class PurchaseDeclineIntegrationTest {
     reversal(26, 24, "000000", 30_000L); // a repeat has no second effect (docs/03 §7.3)
 
     assertThat(accountBalance(accountId)).isEqualTo(before);
+    assertThat(negativeBalanceEvents(accountId)).isZero(); // N4: a credit never flags
     assertThat(ledgerBalance(accountId)).isEqualTo(ledgerBefore);
     assertThat(unbalancedJournalCount()).isZero();
   }
@@ -514,6 +521,8 @@ class PurchaseDeclineIntegrationTest {
       long countBefore = velocityToday(cardId, "txn_count");
 
       reversal(45, 43, "000000", 50_000L);
+      reversal("0421", 45, 43, "000000", 50_000L); // repeat of the same advice
+      reversal(48, 43, "000000", 50_000L); // and a fresh 0420 for the already-reversed original
 
       assertThat(velocityToday(cardId, "txn_amount")).isEqualTo(usedToday);
       assertThat(velocityToday(cardId, "txn_count")).isEqualTo(countBefore - 1);
@@ -534,6 +543,13 @@ class PurchaseDeclineIntegrationTest {
     assertThat(duplicate.getString(39)).isEqualTo("00");
     assertThat(duplicate.getString(54)).isEqualTo(first.getString(54));
     assertThat(duplicate.getString(38)).isEqualTo(first.getString(38));
+  }
+
+  private static long negativeBalanceEvents(long accountId) throws Exception {
+    return single(
+        "SELECT count(*) FROM audit_log WHERE action = 'NEGATIVE_BALANCE_AFTER_REVERSAL'"
+            + " AND entity_id = ?::text",
+        accountId);
   }
 
   private static long velocityToday(long cardId, String column) throws Exception {

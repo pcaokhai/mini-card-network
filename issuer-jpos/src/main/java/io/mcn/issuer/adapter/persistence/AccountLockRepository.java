@@ -44,10 +44,12 @@ public class AccountLockRepository {
   }
 
   /**
-   * Adds {@code signedAmount} (negative = debit) to both balances, in the caller's transaction. The
-   * UPDATE row-locks the account itself, so no prior {@link #lockAndGet} is needed. Used for
-   * movements that can't be declined for funds (a refund credit, a reversal), unlike {@link
-   * #debit}: {@code chk_available_floor} still guards the overdraft floor.
+   * The one way an account balance changes: adds {@code signedAmount} (negative = debit) to both
+   * balances in the caller's transaction, the same one that posts the journal (docs/10 §5). Used by
+   * purchases (after {@link #lockAndGet} checked the funds), refunds and reversals. The UPDATE
+   * itself row-locks the account. Nothing here enforces the overdraft floor: since V7 dropped
+   * {@code chk_available_floor}, the floor is Authorize's rule for debits, and a reversal may go
+   * below it (R-1). Returns the account as it now stands.
    */
   public AccountRow adjust(Connection conn, long accountId, long signedAmount) {
     String sql =
@@ -75,6 +77,27 @@ public class AccountLockRepository {
       }
     } catch (SQLException e) {
       throw new IllegalStateException("adjust account balance failed", e);
+    }
+  }
+
+  /** A plain read (no row lock) for a balance inquiry, which moves nothing (N2). */
+  public AccountSummary read(Connection conn, long accountId) {
+    String sql =
+        "SELECT account_no, currency, ledger_balance, available_balance FROM account WHERE id = ?";
+    try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, accountId);
+      try (ResultSet rs = stmt.executeQuery()) {
+        if (!rs.next()) {
+          throw new IllegalStateException("account not found: " + accountId);
+        }
+        return new AccountSummary(
+            rs.getString("account_no"),
+            rs.getString("currency").trim(),
+            rs.getLong("ledger_balance"),
+            rs.getLong("available_balance"));
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException("read account failed", e);
     }
   }
 

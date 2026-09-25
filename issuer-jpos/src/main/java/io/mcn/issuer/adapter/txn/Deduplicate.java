@@ -97,7 +97,10 @@ public class Deduplicate implements TransactionParticipant, Configurable, Destro
       // docs/03 §7.5: replay the stored answer - RC, auth code and a balance inquiry's DE 54.
       ctx.put(TxnContextKeys.RESPONSE_CODE, stored.responseCode());
       if (stored.authCode() != null) ctx.put(TxnContextKeys.AUTH_CODE, stored.authCode());
-      if (stored.balance() != null) ctx.put(TxnContextKeys.BALANCE, stored.balance());
+      if (stored.balance() != null) {
+        ctx.put(TxnContextKeys.BALANCE, stored.balance());
+        ctx.put(TxnContextKeys.BALANCE_CURRENCY, stored.currency());
+      }
     } else {
       ctx.put(TxnContextKeys.IS_DUPLICATE, false);
     }
