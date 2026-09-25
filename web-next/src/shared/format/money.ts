@@ -6,14 +6,27 @@ export type Money = components["schemas"]["Money"];
 // ponytail: extend when a new currency shows up in contracts.
 const CURRENCY_ALPHA: Record<string, string> = { "704": "VND" };
 
+const MINOR_DIGITS: Record<string, number> = { VND: 0 };
+const DEFAULT_MINOR_DIGITS = 2;
+
 /** Money.amount is integer minor units (docs/10 §1); render as major units for display only. */
 export function formatMoney({ amount, currency }: Money): string {
   const code = CURRENCY_ALPHA[currency] ?? currency;
-  const fractionDigits = code === "VND" ? 0 : 2;
+  const fractionDigits = MINOR_DIGITS[code] ?? DEFAULT_MINOR_DIGITS;
   const major = amount / 10 ** fractionDigits;
-  const formatted = new Intl.NumberFormat("en-US", {
+
+  // web-next/CLAUDE.md: amounts render through vi-VN, which is also what the design canvas shows.
+  if (CURRENCY_ALPHA[currency] === undefined) {
+    return `${new Intl.NumberFormat("vi-VN", {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(major)} ${code}`;
+  }
+
+  return new Intl.NumberFormat("vi-VN", {
+    style: "currency",
+    currency: code,
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   }).format(major);
-  return `${formatted} ${code}`;
 }

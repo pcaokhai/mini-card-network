@@ -21,7 +21,9 @@
   },
   "header": {
     "search": "Tìm mã tra soát, 4 số cuối thẻ, mã máy POS",
-    "linkUnknown": "Đang kiểm tra kết nối"
+    "linkUnknown": "Đang kiểm tra kết nối",
+    "linkConnected": "Đã kết nối ngân hàng phát hành",
+    "linkDown": "Mất kết nối ngân hàng phát hành"
   },
   "modeToggle": {
     "label": "Chế độ hiển thị",
@@ -111,36 +113,65 @@
     }
   },
   "overview": {
-    "title": "Tổng quan",
+    "title": "Tổng quan hôm nay",
     "kpi": {
       "transactionsToday": "Giao dịch hôm nay",
-      "approvalRate": "Tỷ lệ chấp thuận",
-      "p99Latency": "Độ trễ p99",
-      "ledgerMatches": "Sổ cái khớp",
-      "ledgerOk": "Khớp",
-      "ledgerMismatch": "Lệch"
+      "approvalRate": "Tỉ lệ được duyệt",
+      "p99Latency": "Thời gian phản hồi",
+      "ledgerMatches": "Tiền khớp sổ",
+      "ledgerOk": "Khớp 100%",
+      "ledgerMismatch": "Lệch",
+      "transactionsUp": "Tăng {pct}% so với hôm qua",
+      "transactionsDown": "Giảm {pct}% so với hôm qua",
+      "approvalSteady": "Ổn định trong 1 giờ qua",
+      "latencyFast": "Nhanh, dưới ngưỡng {threshold} ms",
+      "latencySlow": "Chậm, vượt ngưỡng {threshold} ms",
+      "ledgerNoGap": "Không có chênh lệch nào",
+      "ledgerHasGap": "Có chênh lệch cần đối soát",
+      "transactionsTech": "TPS đỉnh {peak} lúc {at}",
+      "approvalTech": "RC 00 / tổng 0100 + 0200",
+      "latencyTech": "p99 end-to-end",
+      "ledgerTech": "Σ ledger = Σ tran_log · lệch 0 ₫"
     },
     "throughput": {
-      "heading": "Thông lượng (60 phút qua)"
+      "heading": "Lượng giao dịch trong 60 phút qua"
     },
     "declineReasons": {
-      "heading": "Lý do từ chối"
+      "heading": "Vì sao giao dịch bị từ chối"
     },
     "health": {
-      "heading": "Tình trạng hệ thống",
-      "ledger": "Sổ cái"
+      "heading": "Sức khỏe hệ thống",
+      "ledger": "Tiền khớp sổ",
+      "issuerLink": "Kết nối tới ngân hàng phát hành",
+      "ledgerOk": "Khớp, không có chênh lệch",
+      "ledgerMismatch": "Có chênh lệch cần đối soát"
     },
     "cutover": {
-      "heading": "Cutover",
-      "label": "Cutover tiếp theo sau"
+      "heading": "Chốt ngày tiếp theo",
+      "label": "Cutover tiếp theo sau",
+      "remaining": "Còn {hours} giờ {minutes} phút",
+      "body": "Hệ thống sẽ khóa sổ, đối chiếu với ngân hàng thanh toán và xuất file quyết toán.",
+      "openSettlement": "Mở trình chốt ngày"
     },
     "liveFeed": {
-      "heading": "Luồng trực tiếp",
+      "heading": "Giao dịch trực tiếp",
       "empty": "Chưa có giao dịch",
-      "rrn": "RRN",
+      "rrn": "Mã tra soát",
       "rc": "RC",
-      "viewJourney": "Xem hành trình"
-    }
+      "viewJourney": "Xem hành trình",
+      "liveBadge": "Đang cập nhật",
+      "time": "Giờ",
+      "merchant": "Cửa hàng",
+      "card": "Thẻ",
+      "amount": "Số tiền",
+      "result": "Kết quả"
+    },
+    "subtitle": "Mọi giao dịch đi qua mạng của bạn, cập nhật theo thời gian thực.",
+    "actions": {
+      "openChaosLab": "Mở phòng lab sự cố",
+      "createTestTransaction": "Tạo giao dịch thử"
+    },
+    "throughputTech": "TPS theo từng 2,5 phút · 60 phút qua"
   },
   "cards": {
     "title": "Thẻ và tài khoản",
@@ -341,5 +372,9 @@
       "ariaLabel": "Đang chờ phản hồi từ ngân hàng phát hành"
     },
     "viewJourney": "Xem hành trình"
+  },
+  "sidebar": {
+    "businessDate": "Ngày giao dịch",
+    "cutoverAt": "Chốt ngày lúc {time}"
   }
 }

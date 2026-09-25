@@ -1,16 +1,34 @@
 .throughput-chart {
   display: flex;
   align-items: flex-end;
-  height: 120px;
-  gap: 2px;
+  height: 96px;
+  gap: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #efede6;
 }
 
 .throughput-bar {
   flex: 1;
   height: 100%;
   transform-origin: bottom;
-  background: var(--color-accent, oklch(68% 0.21 250));
-  border-radius: 2px 2px 0 0;
+  background: #a9c4c5;
+  border-radius: 3px 3px 0 0;
+}
+
+.throughput-bar--latest {
+  background: var(--color-accent);
+}
+
+/* Columns follow the design canvas's live-feed table; expert mode inserts the RRN. */
+.feed-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1.7fr) 104px 130px 190px;
+  align-items: center;
+  gap: 12px;
+}
+
+.feed-row--expert {
+  grid-template-columns: 82px minmax(0, 1.5fr) 96px 120px 124px 170px;
 }
 
 @keyframes feed-row-flash {
@@ -26,4 +44,10 @@
 
 .feed-row--flash {
   animation: feed-row-flash 300ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feed-row--flash {
+    animation: none;
+  }
 }

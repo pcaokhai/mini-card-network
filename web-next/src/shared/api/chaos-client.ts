@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import createClient from "openapi-fetch";
+import { apiBaseUrl } from "@/shared/api/base-url";
 import type { paths, components } from "@/shared/api/generated/schema";
 
 export type ChaosScenario = components["schemas"]["ChaosScenario"];
@@ -15,8 +16,7 @@ export const CHAOS_SCENARIO_IDS: readonly ChaosScenarioId[] = [
   "LATE_RESPONSE",
 ];
 
-const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-const client = createClient<paths>({ baseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? `${origin}/api` });
+const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 
 // openapi-fetch captures `globalThis.fetch` at createClient() time (module load), which runs
 // before MSW's `server.listen()` patches it in tests — pass a thunk so each request re-reads

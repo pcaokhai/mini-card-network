@@ -22,7 +22,7 @@ describe("SummaryHeader", () => {
     renderWithIntl(<SummaryHeader transaction={transaction} />);
     expect(screen.getByText("123456789012")).toBeInTheDocument();
     expect(screen.getByText(/Approved/)).toBeInTheDocument();
-    expect(screen.getByText("10,000 VND")).toBeInTheDocument();
+    expect(screen.getByText(/10\.000\s₫/)).toBeInTheDocument();
     expect(screen.getByText("970436******4417")).toBeInTheDocument();
   });
 });

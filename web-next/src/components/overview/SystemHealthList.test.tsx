@@ -19,14 +19,14 @@ const links: Link[] = [
 ];
 
 describe("SystemHealthList", () => {
-  it("shows ledger health and each link's status", () => {
+  it("shows ledger health and one row per link", () => {
     renderWithIntl(<SystemHealthList overview={overview} links={links} />);
-    expect(screen.getByTestId("ledger-health-status")).toHaveTextContent("OK");
-    expect(screen.getByTestId("link-status-pill")).toBeInTheDocument();
+    expect(screen.getByTestId("ledger-health-status")).toHaveAttribute("data-status", "ok");
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
   });
 
   it("flags ledger mismatch", () => {
     renderWithIntl(<SystemHealthList overview={{ ...overview, ledgerMatches: false }} links={[]} />);
-    expect(screen.getByTestId("ledger-health-status")).toHaveTextContent("WARN");
+    expect(screen.getByTestId("ledger-health-status")).toHaveAttribute("data-status", "warn");
   });
 });

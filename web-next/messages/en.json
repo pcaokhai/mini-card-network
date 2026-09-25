@@ -21,7 +21,9 @@
   },
   "header": {
     "search": "Search RRN, last 4 digits, terminal ID",
-    "linkUnknown": "Checking connection"
+    "linkUnknown": "Checking connection",
+    "linkConnected": "Connected to issuer",
+    "linkDown": "Issuer link down"
   },
   "modeToggle": {
     "label": "Display mode",
@@ -111,36 +113,65 @@
     }
   },
   "overview": {
-    "title": "Overview",
+    "title": "Today's overview",
     "kpi": {
       "transactionsToday": "Transactions today",
       "approvalRate": "Approval rate",
-      "p99Latency": "p99 latency",
-      "ledgerMatches": "Ledger matches",
-      "ledgerOk": "Matched",
-      "ledgerMismatch": "Mismatch"
+      "p99Latency": "Response time",
+      "ledgerMatches": "Ledger match",
+      "ledgerOk": "100% matched",
+      "ledgerMismatch": "Mismatch",
+      "transactionsUp": "Up {pct}% vs yesterday",
+      "transactionsDown": "Down {pct}% vs yesterday",
+      "approvalSteady": "Steady over the last hour",
+      "latencyFast": "Fast, under the {threshold} ms threshold",
+      "latencySlow": "Slow, over the {threshold} ms threshold",
+      "ledgerNoGap": "No discrepancies",
+      "ledgerHasGap": "Discrepancy needs reconciling",
+      "transactionsTech": "Peak TPS {peak} at {at}",
+      "approvalTech": "RC 00 / total 0100 + 0200",
+      "latencyTech": "p99 end-to-end",
+      "ledgerTech": "Σ ledger = Σ tran_log · 0 variance"
     },
     "throughput": {
-      "heading": "Throughput (last 60 min)"
+      "heading": "Transaction volume over the last 60 minutes"
     },
     "declineReasons": {
-      "heading": "Decline reasons"
+      "heading": "Why transactions are declined"
     },
     "health": {
       "heading": "System health",
-      "ledger": "Ledger"
+      "ledger": "Ledger",
+      "issuerLink": "Issuer link",
+      "ledgerOk": "Matched, no discrepancies",
+      "ledgerMismatch": "Discrepancy needs reconciling"
     },
     "cutover": {
-      "heading": "Cutover",
-      "label": "Next cutover in"
+      "heading": "Next cutover",
+      "label": "Next cutover in",
+      "remaining": "{hours}h {minutes}m remaining",
+      "body": "The system closes the books, reconciles with the acquirer bank and exports the clearing file.",
+      "openSettlement": "Open settlement"
     },
     "liveFeed": {
-      "heading": "Live feed",
+      "heading": "Live transactions",
       "empty": "No transactions yet",
       "rrn": "RRN",
       "rc": "RC",
-      "viewJourney": "View journey"
-    }
+      "viewJourney": "View journey",
+      "liveBadge": "Updating",
+      "time": "Time",
+      "merchant": "Merchant",
+      "card": "Card",
+      "amount": "Amount",
+      "result": "Result"
+    },
+    "subtitle": "Every transaction crossing your network, updated in real time.",
+    "actions": {
+      "openChaosLab": "Open chaos lab",
+      "createTestTransaction": "Create test transaction"
+    },
+    "throughputTech": "TPS per 2.5 min · last 60 minutes"
   },
   "cards": {
     "title": "Cards and accounts",
@@ -341,5 +372,9 @@
       "ariaLabel": "Waiting for issuer response"
     },
     "viewJourney": "View journey"
+  },
+  "sidebar": {
+    "businessDate": "Business date",
+    "cutoverAt": "Cutover at {time}"
   }
 }

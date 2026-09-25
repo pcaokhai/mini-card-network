@@ -6,24 +6,28 @@ export function DeclineReasonsBreakdown({ declineReasons }: { declineReasons: Ov
   const sorted = [...declineReasons].sort((a, b) => b.share - a.share);
 
   return (
-    <div className="rounded-card border border-border bg-surface p-4">
-      <h2 className="mb-2 text-lg font-semibold">{t("heading")}</h2>
+    <section
+      aria-label={t("heading")}
+      className="flex flex-col gap-3 rounded-card border border-border bg-surface px-5.5 py-5"
+    >
+      <h2 className="text-[17px] font-semibold">{t("heading")}</h2>
       <div
         role="img"
         aria-label={`${t("heading")}: ${sorted.map((r) => `${r.label} ${Math.round(r.share * 100)}%`).join(", ")}`}
+        className="flex flex-col gap-3"
       >
-        <ul className="space-y-1">
-          {sorted.map((reason) => (
-            <li key={reason.responseCode} className="flex items-center gap-2">
-              <div className="h-2 flex-1 rounded-full bg-canvas">
-                <div className="h-2 rounded-full bg-accent" style={{ width: `${reason.share * 100}%` }} />
-              </div>
-              <span className="w-40 shrink-0 text-sm">{reason.label}</span>
-              <span className="w-12 shrink-0 text-right text-sm text-muted">{Math.round(reason.share * 100)}%</span>
-            </li>
-          ))}
-        </ul>
+        {sorted.map((reason) => (
+          <div key={reason.responseCode} className="flex flex-col gap-1.5">
+            <div className="flex justify-between text-[13px]">
+              <span>{reason.label}</span>
+              <span className="font-semibold tabular-nums">{Math.round(reason.share * 100)}%</span>
+            </div>
+            <div className="h-2 rounded-full bg-[#EFEDE6]">
+              <div className="h-2 rounded-full bg-accent" style={{ width: `${reason.share * 100}%` }} />
+            </div>
+          </div>
+        ))}
       </div>
-    </div>
+    </section>
   );
 }

@@ -1,4 +1,5 @@
 import { useTranslations } from "next-intl";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 // docs/03-iso8583-interface-spec.md §7.6: default cutover time is 23:59:59 local.
@@ -6,19 +7,14 @@ const CUTOVER_HOUR = 23;
 const CUTOVER_MINUTE = 59;
 const CUTOVER_SECOND = 59;
 
+const MS_PER_MINUTE = 60_000;
+const MINUTES_PER_HOUR = 60;
+
 function msUntilNextCutover(now: Date): number {
   const cutover = new Date(now);
   cutover.setHours(CUTOVER_HOUR, CUTOVER_MINUTE, CUTOVER_SECOND, 0);
   if (cutover.getTime() <= now.getTime()) cutover.setDate(cutover.getDate() + 1);
   return cutover.getTime() - now.getTime();
-}
-
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
-  const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
-  return `${hours}:${minutes}:${seconds}`;
 }
 
 export function CutoverCountdown() {
@@ -30,12 +26,23 @@ export function CutoverCountdown() {
     return () => clearInterval(id);
   }, []);
 
+  const totalMinutes = Math.max(0, Math.floor(remainingMs / MS_PER_MINUTE));
+  const hours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
+  const minutes = totalMinutes % MINUTES_PER_HOUR;
+
   return (
-    <div className="rounded-card bg-ink p-4 text-white">
-      <h2 className="mb-1 text-lg font-semibold">{t("heading")}</h2>
-      <p>
-        {t("label")} <span data-testid="cutover-remaining">{formatDuration(remainingMs)}</span>
+    <section aria-label={t("heading")} className="flex flex-col gap-2.5 rounded-card bg-ink px-5.5 py-5 text-white">
+      <p className="text-[13px] text-[#C9CBD2]">{t("heading")}</p>
+      <p className="text-[22px] font-bold" data-testid="cutover-remaining">
+        {t("remaining", { hours, minutes })}
       </p>
-    </div>
+      <p className="text-[13px] leading-relaxed text-[#C9CBD2]">{t("body")}</p>
+      <Link
+        href="/settlement"
+        className="mt-1 inline-flex h-10 items-center self-start rounded-[10px] bg-surface px-4 text-sm font-semibold text-ink"
+      >
+        {t("openSettlement")}
+      </Link>
+    </section>
   );
 }

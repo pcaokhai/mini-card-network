@@ -1,12 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
 import createClient from "openapi-fetch";
+import { apiBaseUrl } from "@/shared/api/base-url";
 import type { paths, components } from "@/shared/api/generated/schema";
 
 export type Transaction = components["schemas"]["Transaction"];
 export type EntryMode = components["schemas"]["EntryMode"];
 
-const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-const client = createClient<paths>({ baseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? `${origin}/api` });
+const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 
 // See network-client.ts: pass a thunk so requests use the current global fetch (MSW patches it in tests).
 const liveFetch = (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args);

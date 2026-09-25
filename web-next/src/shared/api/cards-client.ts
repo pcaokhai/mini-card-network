@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import createClient from "openapi-fetch";
+import { apiBaseUrl } from "@/shared/api/base-url";
 import type { paths, components } from "@/shared/api/generated/schema";
 
 export type CardSummary = components["schemas"]["CardSummary"];
@@ -8,8 +9,7 @@ export type CardLimits = components["schemas"]["CardLimits"];
 export type JournalEntry = components["schemas"]["JournalEntry"];
 export type BlockReason = "CUSTOMER_REQUEST" | "LOST" | "STOLEN" | "FRAUD_SUSPECTED";
 
-const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-const client = createClient<paths>({ baseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? `${origin}/api` });
+const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 
 // openapi-fetch reads `globalThis.fetch` at createClient() time, before MSW patches it in
 // tests (see network-client.ts) — pass a thunk so each request uses the current global fetch.
