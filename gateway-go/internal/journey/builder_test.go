@@ -321,3 +321,18 @@ func TestBuildJourney_posResultShowsWhatThePOSSaw__MCN_304(t *testing.T) {
 	require.Contains(t, cancelled.Steps[3].TechnicalText, "status APPROVED")
 	require.Contains(t, timedOut.Steps[4].TechnicalText, "status TIMED_OUT")
 }
+
+// DE 7 is second-precision wire data that a seed backdate can't rewrite, so it can land after the
+// issuer's acknowledgement; the send is never shown after its own 0430.
+func TestBuildJourney_reversalSentNeverAfterItsAcknowledgement__MCN_002(t *testing.T) {
+	rev := ackedReversal(rcTimeout, 0, 30090)
+	rev.Fields[7] = at(30090 + 965_000).Format("0102150405")
+
+	j := BuildJourney(sentRow(statusReversed, "", ""), timeoutHistory(30090), rev)
+
+	sent, confirmed := j.Steps[5], j.Steps[6]
+	require.Equal(t, CodeReversalSent, sent.Code)
+	require.Equal(t, CodeReversalConfirmed, confirmed.Code)
+	require.Equal(t, confirmed.OffsetMs, sent.OffsetMs)
+	require.Less(t, confirmed.OffsetMs, 31_000)
+}

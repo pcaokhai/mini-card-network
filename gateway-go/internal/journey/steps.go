@@ -149,11 +149,17 @@ func (b builder) reversalSent() Step {
 }
 
 // reversalSentAt is the advice's DE 7 (its first send). An advice without one was never sent.
+// DE 7 is second-precision wire data a seed backdate doesn't rewrite, so it is never placed after
+// the 0430 that acknowledged it.
 func (b builder) reversalSentAt() (time.Time, bool) {
 	if b.rev == nil {
 		return b.reached(statusReversed)
 	}
-	return parseDE7(b.rev.Fields[7], b.rev.QueuedAt)
+	sent, ok := parseDE7(b.rev.Fields[7], b.rev.QueuedAt)
+	if ok && b.rev.AckedAt != nil && sent.After(*b.rev.AckedAt) {
+		return *b.rev.AckedAt, true
+	}
+	return sent, ok
 }
 
 func (b builder) reversalConfirmedAt() (time.Time, bool) {
