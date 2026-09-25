@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -16,7 +17,13 @@ const (
 	statusSignedOn     = "SIGNED_ON"
 )
 
+// toxiproxyReachable gates the tests that drive the real stack. They sign the lab acquirer on and
+// off and toggle the issuer proxy, which signs the running gateway off at the issuer (every purchase
+// then answers 91), so they run only when asked: MCN_STACK_TESTS=1 go test ./... with `make up`.
 func toxiproxyReachable() bool {
+	if os.Getenv("MCN_STACK_TESTS") != "1" {
+		return false
+	}
 	resp, err := http.Get(toxiproxyAdminAddr + "/proxies")
 	if err != nil {
 		return false
@@ -42,7 +49,7 @@ func setProxyEnabled(t *testing.T, name string, enabled bool) {
 // real issuer). It skips (not fails) otherwise, so `go test ./...` stays green without Docker.
 func TestSupervisor_recoversFromToxiproxyLinkDrop__MCN_202_AC4(t *testing.T) {
 	if !toxiproxyReachable() {
-		t.Skip("Toxiproxy not reachable at localhost:8474 - run `make up` first for this integration test")
+		t.Skip("stack test: set MCN_STACK_TESTS=1 with `make up` running (it signs the running gateway off)")
 	}
 	store := &fakeLinkStore{}
 	sup := NewSupervisor(Config{Addr: "localhost:18000", EchoInterval: time.Second, EchoFailureLimit: 3}, store)

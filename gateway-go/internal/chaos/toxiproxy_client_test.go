@@ -3,6 +3,7 @@ package chaos
 import (
 	"context"
 	"net/http"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,7 +11,13 @@ import (
 
 const toxiproxyAdminAddr = "http://localhost:8474"
 
+// toxiproxyReachable gates the tests that drive the real stack. They sign the lab acquirer on and
+// off and toggle the issuer proxy, which signs the running gateway off at the issuer (every purchase
+// then answers 91), so they run only when asked: MCN_STACK_TESTS=1 go test ./... with `make up`.
 func toxiproxyReachable() bool {
+	if os.Getenv("MCN_STACK_TESTS") != "1" {
+		return false
+	}
 	resp, err := http.Get(toxiproxyAdminAddr + "/proxies")
 	if err != nil {
 		return false
@@ -21,7 +28,7 @@ func toxiproxyReachable() bool {
 
 func TestToxiproxyClient_enableSlowNetworkAddsLatencyToxic__MCN_404_AC1(t *testing.T) {
 	if !toxiproxyReachable() {
-		t.Skip("Toxiproxy not reachable - run `make up` first")
+		t.Skip("stack test: set MCN_STACK_TESTS=1 with `make up` running (it toggles the live issuer proxy)")
 	}
 	client := NewToxiproxyClient(toxiproxyAdminAddr, "issuer")
 	defer func() { _ = client.DisableAll(context.Background()) }()
@@ -35,7 +42,7 @@ func TestToxiproxyClient_enableSlowNetworkAddsLatencyToxic__MCN_404_AC1(t *testi
 
 func TestToxiproxyClient_disableAllClearsEverything__MCN_404_AC1(t *testing.T) {
 	if !toxiproxyReachable() {
-		t.Skip("Toxiproxy not reachable - run `make up` first")
+		t.Skip("stack test: set MCN_STACK_TESTS=1 with `make up` running (it toggles the live issuer proxy)")
 	}
 	client := NewToxiproxyClient(toxiproxyAdminAddr, "issuer")
 	require.NoError(t, client.SetScenario(context.Background(), ScenarioConnectionCut, true))
@@ -51,7 +58,7 @@ func TestToxiproxyClient_disableAllClearsEverything__MCN_404_AC1(t *testing.T) {
 
 func TestSetScenario_dropResponseNoLongerReturnsNotImplemented__MCN_407(t *testing.T) {
 	if !toxiproxyReachable() {
-		t.Skip("Toxiproxy not reachable - run `make up` first")
+		t.Skip("stack test: set MCN_STACK_TESTS=1 with `make up` running (it toggles the live issuer proxy)")
 	}
 	client := NewToxiproxyClient(toxiproxyAdminAddr, "issuer", WithDropResponseAddr("127.0.0.1:19999"))
 	defer func() { _ = client.DisableAll(context.Background()) }()
