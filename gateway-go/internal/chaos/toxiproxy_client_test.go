@@ -3,6 +3,7 @@ package chaos
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -84,4 +85,28 @@ func findEnabled(states []Scenario, id ScenarioID) bool {
 		}
 	}
 	return false
+}
+
+func TestListScenarios_dropResponseUnavailableWithoutFakeIssuer__CHA_G11(t *testing.T) {
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("[]"))
+	}))
+	defer admin.Close()
+
+	for name, tc := range map[string]struct {
+		opts          []ToxiproxyClientOption
+		dropAvailable bool
+	}{
+		"no fake issuer":    {nil, false},
+		"fake issuer wired": {[]ToxiproxyClientOption{WithDropResponseAddr("fake-issuer:19999")}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			scenarios, err := NewToxiproxyClient(admin.URL, "issuer", tc.opts...).ListScenarios(context.Background())
+			require.NoError(t, err)
+			for _, s := range scenarios {
+				want := s.ID != ScenarioDropResponse || tc.dropAvailable
+				require.Equal(t, want, s.Available, s.ID)
+			}
+		})
+	}
 }
