@@ -795,53 +795,105 @@
   },
   "chaos": {
     "heading": "Phòng thí nghiệm sự cố",
-    "activeCount": "{count} đang bật",
-    "runControl": {
-      "label": "Số giao dịch chạy",
-      "button": "Chạy giao dịch"
+    "subtitle": "Bật một sự cố, chạy thử giao dịch và xem hệ thống tự bảo vệ tiền của khách như thế nào.",
+    "count": {
+      "calm": "Mọi thứ bình thường",
+      "active": "{count} sự cố đang bật"
+    },
+    "resetAll": "Tắt tất cả",
+    "runBatch": "Chạy thử {count} giao dịch",
+    "error": {
+      "toggle": "Không đổi được sự cố. Hãy thử lại.",
+      "run": "Không bắt đầu được lần chạy thử. Hãy thử lại."
+    },
+    "card": {
+      "on": "Đang bật · bấm để tắt",
+      "off": "Bật sự cố"
     },
     "money": {
-      "heading": "Đối soát tiền",
-      "opening": "Số dư đầu kỳ",
-      "closing": "Số dư cuối kỳ",
-      "discrepancy": "Chênh lệch",
-      "discrepancyRun": "Phát hiện chênh lệch trong lần chạy {runId}",
-      "empty": "Bắt đầu một lần chạy để đối soát tiền"
+      "heading": "Kiểm chứng tiền",
+      "badge": {
+        "none": "Chưa chạy thử",
+        "pending": "Đang kiểm chứng…",
+        "ok": "Sổ sách khớp",
+        "discrepancy": "Sổ sách lệch"
+      },
+      "note": "Dù sự cố gì xảy ra, tổng tiền trong tài khoản khách phải luôn bằng đúng tổng các giao dịch thật sự thành công.",
+      "easy": {
+        "opening": "Tổng số dư đầu ngày",
+        "approved": "{count} giao dịch được duyệt",
+        "reversed": "Giao dịch đã tự hủy, không trừ tiền",
+        "current": "Số dư hiện tại",
+        "discrepancy": "Chênh lệch"
+      },
+      "expert": {
+        "opening": "Số dư đầu ngày (opening)",
+        "approved": "Giao dịch RC 00 · {count} lệnh",
+        "reversed": "Đã reverse (0420 → 0430)",
+        "current": "Σ available_balance",
+        "discrepancy": "Σ ledger − Σ tran_log"
+      },
+      "count": "{count} lệnh",
+      "discrepancyRun": "Lệch trong lần chạy {runId}"
     },
     "reaction": {
-      "heading": "Hệ thống sẽ làm gì",
-      "empty": "Không có kịch bản sự cố nào đang bật"
+      "heading": "Hệ thống đang phản ứng thế nào",
+      "calm": "Mọi thứ đang bình thường. Bật một sự cố ở bên trái để xem hệ thống phản ứng ra sao.",
+      "easy": {
+        "saf": "Lệnh đang chờ gửi lại",
+        "latency": "Thời gian phản hồi"
+      },
+      "expert": {
+        "saf": "SAF depth",
+        "latency": "p99 end-to-end"
+      },
+      "latency": {
+        "ms": "{value} ms",
+        "s": "{value} giây"
+      }
     },
     "scenarios": {
       "SLOW_NETWORK": {
-        "easyText": "Mạng chậm",
-        "technicalText": "Thêm 3000ms độ trễ cho mỗi lệnh gọi từ gateway đến issuer",
-        "reaction": "Giao dịch vẫn hoàn tất, chỉ chậm hơn — không rủi ro về tiền"
+        "title": "Mạng chậm",
+        "desc": "Mỗi yêu cầu bị trễ thêm khoảng 3 giây trên đường truyền.",
+        "tech": "Toxiproxy latency 3000 ms ± 200",
+        "react": "Thời gian phản hồi tăng lên khoảng 3,2 giây nhưng vẫn trong giới hạn chờ, giao dịch vẫn thành công.",
+        "reactTech": "p99 3.2 s < timeout 30 s"
       },
       "CONNECTION_CUT": {
-        "easyText": "Đứt kết nối",
-        "technicalText": "Kết nối TCP tới issuer bị đóng giữa chừng khi đang xử lý",
-        "reaction": "Gateway không biết issuer đã nhận request hay chưa, nên xếp hàng một lệnh đảo (reversal) thay vì thử lại một cách mù quáng"
+        "title": "Mất kết nối",
+        "desc": "Đường truyền tới ngân hàng phát hành bị cắt đột ngột.",
+        "tech": "Toxiproxy reset_peer · link DOWN",
+        "react": "Hệ thống tự kết nối lại. Các lệnh hủy chưa gửi được nằm trong hàng đợi và sẽ gửi khi đường truyền trở lại.",
+        "reactTech": "reconnect backoff 1s→8s · SAF giữ 0420"
       },
       "DROP_RESPONSE": {
-        "easyText": "Mất phản hồi",
-        "technicalText": "Issuer xử lý xong nhưng phản hồi bị hủy trước khi tới gateway",
-        "reaction": "Gateway hết thời gian chờ, coi kết quả là chưa rõ, và gửi một lệnh đảo để đảm bảo an toàn"
+        "title": "Mất câu trả lời",
+        "desc": "Yêu cầu tới nơi, nhưng câu trả lời bị thất lạc trên đường về.",
+        "tech": "Drop 0210 → timeout → 0420",
+        "react": "Chờ quá 30 giây, hệ thống gửi lệnh hủy. Ngân hàng hoàn lại tiền nếu lỡ đã trừ.",
+        "reactTech": "0200 timeout → 0420 field 90 → 0430"
       },
       "DUPLICATE_REQUEST": {
-        "easyText": "Yêu cầu trùng lặp",
-        "technicalText": "Cùng một request được gửi hai lần với cùng STAN/RRN",
-        "reaction": "Issuer nhận ra bản trùng lặp và trả lại kết quả gốc thay vì xử lý lại lần nữa"
+        "title": "Gửi trùng",
+        "desc": "Cùng một giao dịch bị gửi hai lần vì lỗi mạng.",
+        "tech": "Duplicate 0200 · cùng STAN + field 7",
+        "react": "Ngân hàng phát hành nhận ra đây là giao dịch trùng và trả lại kết quả cũ, không trừ tiền lần hai.",
+        "reactTech": "uq_tran_dedupe hit → replay 0210 cũ"
       },
       "ISSUER_DOWN": {
-        "easyText": "Issuer ngừng hoạt động",
-        "technicalText": "Kết nối tới issuer bị reset và luôn không khả dụng",
-        "reaction": "Xử lý dự phòng (stand-in) tiếp quản, tự động duyệt các giao dịch nhỏ trong hạn mức đã đặt trước"
+        "title": "Ngân hàng phát hành sập",
+        "desc": "Hệ thống lõi của ngân hàng phát hành ngừng hoạt động.",
+        "tech": "Issuer core down → STIP",
+        "react": "Chế độ duyệt thay bật lên: giao dịch nhỏ vẫn được duyệt và sẽ được báo lại cho ngân hàng khi hệ thống phục hồi.",
+        "reactTech": "circuit OPEN · STIP limit 500.000 ₫ · 0120/0220 vào SAF"
       },
       "LATE_RESPONSE": {
-        "easyText": "Phản hồi trễ",
-        "technicalText": "Issuer trả lời sau khi gateway đã hết thời gian chờ",
-        "reaction": "Gateway đã gửi lệnh đảo trước đó, nên phản hồi trễ này bị bỏ qua"
+        "title": "Câu trả lời đến muộn",
+        "desc": "Câu trả lời về tới nơi sau khi đã hết thời gian chờ.",
+        "tech": "Delay 0210 > timeout → late response",
+        "react": "Giao dịch đã được hủy trước đó nên câu trả lời muộn chỉ được ghi lại để theo dõi, không làm thay đổi tiền.",
+        "reactTech": "late 0210 → log + metric late_response_total"
       }
     }
   },

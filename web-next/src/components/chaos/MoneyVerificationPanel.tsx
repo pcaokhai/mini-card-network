@@ -1,66 +1,66 @@
 import { useTranslations } from "next-intl";
-import { useEffect, useRef, useState } from "react";
 import { formatMoney } from "@/shared/format/money";
 import type { ChaosRun } from "@/shared/api/chaos-client";
-
-type Result = "pending" | "ok" | "discrepancy";
+import { ledgerRows, runVerdict, type LedgerValue, type RunVerdict } from "./chaos-model";
 
 const CURRENCY_VND = "704";
+const BADGE_TONE: Record<RunVerdict, string> = { none: "info", pending: "info", ok: "ok", discrepancy: "bad" };
 
-function resultFor(status: ChaosRun["status"]): Result {
-  if (status === "PASSED") return "ok";
-  if (status === "FAILED") return "discrepancy";
-  return "pending";
-}
-
-export function MoneyVerificationPanel({ run }: { run: ChaosRun | undefined }) {
+/** "Kiểm chứng tiền": the latest run's ledger invariant, with the zero difference flashing green on completion. */
+export function MoneyVerificationPanel({ run, expert }: { run: ChaosRun | undefined; expert: boolean }) {
   const t = useTranslations("chaos.money");
-  const previousStatusRef = useRef<ChaosRun["status"] | undefined>(undefined);
-  const [flash, setFlash] = useState(false);
+  const verdict = runVerdict(run);
+  const mode = expert ? "expert" : "easy";
 
-  const result = run ? resultFor(run.status) : "pending";
-
-  useEffect(() => {
-    const previous = previousStatusRef.current;
-    previousStatusRef.current = run?.status;
-    if (run && previous !== run.status && (run.status === "PASSED" || run.status === "FAILED")) {
-      setFlash(true);
-      const timeout = setTimeout(() => setFlash(false), 600);
-      return () => clearTimeout(timeout);
+  const valueText = (value: LedgerValue) => {
+    switch (value.kind) {
+      case "none":
+        return "—";
+      case "pending":
+        return "…";
+      case "count":
+        return t("count", { count: value.amount });
+      case "debit":
+        return `−${formatMoney({ amount: value.amount, currency: CURRENCY_VND })}`;
+      case "money":
+        return formatMoney({ amount: value.amount, currency: CURRENCY_VND });
     }
-  }, [run, run?.status]);
+  };
 
   return (
-    <section
-      aria-labelledby="chaos-money-heading"
-      data-testid="money-verification"
-      data-result={result}
-      className={flash ? "money-verification--flash rounded-card border border-border bg-surface p-4" : "rounded-card border border-border bg-surface p-4"}
-    >
-      <h2 id="chaos-money-heading" className="mb-2 text-sm font-semibold">
-        {t("heading")}
-      </h2>
-      {run ? (
-        <dl className="grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <dt className="text-xs text-muted">{t("opening")}</dt>
-            <dd className="font-mono">{formatMoney({ amount: run.openingBalanceTotal ?? 0, currency: CURRENCY_VND })}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-muted">{t("closing")}</dt>
-            <dd className="font-mono">{formatMoney({ amount: run.closingBalanceTotal ?? 0, currency: CURRENCY_VND })}</dd>
-          </div>
-          <div className="col-span-2">
-            <dt className="text-xs text-muted">{t("discrepancy")}</dt>
-            <dd className="font-mono">{formatMoney({ amount: run.ledgerDiscrepancy ?? 0, currency: CURRENCY_VND })}</dd>
-          </div>
-          {result === "discrepancy" && (
-            <div className="col-span-2 text-sm font-semibold text-bad">{t("discrepancyRun", { runId: run.runId })}</div>
+    <section aria-labelledby="chaos-money-heading" data-testid="money-verification" data-result={verdict} className="chaos-panel chaos-money">
+      <div className="chaos-money__head">
+        <h2 id="chaos-money-heading" className="chaos-panel__heading">
+          {t("heading")}
+        </h2>
+        <span className="chaos-pill" data-tone={BADGE_TONE[verdict]} role="status">
+          {verdict === "ok" && (
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M5 12l5 5 9-10" />
+            </svg>
           )}
-        </dl>
-      ) : (
-        <p className="text-sm text-muted">{t("empty")}</p>
-      )}
+          {t(`badge.${verdict}`)}
+        </span>
+      </div>
+      <p className="chaos-panel__note">{t("note")}</p>
+      <dl className="chaos-ledger">
+        {ledgerRows(run).map((row) => (
+          <div key={row.key} className="chaos-ledger__row">
+            <dt>{t(`${mode}.${row.key}`, { count: row.count === undefined ? "—" : new Intl.NumberFormat("vi-VN").format(row.count) })}</dt>
+            <dd
+              // Keyed by run so the green flash replays for every finished run (Ruling R6).
+              key={run?.runId}
+              className="chaos-ledger__value"
+              data-testid={`ledger-${row.key}-value`}
+              data-tone={row.tone}
+              data-flash={row.tone === "ok" ? true : undefined}
+            >
+              {valueText(row.value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {verdict === "discrepancy" && run && <p className="chaos-ledger__alert">{t("discrepancyRun", { runId: run.runId })}</p>}
     </section>
   );
 }
