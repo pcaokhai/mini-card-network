@@ -36,6 +36,13 @@ func TestLoad_defaults__MCN_005_AC1(t *testing.T) {
 	require.False(t, cfg.TracingEnabled)
 	require.Equal(t, "toxiproxy:18000", cfg.IssuerAddr)
 	require.Empty(t, cfg.DatabaseURL)
+	require.Empty(t, cfg.CORSAllowedOrigin) // unset means CORS middleware stays off
+}
+
+func TestLoad_corsAllowedOrigin__R10(t *testing.T) {
+	cfg, err := Load(env(withLMK(map[string]string{"CORS_ALLOWED_ORIGIN": "http://localhost:3000"})))
+	require.NoError(t, err)
+	require.Equal(t, "http://localhost:3000", cfg.CORSAllowedOrigin)
 }
 
 func TestLoad_overrides(t *testing.T) {

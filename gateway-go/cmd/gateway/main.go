@@ -100,6 +100,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	health := api.NewHealth()
 	r := chi.NewRouter()
+	r.Use(api.CORSMiddleware(cfg.CORSAllowedOrigin))
 	api.NewRouter(r, health)
 	api.MountLab(r)
 	api.MountNetwork(r, linkRepo, supervisor, safRepo)

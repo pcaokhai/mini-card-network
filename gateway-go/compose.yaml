@@ -16,6 +16,10 @@ services:
       # identical key material to interoperate (MCN-504's DE 48 lesson).
       LMK_TEST_VALUE_HEX: "7efceea1547be94806b5cbf318eab4065aa4c7ba5cf875a12d7cc613d8d18141" #gitleaks:allow
       ZMK_HEX: "0000000000000000000000000000000000000000000000000000000000000000" #gitleaks:allow
+      # Empty by default (CORS off). Local dev only - web-next's real BFF proxy doesn't exist
+      # yet (docs/09-risk-register.md R-10), so the browser calls this gateway directly and
+      # needs CORS to do it. Never set in a topology with a real server-side proxy.
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-}
     ports: ["8080:8080", "9464:9464"]
     stop_grace_period: 35s
     depends_on: [otel-collector, postgres]

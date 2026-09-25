@@ -24,6 +24,11 @@ type Config struct {
 	ChaosFakeIssuerAddr string
 	LMKTestValueHex     string
 	ZMK                 []byte
+	// CORSAllowedOrigin is empty by default (CORS middleware off - safe for a topology where a
+	// server-side BFF calls the gateway, never a browser directly). Set it only for local dev
+	// where web-next talks to the gateway straight from the browser (docs/09-risk-register.md
+	// R-10 - the real BFF proxy this workaround stands in for doesn't exist yet).
+	CORSAllowedOrigin string
 }
 
 // Load reads configuration through getenv (os.Getenv in production, a map in tests).
@@ -38,6 +43,7 @@ func Load(getenv func(string) string) (Config, error) {
 		ToxiproxyAdminAddr:  valueOr(getenv("TOXIPROXY_ADMIN_ADDR"), "http://toxiproxy:8474"),
 		IssuerProxyName:     valueOr(getenv("ISSUER_PROXY_NAME"), "issuer"), // infra/toxiproxy/toxiproxy.json
 		ChaosFakeIssuerAddr: getenv("CHAOS_FAKE_ISSUER_ADDR"),               // empty means off (MCN-407)
+		CORSAllowedOrigin:   getenv("CORS_ALLOWED_ORIGIN"),                  // empty means off (R-10)
 	}
 	timeout, err := time.ParseDuration(valueOr(getenv("SHUTDOWN_TIMEOUT"), "30s"))
 	if err != nil {
