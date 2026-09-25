@@ -38,7 +38,7 @@ export function OverviewScreen() {
     <section aria-labelledby="overview-heading" className="flex flex-col gap-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 id="overview-heading" className="text-[30px] font-bold tracking-tight">
+          <h1 id="overview-heading" className="text-[30px] font-bold tracking-[-0.01em]">
             {t("title")}
           </h1>
           {/* The date is the viewer's local day; the server has no timezone to match it. */}

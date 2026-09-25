@@ -28,6 +28,7 @@ const OVERVIEW: Omit<Overview, "throughput"> = {
   transactionsDeltaPct: 0.12,
   approvalRate: 0.942,
   p99LatencyMs: 212,
+  p50LatencyMs: 96,
   ledgerMatches: true,
   declineReasons: [
     { responseCode: "51", label: "Không đủ tiền", share: 0.41 },

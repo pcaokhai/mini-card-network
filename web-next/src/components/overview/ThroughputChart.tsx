@@ -1,6 +1,9 @@
 import { useTranslations } from "next-intl";
 import type { Overview } from "@/shared/api/overview-client";
 
+// The canvas grows each bar 25 ms after the one before it.
+const BAR_STAGGER_MS = 25;
+
 export function ThroughputChart({ throughput }: { throughput: Overview["throughput"] }) {
   const t = useTranslations("overview.throughput");
   const maxTps = Math.max(1, ...throughput.map((sample) => sample.tps));
@@ -17,7 +20,9 @@ export function ThroughputChart({ throughput }: { throughput: Overview["throughp
           key={sample.at + index}
           className={index === lastIndex ? "throughput-bar throughput-bar--latest" : "throughput-bar"}
           style={{ transform: `scaleY(${sample.tps / maxTps})` }}
-        />
+        >
+          <div className="throughput-bar__fill animate-mcn-grow" style={{ animationDelay: `${index * BAR_STAGGER_MS}ms` }} />
+        </div>
       ))}
     </div>
   );

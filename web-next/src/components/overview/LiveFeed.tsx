@@ -5,6 +5,10 @@ import { useWsEvents, type WsEnvelope } from "@/shared/ws/useWsEvents";
 import { ThroughputChart } from "@/components/overview/ThroughputChart";
 import { useRecentTransactions } from "@/shared/api/overview-client";
 import { formatMoney } from "@/shared/format/money";
+import { useResultLabel } from "@/shared/i18n/useResultLabel";
+import { stagger } from "@/shared/motion/tokens";
+import { PulseDot } from "@/shared/ui/PulseDot";
+import { Term } from "@/shared/ui/Term";
 import type { components } from "@/shared/api/generated/schema";
 import type { Overview } from "@/shared/api/overview-client";
 
@@ -13,6 +17,7 @@ type TransactionSummary = components["schemas"]["TransactionSummary"];
 const MAX_ROWS = 30;
 const BATCH_THRESHOLD_PER_SEC = 5;
 const BATCH_WINDOW_MS = 500;
+const STAGGER_MS = stagger.step * 1000;
 
 const EVENT_TYPES = ["transaction.created", "transaction.updated"];
 
@@ -34,12 +39,6 @@ const STATUS_TONE: Record<TransactionSummary["status"], keyof typeof TONE_CLASSE
   REVERSED: "rev",
 };
 
-/** MCN-306-AC3: Expert mode shows the ISO 8583 response code beside the plain-language result. */
-function statusText(row: TransactionSummary, expert: boolean): string {
-  const label = row.responseLabel ?? row.status;
-  return expert && row.responseCode ? `${label} · RC ${row.responseCode}` : label;
-}
-
 function last4(maskedPan: string | undefined): string {
   return maskedPan === undefined ? "" : maskedPan.slice(-4);
 }
@@ -48,6 +47,13 @@ function timeOf(createdAt: string | undefined): string {
   if (createdAt === undefined) return "";
   const parsed = new Date(createdAt);
   return Number.isNaN(parsed.getTime()) ? "" : parsed.toLocaleTimeString("vi-VN", { hour12: false });
+}
+
+/** Newest first, one row per RRN: a transaction.updated event replaces the row it updates. */
+function mergeNewestFirst(incoming: TransactionSummary[], current: TransactionSummary[]): TransactionSummary[] {
+  const newestFirst = [...incoming].reverse();
+  const seen = new Set(newestFirst.map((row) => row.rrn));
+  return [...newestFirst, ...current.filter((row) => !seen.has(row.rrn))].slice(0, MAX_ROWS);
 }
 
 export function LiveFeed({
@@ -60,14 +66,18 @@ export function LiveFeed({
   const t = useTranslations("overview.liveFeed");
   const tChart = useTranslations("overview.throughput");
   const tOverview = useTranslations("overview");
-  const [rows, setRows] = useState<TransactionSummary[]>([]);
+  const label = useResultLabel();
+  const [liveRows, setLiveRows] = useState<TransactionSummary[]>([]);
+  // RRNs that arrived over the WebSocket; only these get the slide-in highlight.
+  const [arrived, setArrived] = useState<ReadonlySet<string>>(new Set());
   const { data: seeded } = useRecentTransactions();
   const recentTimestampsRef = useRef<number[]>([]);
   const pendingRef = useRef<TransactionSummary[]>([]);
   const flushScheduledRef = useRef(false);
 
   function appendRows(incoming: TransactionSummary[]) {
-    setRows((current) => [...current, ...incoming].slice(-MAX_ROWS));
+    setLiveRows((current) => mergeNewestFirst(incoming, current));
+    setArrived((current) => new Set([...current, ...incoming.map((row) => row.rrn)]));
   }
 
   function scheduleFlush() {
@@ -99,8 +109,8 @@ export function LiveFeed({
     }
   });
 
-  // WS events are the live source; the REST snapshot only fills the table until one arrives.
-  const visibleRows = rows.length > 0 ? rows : (seeded ?? []);
+  // The REST snapshot sits under the live rows so the first event adds to the table instead of replacing it.
+  const visibleRows = mergeNewestFirst([...liveRows].reverse(), seeded ?? []);
   const rowClass = expertMode ? "feed-row feed-row--expert" : "feed-row";
 
   return (
@@ -111,10 +121,7 @@ export function LiveFeed({
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-[17px] font-semibold">{t("heading")}</h2>
         <span className="flex items-center gap-2 text-[13px] font-medium text-ok">
-          <span aria-hidden className="relative size-2 shrink-0">
-            <span className="absolute inset-0 animate-ping rounded-full bg-current motion-reduce:animate-none" />
-            <span className="absolute inset-0 rounded-full bg-current" />
-          </span>
+          <PulseDot />
           {t("liveBadge")}
         </span>
       </div>
@@ -129,51 +136,66 @@ export function LiveFeed({
         <span>{t("merchant")}</span>
         <span>{t("card")}</span>
         <span className="text-right">{t("amount")}</span>
-        {expertMode && <span>{t("rrn")}</span>}
+        {expertMode && (
+          <span>
+            <Term id="rrn" />
+          </span>
+        )}
         <span>{t("result")}</span>
       </div>
 
-      <ul aria-label={t("heading")} data-testid="live-feed-list" className="flex flex-col">
-        {visibleRows.length === 0 && <li className="py-3 text-sm text-muted">{t("empty")}</li>}
-        {visibleRows.map((row, index) => (
-          <li
-            key={`${row.rrn}-${index}`}
-            className={`feed-row--flash ${rowClass} border-b border-[#F0EEE8] py-2.5 text-sm last:border-b-0`}
-          >
-            <span className="font-mono text-[13px] text-muted">{timeOf(row.createdAt)}</span>
-            <span className="truncate font-medium">{row.merchantName}</span>
-            <span className="font-mono text-[13px]">
-              <span aria-hidden>•••• </span>
-              {last4(row.maskedPan)}
-            </span>
-            <span className="text-right font-semibold tabular-nums">
-              {row.amount === undefined ? "" : formatMoney(row.amount)}
-            </span>
-            {/* Easy mode hides the RRN per the design canvas, but every row stays
-                identifiable to screen readers and to the journey link. */}
-            <Link
-              href={`/transactions/${row.rrn}`}
-              className={
-                expertMode
-                  ? "font-mono text-xs text-muted hover:underline"
-                  : "sr-only"
-              }
+      <ul aria-label={t("heading")} data-testid="live-feed-list" aria-live="polite" className="flex flex-col gap-4">
+        {visibleRows.length === 0 && <li className="text-sm text-muted">{t("empty")}</li>}
+        {visibleRows.map((row, index) => {
+          const isNew = arrived.has(row.rrn);
+          const result = label.forTransaction(row.status, row.responseCode, row.responseLabel);
+          return (
+            <li
+              key={row.rrn}
+              data-new={isNew || undefined}
+              className={`${rowClass} relative border-b border-[#F0EEE8] py-2.5 text-sm last:border-b-0 ${
+                isNew ? "animate-mcn-row-in" : "animate-mcn-fade-up"
+              }`}
+              style={isNew ? undefined : { animationDelay: `${Math.min(index, stagger.maxItems) * STAGGER_MS}ms` }}
             >
-              {row.rrn}
-            </Link>
-            <span>
-              <span
-                data-testid="feed-status"
-                className={`inline-flex h-6.5 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-xs font-semibold ${
-                  TONE_CLASSES[STATUS_TONE[row.status] ?? "warn"]
-                }`}
-              >
-                <span aria-hidden className="size-1.5 rounded-full bg-current" />
-                {statusText(row, expertMode)}
+              {isNew && (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute -inset-x-2 inset-y-0 animate-mcn-row-flash rounded-md bg-[#FFF3D6]"
+                />
+              )}
+              <span className="relative font-mono text-[13px] text-muted">{timeOf(row.createdAt)}</span>
+              <span className="relative truncate font-medium">{row.merchantName}</span>
+              <span className="relative font-mono text-[13px]">
+                <span aria-hidden>•••• </span>
+                {last4(row.maskedPan)}
               </span>
-            </span>
-          </li>
-        ))}
+              <span className="relative text-right font-semibold tabular-nums">
+                {row.amount === undefined ? "" : formatMoney(row.amount)}
+              </span>
+              {/* Easy mode hides the RRN per the design canvas, but every row stays
+                  identifiable to screen readers and to the journey link. */}
+              <Link
+                href={`/transactions/${row.rrn}`}
+                className={expertMode ? "relative font-mono text-xs text-muted hover:underline" : "sr-only"}
+              >
+                {row.rrn}
+              </Link>
+              <span className="relative">
+                <span
+                  data-testid="feed-status"
+                  className={`inline-flex h-6.5 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-xs font-semibold ${
+                    TONE_CLASSES[STATUS_TONE[row.status] ?? "warn"]
+                  }`}
+                >
+                  <span aria-hidden className="size-1.5 rounded-full bg-current" />
+                  {/* MCN-306-AC3: Expert mode shows the ISO 8583 response code beside the result. */}
+                  {expertMode && row.responseCode ? `${result} · RC ${row.responseCode}` : result}
+                </span>
+              </span>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
