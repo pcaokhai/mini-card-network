@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import createClient from "openapi-fetch";
+import { apiBaseUrl } from "@/shared/api/base-url";
 import type { paths, components } from "@/shared/api/generated/schema";
 
 export type Overview = components["schemas"]["Overview"];
 
-const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-const client = createClient<paths>({ baseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? `${origin}/api` });
+const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 
 // openapi-fetch reads `globalThis.fetch` at createClient() time, before MSW patches it in
 // tests (see network-client.ts) — pass a thunk so each request uses the current global fetch.
@@ -25,5 +25,26 @@ export function useOverview() {
       return data;
     },
     refetchInterval: REFETCH_INTERVAL_MS,
+  });
+}
+
+const RECENT_TRANSACTIONS_KEY = ["transactions", "recent"] as const;
+const RECENT_TRANSACTIONS_LIMIT = 8;
+
+/**
+ * Seeds the live feed so the console is not blank before the first WebSocket event
+ * arrives; new events are appended on top of this snapshot.
+ */
+export function useRecentTransactions() {
+  return useQuery({
+    queryKey: RECENT_TRANSACTIONS_KEY,
+    queryFn: async () => {
+      const { data, error } = await client.GET("/v1/transactions", {
+        params: { query: { limit: RECENT_TRANSACTIONS_LIMIT } },
+        fetch: liveFetch,
+      });
+      if (error) throw error;
+      return data.items;
+    },
   });
 }

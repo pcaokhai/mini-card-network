@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import createClient from "openapi-fetch";
+import { apiBaseUrl } from "@/shared/api/base-url";
 import type { paths } from "@/shared/api/generated/schema";
 import type { DecodedMessage } from "@/shared/state/message-lab";
 
@@ -7,8 +8,7 @@ import type { DecodedMessage } from "@/shared/state/message-lab";
 // (a bare "/api" throws "Invalid URL" in Node/jsdom); resolve against the current
 // origin in the browser/jsdom, falling back to a placeholder origin during SSR/build
 // where this client is never actually called (the screen is a "use client" component).
-const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-const client = createClient<paths>({ baseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? `${origin}/api` });
+const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 
 /** MCN-103's Lab API; served by MSW in mock mode, the real gateway once wired up. */
 export function useDecodeMessage() {

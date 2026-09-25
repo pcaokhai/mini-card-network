@@ -8,7 +8,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <Header />
-        <main className="flex-1 px-8 py-7">{children}</main>
+        <main className="min-w-0 flex-1 bg-canvas px-8 py-7">{children}</main>
       </div>
     </div>
   );

@@ -9,8 +9,16 @@ export function MockProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(!MOCKS_ENABLED);
   useEffect(() => {
     if (!MOCKS_ENABLED) return;
-    void import("@/mocks/generated/browser").then(({ worker }) =>
-      worker.start({ onUnhandledRequest: "bypass" }).then(() => setReady(true)),
+    // Scenario handlers go first so they win over the faker-generated ones, which
+    // answer with schema-shaped noise rather than the design canvas's numbers.
+    void Promise.all([
+      import("msw/browser"),
+      import("@/mocks/scenario-handlers"),
+      import("@/mocks/generated/handlers"),
+    ]).then(([{ setupWorker }, { scenarioHandlers }, { handlers }]) =>
+      setupWorker(...scenarioHandlers, ...handlers)
+        .start({ onUnhandledRequest: "bypass" })
+        .then(() => setReady(true)),
     );
   }, []);
   return ready ? children : null;
