@@ -293,3 +293,13 @@ func (r *IdempotencyRepository) Store(ctx context.Context, key, route, requestHa
 		key, route, requestHash, status, body, time.Now().UTC())
 	return err
 }
+
+// LastSTANInRRNPrefix returns the highest STAN used in an RRN starting with prefix ("Y DDD hh",
+// docs/03 §5), or 0 when there is none: where a restarted gateway resumes its STAN count.
+func (r *TranLogRepository) LastSTANInRRNPrefix(ctx context.Context, prefix string) (int64, error) {
+	var last int64
+	err := r.pool.QueryRow(ctx,
+		`SELECT coalesce(max(substring(rrn FROM 7 FOR 6)::int), 0) FROM tran_log WHERE rrn LIKE $1 || '%'`,
+		prefix).Scan(&last)
+	return last, err
+}

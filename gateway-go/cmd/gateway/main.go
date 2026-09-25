@@ -67,7 +67,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	defer pool.Close()
 	linkRepo := store.NewLinkRepository(pool)
-	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoFailureLimit: 3}, linkRepo)
+	lastSTAN := func(ctx context.Context) (int64, error) {
+		return store.NewTranLogRepository(pool).LastSTANInRRNPrefix(ctx, purchase.BuildRRN(time.Now().UTC(), ""))
+	}
+	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoFailureLimit: 3, LastSTAN: lastSTAN}, linkRepo)
 	hub := ws.NewHub()
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)

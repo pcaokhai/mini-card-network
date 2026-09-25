@@ -160,3 +160,20 @@ func TestTranLogRepository_roundTripsTheFieldsAReversalNeeds__MCN_401(t *testing
 	require.NoError(t, err)
 	require.Equal(t, "000124", page[0].NetworkSTAN, "list rows carry the STAN too")
 }
+
+func TestTranLogRepository_lastSTANInTheHoursRRNPrefix__MCN_203(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	for _, rrn := range []string{"626805000007", "626805000248", "626804000999", "626806000001"} {
+		_, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "APPROVED", Amount: 1000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID})
+		require.NoError(t, err)
+	}
+
+	last, err := repo.LastSTANInRRNPrefix(ctx, "626805")
+	require.NoError(t, err)
+	require.Equal(t, int64(248), last)
+
+	none, err := repo.LastSTANInRRNPrefix(ctx, "626807")
+	require.NoError(t, err)
+	require.Zero(t, none)
+}

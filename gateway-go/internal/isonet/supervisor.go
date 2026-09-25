@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mcn/gateway-go/internal/obs"
@@ -32,6 +34,9 @@ type Config struct {
 	EchoTimeout      time.Duration
 	EchoFailureLimit int
 	Backoff          Backoff
+	// LastSTAN reports the highest STAN already used under this hour's RRN prefix, so Run
+	// resumes past it after a restart (nil starts from 000001).
+	LastSTAN func(ctx context.Context) (int64, error)
 }
 
 const endpointName = "issuer" // v1 has exactly one link; the switch (Sprint 10) adds more.
@@ -60,6 +65,10 @@ type Supervisor struct {
 	// and the automatic echo ticker never send on the same Mux concurrently.
 	triggerMu sync.Mutex
 	mux       *Mux
+
+	// stan outlives each connection: the RRN (docs/03 §5) is the hour plus the STAN, so a count
+	// restarting on reconnect would reissue RRNs already used this hour.
+	stan atomic.Int64
 }
 
 // NewSupervisor builds a Supervisor that reports link state through store.
@@ -180,6 +189,16 @@ func (s *Supervisor) recordEvent(ctx context.Context, severity, easyText, techni
 
 // Run supervises the link until ctx is cancelled.
 func (s *Supervisor) Run(ctx context.Context) error {
+	if s.cfg.LastSTAN != nil {
+		last, err := s.cfg.LastSTAN(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil // shut down before the first connection
+			}
+			return fmt.Errorf("resume STAN count: %w", err)
+		}
+		s.ResumeSTANAfter(last)
+	}
 	attempt := 0
 	for {
 		select {
@@ -205,6 +224,19 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 }
 
+func (s *Supervisor) newMux(conn io.ReadWriter) *Mux { return newMuxCounting(conn, &s.stan) }
+
+// ResumeSTANAfter continues the STAN count after last, the highest STAN already used under this
+// hour's RRN prefix, so a restarted gateway never reissues an RRN. It never moves the count back.
+func (s *Supervisor) ResumeSTANAfter(last int64) {
+	for {
+		cur := s.stan.Load()
+		if last <= cur || s.stan.CompareAndSwap(cur, last) {
+			return
+		}
+	}
+}
+
 // runOnce connects, signs on, and echoes until the link fails or ctx is cancelled.
 func (s *Supervisor) runOnce(ctx context.Context) error {
 	conn, err := net.Dial("tcp", s.cfg.Addr)
@@ -214,7 +246,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	defer func() { _ = conn.Close() }()
 	s.setStatus(ctx, "CONNECTED")
 
-	mux := NewMux(conn)
+	mux := s.newMux(conn)
 	mux.OnLateResponse(func(mti string, fields map[int]string) {
 		obs.LateResponseTotal.Inc()
 		if s.onLateResponse != nil {
