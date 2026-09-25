@@ -149,7 +149,7 @@ class CardAdminApiIntegrationTest {
 
   @Test
   void blockCardWritesAnAuditLogEntry() throws Exception {
-    var auditRepo = new AuditLogRepository(TestDataSources.migrated(postgres));
+    var auditRepo = new AuditLogRepository(ds);
     var response =
         post(
             "/v1/cards/crd_normal0001/blocks",
@@ -176,7 +176,7 @@ class CardAdminApiIntegrationTest {
     var mapper = new ObjectMapper();
     assertThat(mapper.readTree(second.body())).isEqualTo(mapper.readTree(first.body()));
 
-    var auditRepo = new AuditLogRepository(TestDataSources.migrated(postgres));
+    var auditRepo = new AuditLogRepository(ds);
     assertThat(auditRepo.findByEntity("card", "crd_lowbal0002")).hasSize(1);
   }
 
@@ -532,6 +532,71 @@ class CardAdminApiIntegrationTest {
       assertThat(results.stream().filter(s -> s == 200).count()).isEqualTo(1);
     }
     assertThat(new AuditLogRepository(ds).findByEntity("card", cardRef)).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("CARDS-G6: writers queued on the card lock can't starve the lock holder's pool")
+  void should_notStarveThePool_when_moreWritersThanConnectionsQueueOnOneCard() throws Exception {
+    String cardRef = newCard("ACTIVE", "3012");
+    var cfg = new com.zaxxer.hikari.HikariConfig();
+    cfg.setJdbcUrl(postgres.getJdbcUrl());
+    cfg.setUsername(postgres.getUsername());
+    cfg.setPassword(postgres.getPassword());
+    cfg.setMaximumPoolSize(2);
+    cfg.setConnectionTimeout(2_000);
+    try (var tinyPool = new HikariDataSource(cfg)) {
+      var tinyServer =
+          new HealthServer(
+              new Readiness(),
+              new CardAdminController(
+                  tinyPool,
+                  new CardRepository(tinyPool),
+                  new AccountRepository(tinyPool),
+                  new CardLimitRepository(tinyPool),
+                  new AuditLogRepository(tinyPool),
+                  new IdempotencyRepository(tinyPool),
+                  new LedgerRepository(),
+                  new BusinessDateRepository(tinyPool)));
+      int tinyPort = tinyServer.start(0);
+      try {
+        String etag = etagOf(cardRef);
+        var start = new CountDownLatch(1);
+        List<Future<Integer>> statuses = new ArrayList<>();
+        try (var pool = Executors.newFixedThreadPool(6)) {
+          for (int i = 0; i < 6; i++) {
+            String body = limitsBody(100_000, 2_000_000 + i, "704", 5);
+            statuses.add(
+                pool.submit(
+                    () -> {
+                      start.await();
+                      var request =
+                          HttpRequest.newBuilder(
+                                  URI.create(
+                                      "http://127.0.0.1:"
+                                          + tinyPort
+                                          + "/v1/cards/"
+                                          + cardRef
+                                          + "/limits"))
+                              .header("Content-Type", "application/json")
+                              .header("Idempotency-Key", UUID.randomUUID().toString())
+                              .header("If-Match", etag)
+                              .PUT(HttpRequest.BodyPublishers.ofString(body))
+                              .build();
+                      return client
+                          .send(request, HttpResponse.BodyHandlers.ofString())
+                          .statusCode();
+                    }));
+          }
+          start.countDown();
+          List<Integer> results = new ArrayList<>();
+          for (var f : statuses) results.add(f.get(60, TimeUnit.SECONDS));
+          assertThat(results).containsOnly(200, 412);
+          assertThat(results.stream().filter(s -> s == 200).count()).isEqualTo(1);
+        }
+      } finally {
+        tinyServer.stop();
+      }
+    }
   }
 
   @Test

@@ -59,6 +59,21 @@ public final class CardAdminController {
 
   private record Paging(int limit, Long cursor) {}
 
+  /**
+   * The reads a {@code CardDetail} needs besides the card and its limits, taken before a write
+   * opens its transaction: each uses its own pooled connection, and a request holding the card's
+   * row lock must never wait for a second one (N writers queued on the lock could hold the pool).
+   */
+  private record CardReads(LocalDate businessDate, AccountSummary account, long usedToday) {}
+
+  private CardReads readsFor(Card card) {
+    LocalDate businessDate = businessDates.current();
+    return new CardReads(
+        businessDate,
+        accounts.findById(card.accountId()).orElseThrow(),
+        cardLimits.amountToday(card.id(), businessDate));
+  }
+
   public CardAdminController(
       DataSource dataSource,
       CardRepository cards,
@@ -116,7 +131,7 @@ public final class CardAdminController {
       return;
     }
     List<CardLimit> limits = cardLimits.findAllForCard(card.get().id());
-    Map<String, Object> body = cardDetail(card.get(), limits, businessDates.current());
+    Map<String, Object> body = cardDetail(card.get(), limits, readsFor(card.get()));
     ctx.header("ETag", etagFor(limits, body));
     ctx.json(body);
   }
@@ -142,9 +157,15 @@ public final class CardAdminController {
       return;
     }
 
+    Optional<Card> card = cards.findByCardRef(ctx.pathParam("cardRef"));
+    if (card.isEmpty()) {
+      notFound(ctx);
+      return;
+    }
+    CardReads reads = readsFor(card.get());
     try (Connection conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
-      transitionUnderLock(ctx, conn, reason, idempotencyKey, route, requestHash);
+      transitionUnderLock(ctx, conn, reason, reads, idempotencyKey, route, requestHash);
     } catch (SQLException e) {
       throw new IllegalStateException("block/unblock card failed", e);
     }
@@ -158,6 +179,7 @@ public final class CardAdminController {
       Context ctx,
       Connection conn,
       Optional<BlockReason> reason,
+      CardReads reads,
       String idempotencyKey,
       String route,
       String requestHash)
@@ -169,8 +191,8 @@ public final class CardAdminController {
       return;
     }
     Card card = locked.get();
-    LocalDate businessDate = businessDates.current();
-    String current = CardLifecycle.effectiveStatus(card.status(), card.expiryYymm(), businessDate);
+    String current =
+        CardLifecycle.effectiveStatus(card.status(), card.expiryYymm(), reads.businessDate());
     boolean block = reason.isPresent();
     if (!current.equals(block ? "ACTIVE" : "BLOCKED")) {
       conn.rollback();
@@ -192,7 +214,7 @@ public final class CardAdminController {
         jsonOf(Map.of("status", current)),
         jsonOf(after));
     List<CardLimit> limits = cardLimits.findAllForCard(conn, card.id());
-    Map<String, Object> body = cardDetail(withStatus(card, newStatus), limits, businessDate);
+    Map<String, Object> body = cardDetail(withStatus(card, newStatus), limits, reads);
     idempotency.store(conn, idempotencyKey, route, requestHash, 200, jsonOf(body));
     conn.commit();
     ctx.status(200).json(body);
@@ -214,13 +236,14 @@ public final class CardAdminController {
       notFound(ctx);
       return;
     }
-    String currency = accounts.findById(card.get().accountId()).orElseThrow().currency();
-    switch (CardLimitsRequest.parse(ctx.body(), currency)) {
+    CardReads reads = readsFor(card.get());
+    switch (CardLimitsRequest.parse(ctx.body(), reads.account().currency())) {
       case CardLimitsRequest.Invalid invalid -> ApiProblems.validation(ctx, invalid.errors());
       case CardLimitsRequest.Valid valid -> {
         try (Connection conn = dataSource.getConnection()) {
           conn.setAutoCommit(false);
-          saveLimitsUnderLock(ctx, conn, valid.request(), idempotencyKey, route, requestHash);
+          saveLimitsUnderLock(
+              ctx, conn, valid.request(), reads, idempotencyKey, route, requestHash);
         } catch (SQLException e) {
           throw new IllegalStateException("update card limits failed", e);
         }
@@ -237,6 +260,7 @@ public final class CardAdminController {
       Context ctx,
       Connection conn,
       CardLimitsRequest request,
+      CardReads reads,
       String idempotencyKey,
       String route,
       String requestHash)
@@ -259,7 +283,7 @@ public final class CardAdminController {
         List.of(
             new CardLimit("ALL", "PER_TXN", request.perTransactionAmount(), null),
             new CardLimit("ALL", "DAILY", request.dailyAmount(), request.dailyCount()));
-    String currency = accounts.findById(card.accountId()).orElseThrow().currency();
+    String currency = reads.account().currency();
     auditLog.record(
         conn,
         actor(ctx),
@@ -268,7 +292,7 @@ public final class CardAdminController {
         card.cardRef(),
         jsonOf(limitsAsMap(currentLimits, currency)),
         jsonOf(limitsAsMap(newLimits, currency)));
-    Map<String, Object> body = cardDetail(card, newLimits, businessDates.current());
+    Map<String, Object> body = cardDetail(card, newLimits, reads);
     idempotency.store(conn, idempotencyKey, route, requestHash, 200, jsonOf(body));
     conn.commit();
     ctx.header("ETag", etagFor(newLimits, body));
@@ -372,17 +396,15 @@ public final class CardAdminController {
     return m;
   }
 
-  private Map<String, Object> cardDetail(
-      Card card, List<CardLimit> limits, LocalDate businessDate) {
-    Map<String, Object> m = cardSummary(card, businessDate);
-    AccountSummary account = accounts.findById(card.accountId()).orElseThrow();
+  private Map<String, Object> cardDetail(Card card, List<CardLimit> limits, CardReads reads) {
+    Map<String, Object> m = cardSummary(card, reads.businessDate());
+    AccountSummary account = reads.account();
     m.put("ledgerBalance", money(account.ledgerBalance(), account.currency()));
     m.put("availableBalance", money(account.availableBalance(), account.currency()));
     // ponytail: no PREAUTH flow ships yet (MCN-603), so auth_hold is always empty for now.
     m.put("holds", List.of());
     m.put("limits", limitsAsMap(limits, account.currency()));
-    long usedToday = cardLimits.amountToday(card.id(), businessDate);
-    m.put("usedToday", money(usedToday, account.currency()));
+    m.put("usedToday", money(reads.usedToday(), account.currency()));
     return m;
   }
 
