@@ -42,6 +42,7 @@ type TranLogRow struct {
 	ProcessingCode string
 	POSEntryMode   string
 	SentAt         *time.Time // the moment DE 7 was built from
+	RespondedAt    *time.Time // set by UpdateStatus; the issuer's answer once the status is final
 	CardToken      string     // simulator token, never the PAN
 }
 
@@ -135,7 +136,7 @@ func (r *TranLogRepository) ListStateHistory(ctx context.Context, id int64) ([]S
 	return history, rows.Err()
 }
 
-const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at, coalesce(t.network_stan, ''), coalesce(t.processing_code, ''), coalesce(t.pos_entry_mode, ''), t.sent_at, coalesce(t.card_token, '')`
+const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at, coalesce(t.network_stan, ''), coalesce(t.processing_code, ''), coalesce(t.pos_entry_mode, ''), t.sent_at, coalesce(t.card_token, ''), t.responded_at`
 
 // Get reads the tran_log row for the given RRN.
 func (r *TranLogRepository) Get(ctx context.Context, rrn string) (TranLogRow, error) {
@@ -143,7 +144,7 @@ func (r *TranLogRepository) Get(ctx context.Context, rrn string) (TranLogRow, er
 	err := r.pool.QueryRow(ctx,
 		`SELECT `+tranLogSelectColumns+` FROM tran_log t JOIN merchant m ON m.mid = t.mid WHERE t.rrn = $1`, rrn,
 	).Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
-		&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken)
+		&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken, &row.RespondedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TranLogRow{}, ErrNotFound
 	}
@@ -225,7 +226,7 @@ func scanTranLogRows(rows pgx.Rows) ([]TranLogRow, error) {
 	for rows.Next() {
 		var row TranLogRow
 		if err := rows.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
-			&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken); err != nil {
+			&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken, &row.RespondedAt); err != nil {
 			return nil, err
 		}
 		row.RRN = strings.TrimSpace(row.RRN)

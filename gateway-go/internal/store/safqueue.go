@@ -2,7 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // SafRow is one saf_queue row (docs/05-data-model.md, docs/03 §7.3).
@@ -16,6 +19,8 @@ type SafRow struct {
 	MaxAttempts int
 	NextRetryAt time.Time
 	LastError   string
+	CreatedAt   time.Time  // read by FindReversal only
+	AckedAt     *time.Time // read by FindReversal only
 }
 
 // SafRepository persists saf_queue.
@@ -86,6 +91,20 @@ func (r *SafRepository) MarkInFlight(ctx context.Context, id int64, attempts int
 		`UPDATE saf_queue SET status = 'IN_FLIGHT', attempts = $2, next_retry_at = $3, last_error = $4 WHERE id = $1`,
 		id, attempts, nextRetryAt, lastError)
 	return err
+}
+
+// FindReversal returns tranID's latest 0420 row, or ErrNotFound when none was queued.
+func (r *SafRepository) FindReversal(ctx context.Context, tranID int64) (SafRow, error) {
+	var row SafRow
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, tran_id, mti, payload_enc, status, attempts, max_attempts, next_retry_at, coalesce(last_error, ''), created_at, acked_at
+		 FROM saf_queue WHERE tran_id = $1 AND mti = $2 ORDER BY id DESC LIMIT 1`, tranID, mtiReversalAdvice,
+	).Scan(&row.ID, &row.TranID, &row.MTI, &row.Payload, &row.Status, &row.Attempts, &row.MaxAttempts,
+		&row.NextRetryAt, &row.LastError, &row.CreatedAt, &row.AckedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SafRow{}, ErrNotFound
+	}
+	return row, err
 }
 
 // mtiReversalAdvice is the reversal advice whose ACK completes a reversal (docs/03 §7.3).

@@ -1,7 +1,9 @@
 package journey
 
 import (
-	"fmt"
+	"slices"
+	"sort"
+	"time"
 
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -9,6 +11,8 @@ import (
 const (
 	statusReversalPending = "REVERSAL_PENDING"
 	statusReversed        = "REVERSED"
+	labelPurchase         = "Purchase"
+	labelRefund           = "Refund"
 )
 
 // Actor mirrors contracts/openapi.yaml's Actor enum.
@@ -16,9 +20,10 @@ type Actor string
 
 // Actor values.
 const (
-	ActorPOS    Actor = "POS"
-	ActorIssuer Actor = "ISSUER"
-	ActorSAF    Actor = "SAF"
+	ActorPOS      Actor = "POS"
+	ActorAcquirer Actor = "ACQUIRER"
+	ActorIssuer   Actor = "ISSUER"
+	ActorSAF      Actor = "SAF"
 )
 
 // StepKind mirrors contracts/openapi.yaml's StepKind enum.
@@ -33,17 +38,37 @@ const (
 	KindReversal StepKind = "REVERSAL"
 )
 
-// Step mirrors contracts/openapi.yaml's JourneyStep schema. Message is left nil: v1 does
-// not persist the raw ISO request/response bytes in tran_log (only the summary fields below), so
-// there is nothing to embed - a future story that adds message storage would populate it here.
+// StepCode mirrors contracts/openapi.yaml's StepCode enum: what a step is, independent of
+// language, so clients render their own copy.
+type StepCode string
+
+// StepCode values.
+const (
+	CodePOSRequest        StepCode = "POS_REQUEST"
+	CodeRequestSent       StepCode = "REQUEST_SENT"
+	CodeLocalDecline      StepCode = "LOCAL_DECLINE"
+	CodeIssuerApproved    StepCode = "ISSUER_APPROVED"
+	CodeIssuerDeclined    StepCode = "ISSUER_DECLINED"
+	CodeNoResponse        StepCode = "NO_RESPONSE"
+	CodeReversalQueued    StepCode = "REVERSAL_QUEUED"
+	CodePOSResult         StepCode = "POS_RESULT"
+	CodeReversalSent      StepCode = "REVERSAL_SENT"
+	CodeReversalConfirmed StepCode = "REVERSAL_CONFIRMED"
+	CodeLateResponse      StepCode = "LATE_RESPONSE"
+)
+
+// Step mirrors contracts/openapi.yaml's JourneyStep schema. Message is rebuilt from stored
+// columns (see message.go); nil on steps that are not an ISO message.
 type Step struct {
 	Seq           int
+	Code          StepCode
 	Actor         Actor
 	OffsetMs      int
 	Title         string
 	EasyText      string
 	TechnicalText string
 	Kind          StepKind
+	Message       *IsoMessage
 }
 
 // MoneyRow mirrors one row of contracts/openapi.yaml's Journey.money array.
@@ -61,125 +86,143 @@ type Journey struct {
 	Money []MoneyRow
 }
 
-// BuildJourney turns txn's tran_state_history into an ordered Journey. See the Ruling in
-// docs/plans/MCN-304.md for why Money has exactly one row (v1's issuer does not report a
-// post-transaction balance in DE 54).
-func BuildJourney(txn store.TranLogRow, history []store.StateTransition) Journey {
-	if len(history) == 0 {
-		return Journey{}
-	}
-
-	start := history[0].At
-	steps := make([]Step, 0, len(history)+1)
-	for i, st := range history {
-		steps = append(steps, buildStep(i+1, st, int(st.At.Sub(start).Milliseconds()), txn))
-	}
-
-	last := steps[len(steps)-1]
-	money := []MoneyRow{{
-		Label:  moneyLabel(txn.Type),
-		Delta:  -txn.Amount,
-		AtStep: last.Seq,
-	}}
-	if txn.Status == statusReversed {
-		money = append(money, MoneyRow{Label: "Refund", Delta: txn.Amount, AtStep: last.Seq})
-	}
-
-	if txn.LateResponseAt != nil {
-		steps = append(steps, Step{
-			Seq: len(steps) + 1, Actor: ActorIssuer, OffsetMs: int(txn.LateResponseAt.Sub(start).Milliseconds()), Kind: KindWarn,
-			Title:         "Late response",
-			EasyText:      "Response arrived too late",
-			TechnicalText: fmt.Sprintf("0210 received after timeout, RC %s", txn.LateResponseCode),
-		})
-	}
-
-	return Journey{Steps: steps, Money: money}
+// Reversal is a transaction's queued 0420 as saf_queue holds it: the stored advice fields (never
+// DE 2) plus the delivery bookkeeping.
+type Reversal struct {
+	Status   string
+	Attempts int // failed sends only (saf.Worker.retryLater)
+	QueuedAt time.Time
+	AckedAt  *time.Time
+	Fields   map[int]string
 }
 
-func buildStep(seq int, st store.StateTransition, offsetMs int, txn store.TranLogRow) Step {
-	actor := actorFor(st.ToStatus)
-	kind := kindFor(st.ToStatus)
-
-	switch st.ToStatus {
-	case "SENT":
-		return Step{
-			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
-			Title:         "Sent to issuer",
-			EasyText:      "Purchase request sent",
-			TechnicalText: fmt.Sprintf("0200 sent, RRN %s, amount %d %s", txn.RRN, txn.Amount, txn.Currency),
-		}
-	case "APPROVED", "DECLINED":
-		return Step{
-			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
-			Title:         "Issuer response",
-			EasyText:      EasyTextForRC(txn.ResponseCode),
-			TechnicalText: fmt.Sprintf("0210 received, RC %s", txn.ResponseCode),
-		}
-	case "TIMED_OUT":
-		return Step{
-			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
-			Title:         "No response from issuer",
-			EasyText:      "Issuer did not respond in time",
-			TechnicalText: "0200 request timed out",
-		}
-	case statusReversalPending:
-		return Step{
-			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
-			Title:         "Reversal queued",
-			EasyText:      "Reversal queued",
-			TechnicalText: "0420 enqueued in SAF",
-		}
-	case statusReversed:
-		return Step{
-			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
-			Title:         "Money returned",
-			EasyText:      "Money returned",
-			TechnicalText: "0420 delivered, issuer ACKed with 0430",
-		}
-	default:
-		return Step{
-			Seq: seq, Actor: actor, OffsetMs: offsetMs, Kind: kind,
-			Title:         st.ToStatus,
-			EasyText:      st.ToStatus,
-			TechnicalText: fmt.Sprintf("%s -> %s", st.FromStatus, st.ToStatus),
-		}
-	}
+type timedStep struct {
+	at   time.Time
+	step Step
 }
 
-// actorFor infers who drove a transition per docs/03's message flow: CREATED->SENT is the
-// acquirer sending the request, everything after SENT is the issuer's response.
-func actorFor(toStatus string) Actor {
-	switch toStatus {
-	case "SENT", statusReversalPending:
-		return ActorPOS
-	case statusReversed:
-		return ActorSAF
-	default:
-		return ActorIssuer
-	}
+// builder holds what one journey is built from; its step methods live in steps.go and its
+// message methods in message.go.
+type builder struct {
+	txn     store.TranLogRow
+	history []store.StateTransition
+	rev     *Reversal
 }
 
-func kindFor(toStatus string) StepKind {
-	switch toStatus {
-	case "APPROVED":
-		return KindOK
-	case "DECLINED", "TIMED_OUT", "FAILED":
-		return KindBad
-	case statusReversalPending:
-		return KindWarn
-	case statusReversed:
-		return KindReversal
-	default:
-		return KindInfo
+// BuildJourney turns a transaction's stored columns, tran_state_history and queued reversal (nil
+// when none) into the ordered steps of docs/plans/MCN-304-journey-canvas.md.
+func BuildJourney(txn store.TranLogRow, history []store.StateTransition, rev *Reversal) Journey {
+	b := builder{txn: txn, history: history, rev: rev}
+	timed := slices.Concat(b.requestSteps(), b.outcomeSteps(), b.reversalSteps())
+	steps := withOffsets(timed, b.start())
+	if late, ok := b.lateResponse(); ok {
+		steps = insertAtOffset(steps, late)
 	}
+	for i := range steps {
+		steps[i].Seq = i + 1
+	}
+	return Journey{Steps: steps, Money: moneyRows(txn, steps)}
+}
+
+// start is the first event. The request's DE 7 moment (sent_at) is taken before tran_log is
+// inserted, so it can precede created_at.
+func (b builder) start() time.Time {
+	start := b.txn.CreatedAt
+	if b.txn.SentAt != nil && (start.IsZero() || b.txn.SentAt.Before(start)) {
+		start = *b.txn.SentAt
+	}
+	if len(b.history) > 0 && (start.IsZero() || b.history[0].At.Before(start)) {
+		start = b.history[0].At
+	}
+	return start
+}
+
+// reached returns when the transaction first moved to status.
+func (b builder) reached(status string) (time.Time, bool) {
+	for _, st := range b.history {
+		if st.ToStatus == status {
+			return st.At, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// withOffsets clamps offsets to be non-decreasing: history and saf_queue timestamps come from
+// separate statements, and DE 7 has second precision.
+func withOffsets(timed []timedStep, start time.Time) []Step {
+	steps := make([]Step, len(timed))
+	prev := 0
+	for i, ts := range timed {
+		ts.step.OffsetMs = max(prev, msBetween(start, ts.at))
+		prev = ts.step.OffsetMs
+		steps[i] = ts.step
+	}
+	return steps
+}
+
+func msBetween(from, to time.Time) int {
+	return max(0, int(to.Sub(from).Milliseconds()))
+}
+
+func insertAtOffset(steps []Step, s Step) []Step {
+	i := sort.Search(len(steps), func(i int) bool { return steps[i].OffsetMs > s.OffsetMs })
+	return slices.Insert(steps, i, s)
+}
+
+// moneyRows keeps delta semantics; balanceAfter stays nil because the web reads balances from
+// the issuer ledger.
+func moneyRows(txn store.TranLogRow, steps []Step) []MoneyRow {
+	debitAt := debitStep(steps)
+	if debitAt == 0 {
+		return nil
+	}
+	rows := []MoneyRow{{Label: moneyLabel(txn.Type), Delta: -txn.Amount, AtStep: debitAt}}
+	if refundAt := seqOf(steps, CodeReversalConfirmed); refundAt > 0 {
+		rows = append(rows, MoneyRow{Label: labelRefund, Delta: txn.Amount, AtStep: refundAt})
+	}
+	return rows
+}
+
+// debitStep is where the cardholder's money was (or, on an unknown outcome, is assumed to be)
+// held. A plain decline holds nothing; a declined response that still queued a reversal (MAC
+// failure) may have been approved at the issuer.
+func debitStep(steps []Step) int {
+	if seq := seqOf(steps, CodeIssuerApproved); seq > 0 {
+		return seq
+	}
+	if seq := seqOf(steps, CodeNoResponse); seq > 0 {
+		return seq
+	}
+	if seqOf(steps, CodeReversalQueued) > 0 {
+		return seqOf(steps, CodeIssuerDeclined)
+	}
+	return 0
+}
+
+func seqOf(steps []Step, code StepCode) int {
+	for _, s := range steps {
+		if s.Code == code {
+			return s.Seq
+		}
+	}
+	return 0
 }
 
 func moneyLabel(tranType string) string {
 	switch tranType {
 	case "REFUND":
-		return "Refund"
+		return labelRefund
 	default:
-		return "Purchase"
+		return labelPurchase
 	}
+}
+
+// LatencyMs is request sent -> issuer response, nil when the issuer never answered (timeout,
+// link-down decline, still in flight).
+func LatencyMs(txn store.TranLogRow) *int {
+	if txn.SentAt == nil || txn.RespondedAt == nil || txn.ResponseCode == "" {
+		return nil
+	}
+	ms := msBetween(*txn.SentAt, *txn.RespondedAt)
+	return &ms
 }
