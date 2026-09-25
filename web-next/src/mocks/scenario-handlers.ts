@@ -107,7 +107,8 @@ function recentTransactions(): TransactionSummary[] {
 }
 
 // POS outcomes per fixture card (contracts/fixtures/cards.json), matching the real issuer: last four
-// digits and balances only, never a PAN. Balances live in memory so a payment shows on the tiles.
+// digits and balances only, never a PAN. Balances live in memory so the 51 decline follows payments;
+// GET /v1/cards* is answered by journey-handlers.ts.
 const POS_CARDS: Record<string, { cardRef: string; last4: string; decline?: string; limit?: number }> = {
   tok_normal: { cardRef: "crd_normal0001", last4: "4417" },
   tok_low: { cardRef: "crd_lowbal0002", last4: "9021" },
@@ -183,12 +184,6 @@ function posHandler(type: Transaction["type"]) {
 }
 
 const posHandlers = [
-  http.get("*/v1/cards/:cardRef", ({ params }) => {
-    const amount = posBalances.get(String(params.cardRef));
-    if (amount === undefined) return new HttpResponse(null, { status: 404 });
-    const money = { amount, currency: "704" };
-    return HttpResponse.json({ cardRef: params.cardRef, availableBalance: money, ledgerBalance: money });
-  }),
   http.post("*/v1/transactions/purchases", posHandler("PURCHASE")),
   http.post("*/v1/transactions/pre-authorizations", posHandler("PREAUTH")),
   http.post("*/v1/transactions/refunds", posHandler("REFUND")),

@@ -36,9 +36,9 @@ function CardTile({ card, pressed, onPress }: { card: DisplayCard; pressed: bool
     <button type="button" aria-pressed={pressed} data-tag={card.tag} onClick={onPress} className="pos-card">
       <span className="pos-card__tag">{t(`tag.${card.tag}`)}</span>
       <span className="pos-card__pan">•••• {card.last4}</span>
-      <span className="pos-card__balance">
-        {balance === undefined ? t("balanceUnknown") : t("balance", { amount: balance.toLocaleString("vi-VN") })}
-      </span>
+      {balance !== undefined && (
+        <span className="pos-card__balance">{t("balance", { amount: balance.toLocaleString("vi-VN") })}</span>
+      )}
     </button>
   );
 }

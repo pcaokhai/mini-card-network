@@ -123,7 +123,6 @@
       "heading": "Chọn thẻ để thanh toán",
       "sectionLabel": "Chọn thẻ",
       "balance": "Số dư {amount} ₫",
-      "balanceUnknown": "Số dư —",
       "tag": {
         "normal": "Bình thường",
         "low": "Sắp hết tiền",
