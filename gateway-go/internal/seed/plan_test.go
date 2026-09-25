@@ -47,7 +47,7 @@ func TestSeedPlan_everyLastHourBucketHasTransactions__MCN_002(t *testing.T) {
 		if age < 0 || age >= time.Hour {
 			continue
 		}
-		counts[23-int(age/(150*time.Second))]++
+		counts[23-int(age/(150*time.Second))]++ //nolint:gosec // G602: 0 <= age < 1h, so the index is 0..23
 	}
 	for i, c := range counts {
 		require.Positive(t, c, "bucket %d is empty", i)

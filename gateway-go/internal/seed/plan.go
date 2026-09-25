@@ -107,7 +107,7 @@ func lastHourTimes(now time.Time, rng *rand.Rand) []time.Time {
 	}
 	sort.SliceStable(order[:], func(a, b int) bool { return remainders[order[a]] > remainders[order[b]] })
 	for k := 0; assigned < lastHourCount; k = (k + 1) % bucketCount {
-		counts[order[k]]++
+		counts[order[k]]++ //nolint:gosec // G602: order is a permutation of 0..bucketCount-1
 		assigned++
 	}
 
