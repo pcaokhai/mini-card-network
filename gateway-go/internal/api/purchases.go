@@ -36,7 +36,7 @@ func handleCreatePurchase(svc PurchaseCreator) http.HandlerFunc {
 		}
 		txn, err := svc.CreatePurchase(req.Context(), body, idempotencyKey)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "purchase-failed", err.Error())
+			transactionProblem(w, err, "purchase-failed")
 			return
 		}
 		// Declines are not HTTP errors (contracts/openapi.yaml): every outcome returns 201.
@@ -54,7 +54,7 @@ func handleCancelPurchase(svc PurchaseCreator) http.HandlerFunc {
 		rrn := chi.URLParam(req, "rrn")
 		txn, err := svc.CancelPurchase(req.Context(), rrn, idempotencyKey)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "cancellation-failed", err.Error())
+			transactionProblem(w, err, "cancellation-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusAccepted, txn)

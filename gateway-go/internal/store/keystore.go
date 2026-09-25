@@ -39,6 +39,32 @@ func (r *KeyStoreRepository) Insert(ctx context.Context, row KeyRow) (int64, err
 	return id, err
 }
 
+// EnsureActive registers an ACTIVE key of keyType (no owner_ref) unless one is already active,
+// reporting whether it inserted. The partial unique index uq_acq_active_key makes a concurrent
+// second insert a no-op rather than a second ACTIVE key.
+func (r *KeyStoreRepository) EnsureActive(ctx context.Context, keyType, keyUnderLMKHex, kcv string) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
+		`INSERT INTO key_store (key_type, owner_ref, key_under_lmk, kcv, status, activated_at)
+		 SELECT $1, NULL, $2, $3, 'ACTIVE', now()
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM key_store WHERE key_type = $1 AND owner_ref IS NULL AND status = 'ACTIVE')
+		 ON CONFLICT DO NOTHING`,
+		keyType, keyUnderLMKHex, kcv)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// ActiveKCV returns the KCV of the ACTIVE global key of keyType.
+func (r *KeyStoreRepository) ActiveKCV(ctx context.Context, keyType string) (string, error) {
+	var kcv string
+	err := r.pool.QueryRow(ctx,
+		`SELECT kcv FROM key_store WHERE key_type = $1 AND owner_ref IS NULL AND status = 'ACTIVE'`,
+		keyType).Scan(&kcv)
+	return kcv, err
+}
+
 // Activate marks id ACTIVE and retires the prior ACTIVE row for the same (key_type, owner_ref)
 // pair, in one transaction (mirrors the issuer's KeyStoreRepository.activate).
 func (r *KeyStoreRepository) Activate(ctx context.Context, id int64) error {

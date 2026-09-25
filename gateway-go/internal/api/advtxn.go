@@ -41,7 +41,7 @@ func handleCreatePreAuth(svc AdvancedTransactor) http.HandlerFunc {
 		}
 		txn, err := svc.CreatePreAuth(req.Context(), body, idempotencyKey)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "pre-authorization-failed", err.Error())
+			transactionProblem(w, err, "pre-authorization-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)
@@ -63,7 +63,7 @@ func handleCreateCompletion(svc AdvancedTransactor) http.HandlerFunc {
 		rrn := chi.URLParam(req, "rrn")
 		txn, err := svc.CreateCompletion(req.Context(), rrn, body, idempotencyKey)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "completion-failed", err.Error())
+			transactionProblem(w, err, "completion-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)
@@ -84,7 +84,7 @@ func handleCreateRefund(svc AdvancedTransactor) http.HandlerFunc {
 		}
 		txn, err := svc.CreateRefund(req.Context(), body, idempotencyKey)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "refund-failed", err.Error())
+			transactionProblem(w, err, "refund-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)
@@ -105,7 +105,7 @@ func handleCreateBalanceInquiry(svc AdvancedTransactor) http.HandlerFunc {
 		}
 		txn, err := svc.CreateBalanceInquiry(req.Context(), body, idempotencyKey)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "balance-inquiry-failed", err.Error())
+			transactionProblem(w, err, "balance-inquiry-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)

@@ -47,13 +47,12 @@ const (
 	dualKeyWindow = 5 * time.Minute
 )
 
-// ponytail: v1 seeds exactly one terminal/merchant (contracts/fixtures/cards.json's terminals
-// array, migrations/00002_transactions.sql); add a terminal/merchant lookup port when a second
-// one is seeded.
-const (
-	fixedMerchantID   = "GOCPHO000000001"
-	fixedMerchantName = "Ca phe Goc Pho"
-)
+// MerchantResolver maps a terminal to the merchant it belongs to (contracts/fixtures/cards.json
+// `terminals`); *store.TerminalRepository implements it. An unknown terminal is
+// store.ErrUnknownTerminal, so nothing is sent for a terminal the acquirer does not own.
+type MerchantResolver interface {
+	Merchant(ctx context.Context, tid string) (store.Merchant, error)
+}
 
 var terminalLocation = mustLoadLocation("Asia/Ho_Chi_Minh")
 
@@ -170,6 +169,7 @@ type Service struct {
 	mux           MuxSender
 	linkStatus    LinkStatusPort
 	cardTokens    *CardTokenRegistry
+	merchants     MerchantResolver
 	tranLog       TranLogPort
 	tranLogGet    TranLogGetter
 	idempotency   IdempotencyPort
@@ -197,11 +197,11 @@ func (s *Service) SetChaosDuplicateHook(fn func() bool) { s.duplicateHook = fn }
 func NewService(mux interface {
 	MuxSender
 	LinkStatusPort
-}, cardTokens *CardTokenRegistry, tranLog interface {
+}, cardTokens *CardTokenRegistry, merchants MerchantResolver, tranLog interface {
 	TranLogPort
 	TranLogGetter
 }, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder) *Service {
-	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, keyStore: keyStore}
+	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, keyStore: keyStore}
 }
 
 // CreatePurchase builds a 0200, sends it through the live issuer connection, persists every
@@ -220,34 +220,48 @@ func (s *Service) CreatePurchase(ctx context.Context, req PurchaseRequest, idemp
 		return txn, nil
 	}
 
-	card, ok := s.cardTokens.Resolve(req.CardToken)
-	if !ok {
-		return Transaction{}, ErrUnknownCardToken
+	card, merchant, err := s.resolveCardAndMerchant(ctx, req)
+	if err != nil {
+		return Transaction{}, err
 	}
 	maskedPAN := obs.MaskPAN(card.PAN)
 
 	stan, ok := s.mux.NextSTAN()
 	if !s.linkStatus.IsSignedOn() || !ok {
-		txn := s.declinedTransaction(req, maskedPAN, rcLinkDown)
-		if err := s.persistAndBroadcast(ctx, txn, req, idempotencyKey, requestHash); err != nil {
+		txn := s.declinedTransaction(req, merchant, maskedPAN, rcLinkDown)
+		if err := s.persistAndBroadcast(ctx, txn, req, merchant, idempotencyKey, requestHash); err != nil {
 			return Transaction{}, err
 		}
 		return txn, nil
 	}
 
-	txn, err := s.sendPurchase(ctx, req, card, maskedPAN, stan)
+	txn, err := s.sendPurchase(ctx, req, card, merchant, maskedPAN, stan)
 	if err != nil {
 		return Transaction{}, err
 	}
-	if err := s.persistAndBroadcast(ctx, txn, req, idempotencyKey, requestHash); err != nil {
+	if err := s.persistAndBroadcast(ctx, txn, req, merchant, idempotencyKey, requestHash); err != nil {
 		return Transaction{}, err
 	}
 	return txn, nil
 }
 
+// resolveCardAndMerchant maps the request's cardToken to its fixture card and its terminal to
+// the owning merchant; either being unknown means nothing is sent.
+func (s *Service) resolveCardAndMerchant(ctx context.Context, req PurchaseRequest) (CardFixture, store.Merchant, error) {
+	card, ok := s.cardTokens.Resolve(req.CardToken)
+	if !ok {
+		return CardFixture{}, store.Merchant{}, ErrUnknownCardToken
+	}
+	merchant, err := s.merchants.Merchant(ctx, req.TerminalID)
+	if err != nil {
+		return CardFixture{}, store.Merchant{}, fmt.Errorf("resolve merchant for terminal %s: %w", req.TerminalID, err)
+	}
+	return card, merchant, nil
+}
+
 // sendPurchase builds the 0200, sends it, and maps the outcome to a Transaction, recording every
 // tran_log state transition along the way.
-func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card CardFixture, maskedPAN, stan string) (Transaction, error) {
+func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card CardFixture, merchant store.Merchant, maskedPAN, stan string) (Transaction, error) {
 	now := time.Now().UTC()
 	local := now.In(terminalLocation)
 	rrn := BuildRRN(now, stan)
@@ -266,13 +280,13 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 		32: acquirerID,
 		37: rrn,
 		41: req.TerminalID,
-		42: fixedMerchantID,
+		42: merchant.MID,
 		49: req.Amount.Currency,
 	}
 
 	row := store.TranLogRow{
 		RRN: rrn, Type: tranTypePurchase, Status: statusCreated, Amount: req.Amount.Amount, Currency: req.Amount.Currency,
-		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: fixedMerchantID, NetworkSTAN: stan,
+		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: merchant.MID, NetworkSTAN: stan,
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {
@@ -295,7 +309,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	defer cancel()
 	resp, err := s.mux.Send(sendCtx, "0200", fields)
 
-	txn := s.baseTransaction(req, rrn, stan, maskedPAN)
+	txn := s.baseTransaction(req, merchant, rrn, stan, maskedPAN)
 	macFailed, err := s.mapSendOutcome(ctx, &txn, resp, err)
 	if err != nil {
 		return Transaction{}, err
@@ -478,11 +492,11 @@ func (s *Service) finalizeSendResult(ctx context.Context, id int64, row store.Tr
 	return txn, nil
 }
 
-func (s *Service) baseTransaction(req PurchaseRequest, rrn, stan, maskedPAN string) Transaction {
+func (s *Service) baseTransaction(req PurchaseRequest, merchant store.Merchant, rrn, stan, maskedPAN string) Transaction {
 	now := time.Now().UTC()
 	return Transaction{
 		RRN: rrn, STAN: stan, Type: tranTypePurchase, Amount: req.Amount, MaskedPAN: maskedPAN,
-		TerminalID: req.TerminalID, MerchantName: fixedMerchantName, CreatedAt: now,
+		TerminalID: req.TerminalID, MerchantName: merchant.Name, CreatedAt: now,
 		BusinessDate: now.Format("2006-01-02"),
 	}
 }
@@ -492,10 +506,10 @@ func (s *Service) baseTransaction(req PurchaseRequest, rrn, stan, maskedPAN stri
 // docs/03 §5's format - ponytail: collisions are possible if two link-down declines land in the
 // same UTC second, acceptable for this lab; a real deployment would reserve a STAN even for
 // link-down declines.
-func (s *Service) declinedTransaction(req PurchaseRequest, maskedPAN, responseCode string) Transaction {
+func (s *Service) declinedTransaction(req PurchaseRequest, merchant store.Merchant, maskedPAN, responseCode string) Transaction {
 	const noStan = "000000"
 	rrn := BuildRRN(time.Now().UTC(), noStan)
-	txn := s.baseTransaction(req, rrn, noStan, maskedPAN)
+	txn := s.baseTransaction(req, merchant, rrn, noStan, maskedPAN)
 	txn.Status = statusDeclined
 	txn.ResponseCode = responseCode
 	return txn
@@ -503,14 +517,14 @@ func (s *Service) declinedTransaction(req PurchaseRequest, maskedPAN, responseCo
 
 // persistAndBroadcast records a link-down decline in tran_log, broadcasts the transaction, and
 // stores the idempotent response so a replay never resends.
-func (s *Service) persistAndBroadcast(ctx context.Context, txn Transaction, req PurchaseRequest, idempotencyKey, requestHash string) error {
+func (s *Service) persistAndBroadcast(ctx context.Context, txn Transaction, req PurchaseRequest, merchant store.Merchant, idempotencyKey, requestHash string) error {
 	if txn.Status == statusDeclined && txn.ResponseCode == rcLinkDown {
 		// Link-down decline: mux.Send was never called, so this row wasn't logged earlier in
 		// CreatePurchase; log it now so it's still visible in tran_log.
 		row := store.TranLogRow{
 			RRN: txn.RRN, Type: tranTypePurchase, Status: statusDeclined,
 			Amount: req.Amount.Amount, Currency: req.Amount.Currency, MaskedPAN: txn.MaskedPAN,
-			TerminalID: req.TerminalID, MerchantID: fixedMerchantID, ResponseCode: txn.ResponseCode,
+			TerminalID: req.TerminalID, MerchantID: merchant.MID, ResponseCode: txn.ResponseCode,
 		}
 		if _, err := s.tranLog.Insert(ctx, row); err != nil {
 			return fmt.Errorf("insert tran_log for link-down decline: %w", err)

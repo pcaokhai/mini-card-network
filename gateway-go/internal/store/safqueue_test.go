@@ -106,3 +106,43 @@ func TestSafRepository_listItemsReportsRRNAndDeadCount__MCN_407(t *testing.T) {
 	require.Equal(t, "PENDING", byID[pendingID].Status)
 	require.Equal(t, "DEAD", byID[deadID].Status)
 }
+
+func TestSafRepository_ackOf0420CompletesTheReversal__MCN_002(t *testing.T) {
+	pool := newTestPool(t)
+	tranLog := NewTranLogRepository(pool)
+	saf := NewSafRepository(pool)
+	ctx := context.Background()
+
+	tranID := insertTestTran(ctx, t, tranLog, "626514000501", "000501")
+	require.NoError(t, tranLog.UpdateStatus(ctx, tranID, "REVERSAL_PENDING", "", ""))
+	id, err := saf.Enqueue(ctx, tranID, "0420", []byte("payload"))
+	require.NoError(t, err)
+
+	require.NoError(t, saf.MarkAcked(ctx, id))
+
+	row, err := tranLog.Get(ctx, "626514000501")
+	require.NoError(t, err)
+	require.Equal(t, "REVERSED", row.Status)
+	history, err := tranLog.ListStateHistory(ctx, tranID)
+	require.NoError(t, err)
+	require.Equal(t, "REVERSAL_PENDING", history[len(history)-1].FromStatus)
+	require.Equal(t, "REVERSED", history[len(history)-1].ToStatus)
+}
+
+func TestSafRepository_ackOfAnAdviceLeavesTheTransactionState__MCN_002(t *testing.T) {
+	pool := newTestPool(t)
+	tranLog := NewTranLogRepository(pool)
+	saf := NewSafRepository(pool)
+	ctx := context.Background()
+
+	tranID := insertTestTran(ctx, t, tranLog, "626514000502", "000502")
+	require.NoError(t, tranLog.UpdateStatus(ctx, tranID, "APPROVED", "00", "123456"))
+	id, err := saf.Enqueue(ctx, tranID, "0220", []byte("payload"))
+	require.NoError(t, err)
+
+	require.NoError(t, saf.MarkAcked(ctx, id))
+
+	row, err := tranLog.Get(ctx, "626514000502")
+	require.NoError(t, err)
+	require.Equal(t, "APPROVED", row.Status)
+}
