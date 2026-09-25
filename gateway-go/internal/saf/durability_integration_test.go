@@ -32,8 +32,8 @@ func TestSafWorker_survivesRestart_deliversEveryPendingReversal__MCN_401_AC4(t *
 	require.NoError(t, err)
 
 	// Simulate a worker that died right after claiming: ClaimDue flips it to IN_FLIGHT, and
-	// nothing ever acks or dead-letters it.
-	claimed, err := safRepo.ClaimDue(ctx, 10)
+	// nothing ever acks or dead-letters it. A zero lease stands for one that has since run out.
+	claimed, err := safRepo.ClaimDue(ctx, 10, 0)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
 	require.Equal(t, id, claimed[0].ID)

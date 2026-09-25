@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -20,6 +21,12 @@ import (
 const (
 	claimBatchSize = 50
 	acknowledged   = "00"
+	// sendTimeout bounds the wait for one 0430, the same 30 s a purchase waits for its 0210
+	// (docs/03 §9): the mux never fails a pending send when its connection drops.
+	sendTimeout = 30 * time.Second
+	// claimLease keeps a claimed row from being claimed again while it is being delivered, and
+	// is how long a row waits after a crash or a failed store write before it is retried.
+	claimLease = 2 * sendTimeout
 )
 
 // errNoLiveLink means there is no connection to allocate this advice's STAN on yet; the advice
@@ -41,7 +48,7 @@ type CardPANs interface {
 
 // Port is the saf_queue access Worker needs. *store.SafRepository satisfies it.
 type Port interface {
-	ClaimDue(ctx context.Context, limit int) ([]store.SafRow, error)
+	ClaimDue(ctx context.Context, limit int, lease time.Duration) ([]store.SafRow, error)
 	MarkInFlight(ctx context.Context, id int64, attempts int, nextRetryAt time.Time, lastError string) error
 	MarkAcked(ctx context.Context, id int64) error
 	MarkDead(ctx context.Context, id int64, lastError string) error
@@ -59,13 +66,14 @@ type Worker struct {
 	encKey       []byte
 	backoff      isonet.Backoff
 	pollInterval time.Duration
+	sendTimeout  time.Duration
 }
 
 // NewWorker builds a Worker. zak is the clear ZAK every advice is MACed under; encKey decrypts
 // saf_queue.payload_enc (nil stores payloads unencrypted, which is safe only because they never
 // hold a PAN).
 func NewWorker(mux MuxSender, cards CardPANs, hsmModule hsm.Module, zak []byte, saf Port, encKey []byte, backoff isonet.Backoff, pollInterval time.Duration) *Worker {
-	return &Worker{mux: mux, cards: cards, hsm: hsmModule, zak: zak, saf: saf, encKey: encKey, backoff: backoff, pollInterval: pollInterval}
+	return &Worker{mux: mux, cards: cards, hsm: hsmModule, zak: zak, saf: saf, encKey: encKey, backoff: backoff, pollInterval: pollInterval, sendTimeout: sendTimeout}
 }
 
 // Run delivers due advices every pollInterval until ctx is cancelled.
@@ -84,36 +92,38 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-// deliverOnce claims every due row and attempts one delivery each.
+// deliverOnce claims every due row and attempts one delivery each. A failure is that row's alone:
+// it is logged and the row comes back once its claim lease runs out, so a database hiccup never
+// stops the worker or, through its errgroup, the gateway.
 func (w *Worker) deliverOnce(ctx context.Context) error {
-	due, err := w.saf.ClaimDue(ctx, claimBatchSize)
+	due, err := w.saf.ClaimDue(ctx, claimBatchSize, claimLease)
 	if err != nil {
-		return fmt.Errorf("claim due saf rows: %w", err)
+		slog.ErrorContext(ctx, "claim due saf rows", "err", err)
+		return nil
 	}
 	for _, row := range due {
 		if err := w.deliverRow(ctx, row); err != nil {
-			return err
+			slog.ErrorContext(ctx, "deliver saf row", "saf_id", row.ID, "err", err)
 		}
 	}
 	return nil
 }
 
-// deliverRow sends one advice. attempts==0 sends the original MTI; every repeat is x21 (docs/03
-// §7.3: attempts > 0 means a repeat, never a second original send). Any response ACKs - advices
-// are never declined by the issuer, only lost in transit.
+// deliverRow sends one advice. The first send is the original MTI; once a STAN has been assigned
+// the advice may already be on the issuer's side, so every later send is an x21 repeat (docs/03
+// §7.3), including one whose earlier ACK write failed. Only a "00" 0430 completes it.
 func (w *Worker) deliverRow(ctx context.Context, row store.SafRow) error {
-	mti := row.MTI
-	if row.Attempts > 0 {
-		mti = mti[:3] + "1"
-	}
-
 	adv, err := decodePayload(w.encKey, row.Payload)
 	if err != nil {
 		return fmt.Errorf("decode saf payload id=%d: %w", row.ID, err)
 	}
+	mti := row.MTI
+	if adv.Fields[11] != "" {
+		mti = mti[:3] + "1"
+	}
 	if err := w.assignNetworkIdentity(ctx, row.ID, &adv); err != nil {
 		if errors.Is(err, errNoLiveLink) {
-			return w.retryLater(ctx, row, err)
+			return w.waitForLink(ctx, row, err)
 		}
 		return err
 	}
@@ -122,7 +132,9 @@ func (w *Worker) deliverRow(ctx context.Context, row store.SafRow) error {
 		return w.saf.MarkDead(ctx, row.ID, err.Error())
 	}
 
-	resp, err := w.mux.Send(ctx, mti, frame)
+	sendCtx, cancel := context.WithTimeout(ctx, w.sendTimeout)
+	defer cancel()
+	resp, err := w.mux.Send(sendCtx, mti, frame)
 	if err != nil {
 		return w.retryLater(ctx, row, err)
 	}
@@ -178,6 +190,13 @@ func (w *Worker) frame(mti string, adv advice) (map[int]string, error) {
 	}
 	frame[128] = strings.ToUpper(hex.EncodeToString(mac))
 	return frame, nil
+}
+
+// waitForLink reschedules row without counting an attempt: nothing was sent, so the link being
+// down can never dead-letter an advice.
+func (w *Worker) waitForLink(ctx context.Context, row store.SafRow, why error) error {
+	nextRetryAt := time.Now().Add(w.backoff.Delay(max(row.Attempts, 1)))
+	return w.saf.MarkInFlight(ctx, row.ID, row.Attempts, nextRetryAt, why.Error())
 }
 
 // retryLater reschedules row with sendErr recorded as its last_error, or dead-letters it after

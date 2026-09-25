@@ -26,7 +26,7 @@ func TestSafRepository_enqueueClaimAndAck__MCN_401_AC2(t *testing.T) {
 	id, err := saf.Enqueue(ctx, tranID, "0420", []byte("encrypted-0420-payload"))
 	require.NoError(t, err)
 
-	claimed, err := saf.ClaimDue(ctx, 10)
+	claimed, err := saf.ClaimDue(ctx, 10, time.Minute)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
 	require.Equal(t, id, claimed[0].ID)
@@ -56,7 +56,7 @@ func TestSafRepository_claimDueSkipsLockedRows__MCN_401_AC2(t *testing.T) {
 	_, err = tx.Exec(ctx, `SELECT id FROM saf_queue WHERE id = $1 FOR UPDATE`, id)
 	require.NoError(t, err)
 
-	claimed, err := saf.ClaimDue(ctx, 10)
+	claimed, err := saf.ClaimDue(ctx, 10, time.Minute)
 	require.NoError(t, err)
 	require.Empty(t, claimed) // the row is locked by tx above, SKIP LOCKED must skip it
 }
@@ -145,4 +145,23 @@ func TestSafRepository_ackOfAnAdviceLeavesTheTransactionState__MCN_002(t *testin
 	row, err := tranLog.Get(ctx, "626514000502")
 	require.NoError(t, err)
 	require.Equal(t, "APPROVED", row.Status)
+}
+
+// A claimed row is leased: until the lease runs out no claim picks it up again, so a row whose
+// ACK write failed is not resent at once.
+func TestSafRepository_aClaimedRowIsLeased__MCN_401(t *testing.T) {
+	pool := newTestPool(t)
+	saf := NewSafRepository(pool)
+	ctx := context.Background()
+	tranID := insertTestTran(ctx, t, NewTranLogRepository(pool), "626514000321", "000321")
+	_, err := saf.Enqueue(ctx, tranID, "0420", []byte("payload"))
+	require.NoError(t, err)
+
+	first, err := saf.ClaimDue(ctx, 10, time.Minute)
+	require.NoError(t, err)
+	again, err := saf.ClaimDue(ctx, 10, time.Minute)
+	require.NoError(t, err)
+
+	require.Len(t, first, 1)
+	require.Empty(t, again)
 }

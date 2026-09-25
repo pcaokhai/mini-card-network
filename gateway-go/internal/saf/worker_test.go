@@ -28,11 +28,16 @@ type fakeMux struct {
 	err        error
 	stanCalls  int
 	linkDown   bool
+	lost       bool // the 0430 never arrives: Send waits for its context
 }
 
-func (f *fakeMux) Send(_ context.Context, mti string, fields map[int]string) (map[int]string, error) {
+func (f *fakeMux) Send(ctx context.Context, mti string, fields map[int]string) (map[int]string, error) {
 	f.sentMTIs = append(f.sentMTIs, mti)
 	f.sentFields = append(f.sentFields, fields)
+	if f.lost {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return f.response, f.err
 }
 
@@ -78,9 +83,12 @@ type fakeSaf struct {
 	inFlights []int
 	lastErrs  []string
 	payloads  map[int64][]byte
+	ackErr    error
+	lease     time.Duration
 }
 
-func (f *fakeSaf) ClaimDue(context.Context, int) ([]store.SafRow, error) {
+func (f *fakeSaf) ClaimDue(_ context.Context, _ int, lease time.Duration) ([]store.SafRow, error) {
+	f.lease = lease
 	due := f.rows
 	f.rows = nil
 	return due, nil
@@ -91,6 +99,9 @@ func (f *fakeSaf) MarkInFlight(_ context.Context, _ int64, attempts int, _ time.
 	return nil
 }
 func (f *fakeSaf) MarkAcked(_ context.Context, id int64) error {
+	if f.ackErr != nil {
+		return f.ackErr
+	}
 	f.acked = append(f.acked, id)
 	return nil
 }
@@ -115,6 +126,18 @@ func queuedRow(t *testing.T, id int64, attempts int) store.SafRow {
 	return store.SafRow{ID: id, MTI: "0420", Attempts: attempts, MaxAttempts: 20, Payload: payload}
 }
 
+// sentRow is a queued advice whose STAN and DE 7 an earlier claim already assigned, i.e. one that
+// may already be on the issuer's side.
+func sentRow(t *testing.T, id int64, attempts int) store.SafRow {
+	t.Helper()
+	adv, err := reversalAdvice(goldenOriginal(), "68")
+	require.NoError(t, err)
+	adv.Fields[11], adv.Fields[7] = "000777", "0925101500"
+	payload, err := encodePayload(nil, adv)
+	require.NoError(t, err)
+	return store.SafRow{ID: id, MTI: "0420", Attempts: attempts, MaxAttempts: 20, Payload: payload}
+}
+
 func newTestWorker(mux *fakeMux, safPort *fakeSaf, h *recordingHSM) *Worker {
 	return NewWorker(mux, fakeCards{testCardToken: testPAN}, h, make([]byte, 16), safPort, nil,
 		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
@@ -132,7 +155,7 @@ func TestWorker_deliversOneItemAndAcksOn0430__MCN_401_AC2(t *testing.T) {
 
 func TestWorker_repeatsAsX21OnSecondAttempt__MCN_401_AC2(t *testing.T) {
 	mux := &fakeMux{response: map[int]string{39: "00"}}
-	safPort := &fakeSaf{rows: []store.SafRow{queuedRow(t, 2, 1)}}
+	safPort := &fakeSaf{rows: []store.SafRow{sentRow(t, 2, 1)}}
 
 	require.NoError(t, newTestWorker(mux, safPort, &recordingHSM{}).deliverOnce(context.Background()))
 
@@ -227,7 +250,7 @@ func TestWorker_noLiveLinkRetriesInsteadOfSendingWithoutAStan__MCN_401(t *testin
 	require.NoError(t, newTestWorker(mux, safPort, &recordingHSM{}).deliverOnce(context.Background()))
 
 	require.Empty(t, mux.sentMTIs)
-	require.Equal(t, []int{1}, safPort.inFlights)
+	require.Equal(t, []int{0}, safPort.inFlights, "nothing was sent, so it is not an attempt")
 	require.NotEmpty(t, safPort.lastErrs[0])
 }
 
@@ -242,4 +265,48 @@ func TestWorker_onlyAn00AcknowledgementCompletesTheAdvice__MCN_401(t *testing.T)
 	require.Empty(t, safPort.acked)
 	require.Equal(t, []int{1}, safPort.inFlights)
 	require.Contains(t, safPort.lastErrs[0], "30")
+}
+
+// A lost 0430 must not hold the worker forever: the send gives up and the advice is retried.
+func TestWorker_aLost0430TimesOutAndIsRetried__MCN_401(t *testing.T) {
+	mux := &fakeMux{lost: true}
+	safPort := &fakeSaf{rows: []store.SafRow{queuedRow(t, 11, 0)}}
+	w := newTestWorker(mux, safPort, &recordingHSM{})
+	w.sendTimeout = 10 * time.Millisecond
+
+	require.NoError(t, w.deliverOnce(context.Background()))
+
+	require.Equal(t, []int{1}, safPort.inFlights)
+	require.Contains(t, safPort.lastErrs[0], "deadline")
+}
+
+// A failed store write is one row's problem: the rest of the batch is still delivered and the
+// worker (and with it the gateway) keeps running.
+func TestWorker_aStoreErrorDoesNotStopTheBatch__MCN_401(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00"}}
+	safPort := &fakeSaf{rows: []store.SafRow{queuedRow(t, 12, 0), queuedRow(t, 13, 0)}, ackErr: errors.New("db down")}
+
+	require.NoError(t, newTestWorker(mux, safPort, &recordingHSM{}).deliverOnce(context.Background()))
+
+	require.Equal(t, []string{"0420", "0420"}, mux.sentMTIs)
+}
+
+// A row that was sent but whose ACK write failed comes back with attempts 0; it may already be on
+// the issuer's side, so it must go out as a repeat.
+func TestWorker_anAdviceThatMayHaveBeenSentRepeatsAsX21__MCN_401(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00"}}
+	safPort := &fakeSaf{rows: []store.SafRow{sentRow(t, 14, 0)}}
+
+	require.NoError(t, newTestWorker(mux, safPort, &recordingHSM{}).deliverOnce(context.Background()))
+
+	require.Equal(t, []string{"0421"}, mux.sentMTIs)
+}
+
+func TestWorker_claimsWithALeaseLongerThanASend__MCN_401(t *testing.T) {
+	safPort := &fakeSaf{}
+	w := newTestWorker(&fakeMux{}, safPort, &recordingHSM{})
+
+	require.NoError(t, w.deliverOnce(context.Background()))
+
+	require.Greater(t, safPort.lease, w.sendTimeout)
 }
