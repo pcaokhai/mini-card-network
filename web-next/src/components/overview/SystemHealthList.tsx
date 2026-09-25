@@ -6,7 +6,7 @@ import type { Overview } from "@/shared/api/overview-client";
 export function SystemHealthList({ overview, links }: { overview: Overview; links: Link[] }) {
   const t = useTranslations("overview.health");
   return (
-    <div>
+    <div className="rounded-card border border-border bg-surface p-4">
       <h2 className="mb-3 text-lg font-semibold">{t("heading")}</h2>
       <ul className="space-y-2">
         <li className="flex items-center justify-between" data-status={overview.ledgerMatches ? "ok" : "warn"}>

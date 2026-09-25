@@ -14,7 +14,7 @@ export function ScenarioCard({
       className={
         scenario.enabled
           ? "rounded-lg border border-accent bg-accent-soft p-4"
-          : "rounded-lg border border-canvas p-4"
+          : "rounded-card border border-border bg-surface p-4"
       }
     >
       <div className="flex items-center justify-between gap-3">

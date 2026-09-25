@@ -51,6 +51,9 @@
     }
   },
   "lab": {
+    "rawHeading": "Message thô, đúng như gửi trên đường truyền",
+    "bitmapHeading": "Lưới bitmap",
+    "fieldsHeading": "Danh sách field",
     "de": "DE",
     "name": "Tên trường",
     "format": "Định dạng",
@@ -66,6 +69,7 @@
   },
   "network": {
     "title": "Vận hành mạng",
+    "linksHeading": "Các đường kết nối",
     "statusPill": {
       "SIGNED_ON": "Đã đăng nhập",
       "CONNECTED": "Đã kết nối",
@@ -91,6 +95,8 @@
   },
   "pos": {
     "title": "Máy POS",
+    "cardSectionLabel": "Chọn thẻ và kịch bản",
+    "paymentSectionLabel": "Thanh toán",
     "amount": "Số tiền",
     "rrn": "Số RRN",
     "pay": "Thanh toán",
@@ -138,8 +144,12 @@
   },
   "cards": {
     "title": "Thẻ và tài khoản",
+    "statusHeading": "Trạng thái thẻ",
+    "balanceHeading": "Số dư",
+    "limitsHeading": "Hạn mức",
     "list": {
-      "empty": "Chưa có thẻ nào"
+      "empty": "Chưa có thẻ nào",
+      "heading": "Thẻ của khách hàng"
     },
     "status": {
       "ACTIVE": "Đang hoạt động",
@@ -219,6 +229,7 @@
       "source_issuer": "Bên phát hành"
     },
     "rotation": {
+      "heading": "Xoay khóa mã hóa PIN",
       "rotate": "Xoay khóa",
       "rotating": "Đang xoay…",
       "step_GENERATE": "Tạo khóa",

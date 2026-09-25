@@ -10,7 +10,7 @@ export function ReactionPanel({
 }) {
   const t = useTranslations("chaos");
   return (
-    <section aria-labelledby="chaos-reaction-heading" className="rounded-lg border border-canvas p-4">
+    <section aria-labelledby="chaos-reaction-heading" className="rounded-card border border-border bg-surface p-4">
       <h2 id="chaos-reaction-heading" className="mb-2 text-sm font-semibold">
         {t("reaction.heading")}
       </h2>
