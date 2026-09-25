@@ -77,7 +77,7 @@ A **declined or timed-out transaction is not an HTTP error**: it returns 201 wit
 | POST | `/v1/transactions/{rrn}/cancellations` | MCN-401 | POS cancel ⇒ reversal (DE 39 `17`) |
 | GET | `/v1/transactions` | MCN-304 | List with filters, cursor pagination |
 | GET | `/v1/transactions/{rrn}` | MCN-304 | Detail |
-| GET | `/v1/transactions/{rrn}/journey` | MCN-304 | Ordered journey steps incl. messages (masked) and money timeline |
+| GET | `/v1/transactions/{rrn}/journey` | MCN-304 | Ordered journey steps incl. messages (masked) and money timeline. Each step carries a language-neutral `code` (`StepCode`) that clients render their own copy from |
 | GET | `/v1/terminals` | MCN-305 | Terminals and merchants for the POS |
 | POST | `/v1/lab/messages/decode` | MCN-103 | Hex/ASCII → fields + bitmap breakdown |
 | POST | `/v1/lab/messages/encode` | MCN-103 | Fields → packed message |

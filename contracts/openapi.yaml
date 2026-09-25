@@ -568,6 +568,23 @@ components:
             traceId: { type: string }
     Actor: { type: string, enum: [POS, ACQUIRER, ISSUER, SAF, NETWORK, SWITCH] }
     StepKind: { type: string, enum: [OK, WARN, BAD, REVERSAL, INFO] }
+    StepCode:
+      type: string
+      description: >-
+        What a journey step is, independent of language. Clients render their own Easy/Expert copy
+        from it; title/easyText/technicalText stay as the provider's English fallback.
+      enum:
+        - POS_REQUEST          # terminal asks the acquirer to authorise
+        - REQUEST_SENT         # acquirer sends the 0200 (message = the 0200)
+        - LOCAL_DECLINE        # acquirer declines without sending (link down)
+        - ISSUER_APPROVED      # 0210 RC 00 (message = the 0210)
+        - ISSUER_DECLINED      # 0210 with a decline RC (message = the 0210)
+        - NO_RESPONSE          # no 0210 within the timeout
+        - REVERSAL_QUEUED      # 0420 stored in SAF before sending
+        - POS_RESULT           # the terminal shows the outcome
+        - REVERSAL_SENT        # 0420/0421 delivered (message = the advice)
+        - REVERSAL_CONFIRMED   # issuer returned the money (message = the 0430)
+        - LATE_RESPONSE        # a 0210 arrived after the timeout
     IsoField:
       type: object
       required: [de, easyName, technicalName, format, value]
@@ -595,6 +612,7 @@ components:
         easyText: { type: string }
         technicalText: { type: string }
         kind: { $ref: '#/components/schemas/StepKind' }
+        code: { $ref: '#/components/schemas/StepCode' }
         message: { oneOf: [{ $ref: '#/components/schemas/IsoMessage' }, { type: 'null' }] }
     Journey:
       type: object
