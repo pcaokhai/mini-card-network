@@ -46,7 +46,11 @@ export function MoneyVerificationPanel({ run, expert }: { run: ChaosRun | undefi
       <dl className="chaos-ledger">
         {ledgerRows(run).map((row) => (
           <div key={row.key} className="chaos-ledger__row">
-            <dt>{t(`${mode}.${row.key}`, { count: row.count === undefined ? "—" : new Intl.NumberFormat("vi-VN").format(row.count) })}</dt>
+            <dt>
+              {row.key === "approved" && row.count === undefined
+                ? t(`${mode}.approvedNone`)
+                : t(`${mode}.${row.key}`, { count: new Intl.NumberFormat("vi-VN").format(row.count ?? 0) })}
+            </dt>
             <dd
               // Keyed by run so the green flash replays for every finished run (Ruling R6).
               key={run?.runId}

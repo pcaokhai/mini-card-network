@@ -822,6 +822,7 @@
       "easy": {
         "opening": "Tổng số dư đầu ngày",
         "approved": "{count} giao dịch được duyệt",
+        "approvedNone": "Giao dịch được duyệt",
         "reversed": "Giao dịch đã tự hủy, không trừ tiền",
         "current": "Số dư hiện tại",
         "discrepancy": "Chênh lệch"
@@ -829,6 +830,7 @@
       "expert": {
         "opening": "Số dư đầu ngày (opening)",
         "approved": "Giao dịch RC 00 · {count} lệnh",
+        "approvedNone": "Giao dịch RC 00",
         "reversed": "Đã reverse (0420 → 0430)",
         "current": "Σ available_balance",
         "discrepancy": "Σ ledger − Σ tran_log"

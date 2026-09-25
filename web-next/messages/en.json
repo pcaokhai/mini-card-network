@@ -822,6 +822,7 @@
       "easy": {
         "opening": "Total opening balance",
         "approved": "{count} transactions approved",
+        "approvedNone": "Approved transactions",
         "reversed": "Transactions cancelled, no money taken",
         "current": "Current balance",
         "discrepancy": "Difference"
@@ -829,6 +830,7 @@
       "expert": {
         "opening": "Opening balance (opening)",
         "approved": "RC 00 transactions · {count}",
+        "approvedNone": "RC 00 transactions",
         "reversed": "Reversed (0420 → 0430)",
         "current": "Σ available_balance",
         "discrepancy": "Σ ledger − Σ tran_log"

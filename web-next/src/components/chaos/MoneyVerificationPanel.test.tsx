@@ -25,7 +25,8 @@ describe("MoneyVerificationPanel", () => {
     expect(screen.getByTestId("money-verification")).toHaveAttribute("data-result", "none");
     expect(screen.getByText("Chưa chạy thử")).toBeInTheDocument();
     expect(screen.getByText("Tổng số dư đầu ngày")).toBeInTheDocument();
-    expect(screen.getByText("— giao dịch được duyệt")).toBeInTheDocument();
+    expect(screen.getByText("Giao dịch được duyệt")).toBeInTheDocument();
+    expect(screen.queryByText(/— giao dịch/)).not.toBeInTheDocument();
     expect(screen.getAllByText("—")).toHaveLength(5);
   });
 
@@ -42,6 +43,11 @@ describe("MoneyVerificationPanel", () => {
     expect(text(zero)).toBe("0 ₫");
     expect(zero).toHaveAttribute("data-tone", "ok");
     expect(zero).toHaveAttribute("data-flash", "true");
+  });
+
+  it("drops the count from the expert approved label before any run __MCN_405_AC2", () => {
+    renderWithIntl(<MoneyVerificationPanel run={undefined} expert />);
+    expect(screen.getByText("Giao dịch RC 00")).toBeInTheDocument();
   });
 
   it("uses the expert labels in expert mode __MCN_405_AC2", () => {
