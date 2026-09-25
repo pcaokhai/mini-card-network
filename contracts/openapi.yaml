@@ -757,6 +757,7 @@ components:
       properties:
         id: { $ref: '#/components/schemas/ChaosScenarioId' }
         enabled: { type: boolean }
+        available: { type: boolean, description: "False when this stack cannot run the scenario (e.g. DROP_RESPONSE without a fake issuer); enabling it then answers 501 scenario-unavailable. Absent means available." }
         easyText: { type: string }
         technicalText: { type: string }
     ChaosRun:
