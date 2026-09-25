@@ -67,14 +67,18 @@ type Worker struct {
 	backoff      isonet.Backoff
 	pollInterval time.Duration
 	sendTimeout  time.Duration
+	log          *slog.Logger
 }
 
 // NewWorker builds a Worker. zak is the clear ZAK every advice is MACed under; encKey decrypts
 // saf_queue.payload_enc (nil stores payloads unencrypted, which is safe only because they never
 // hold a PAN).
 func NewWorker(mux MuxSender, cards CardPANs, hsmModule hsm.Module, zak []byte, saf Port, encKey []byte, backoff isonet.Backoff, pollInterval time.Duration) *Worker {
-	return &Worker{mux: mux, cards: cards, hsm: hsmModule, zak: zak, saf: saf, encKey: encKey, backoff: backoff, pollInterval: pollInterval, sendTimeout: sendTimeout}
+	return &Worker{mux: mux, cards: cards, hsm: hsmModule, zak: zak, saf: saf, encKey: encKey, backoff: backoff, pollInterval: pollInterval, sendTimeout: sendTimeout, log: slog.Default()}
 }
+
+// SetLogger routes the worker's logs through the gateway's JSON logger.
+func (w *Worker) SetLogger(l *slog.Logger) { w.log = l }
 
 // Run delivers due advices every pollInterval until ctx is cancelled.
 func (w *Worker) Run(ctx context.Context) error {
@@ -98,12 +102,12 @@ func (w *Worker) Run(ctx context.Context) error {
 func (w *Worker) deliverOnce(ctx context.Context) error {
 	due, err := w.saf.ClaimDue(ctx, claimBatchSize, claimLease)
 	if err != nil {
-		slog.ErrorContext(ctx, "claim due saf rows", "err", err)
+		w.log.ErrorContext(ctx, "claim due saf rows", "err", err)
 		return nil
 	}
 	for _, row := range due {
 		if err := w.deliverRow(ctx, row); err != nil {
-			slog.ErrorContext(ctx, "deliver saf row", "saf_id", row.ID, "err", err)
+			w.log.ErrorContext(ctx, "deliver saf row", "saf_id", row.ID, "err", err)
 		}
 	}
 	return nil
