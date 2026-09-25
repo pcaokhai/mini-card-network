@@ -41,7 +41,7 @@ func TestSeedPlan_todayIsAbout12PercentOverYesterdaysWindow__MCN_002(t *testing.
 func TestSeedPlan_everyLastHourBucketHasTransactions__MCN_002(t *testing.T) {
 	plan := buildTestPlan(t, 2)
 
-	counts := make([]int, 24)
+	var counts [bucketCount]int
 	for _, txn := range plan {
 		age := planNow.Sub(txn.At)
 		if age < 0 || age >= time.Hour {
@@ -72,14 +72,14 @@ func TestSeedPlan_outcomeMixMatchesCardStates__MCN_002(t *testing.T) {
 			require.Equal(t, "ACTIVE", card.Status, "approval planned on %s", txn.CardToken)
 			require.NotEqual(t, "tok_expired", txn.CardToken)
 			require.NotEqual(t, "tok_low", txn.CardToken)
-			if txn.CardToken == "tok_limit" {
+			if txn.CardToken == limitCardToken {
 				require.LessOrEqual(t, txn.Amount, LimitPerTransaction)
 			}
 		case "51":
 			require.Equal(t, "tok_low", txn.CardToken)
 			require.Greater(t, txn.Amount, card.Balance)
 		case "61":
-			require.Equal(t, "tok_limit", txn.CardToken)
+			require.Equal(t, limitCardToken, txn.CardToken)
 			require.Greater(t, txn.Amount, LimitPerTransaction)
 		case "62":
 			require.Equal(t, "BLOCKED", card.Status)

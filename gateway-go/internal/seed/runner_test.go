@@ -17,6 +17,8 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
+const statusDeclined = "DECLINED"
+
 type recordingTerminals struct{ got []store.FixtureTerminal }
 
 func (r *recordingTerminals) UpsertFromFixture(_ context.Context, t []store.FixtureTerminal) error {
@@ -56,7 +58,7 @@ func (f *fakeStack) handler(t *testing.T) http.Handler {
 	mux.HandleFunc("POST /v1/network/links/issuer/sign-on", func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()
 		f.signOns++
-		f.linkState = "SIGNED_ON"
+		f.linkState = linkSignedOn
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
 	})
@@ -104,19 +106,19 @@ func (f *fakeStack) handler(t *testing.T) http.Handler {
 
 func (f *fakeStack) decide(body map[string]any) (status, rc string) {
 	if f.declineRC != "" {
-		return "DECLINED", f.declineRC
+		return statusDeclined, f.declineRC
 	}
 	amount := int64(body["amount"].(map[string]any)["amount"].(float64))
 	switch body["cardToken"] {
 	case "tok_low":
-		return "DECLINED", "51"
+		return statusDeclined, "51"
 	case "tok_blocked":
-		return "DECLINED", "62"
+		return statusDeclined, "62"
 	case "tok_expired":
-		return "DECLINED", "54"
-	case "tok_limit":
+		return statusDeclined, "54"
+	case limitCardToken:
 		if amount > LimitPerTransaction {
-			return "DECLINED", "61"
+			return statusDeclined, "61"
 		}
 	}
 	return "APPROVED", "00"
@@ -128,7 +130,7 @@ func newTestRunner(t *testing.T, stack *fakeStack, now *time.Time) (*Runner, *re
 	require.NoError(t, err)
 	stack.byRRN = map[string]string{}
 	if stack.linkState == "" {
-		stack.linkState = "SIGNED_ON"
+		stack.linkState = linkSignedOn
 	}
 	srv := httptest.NewServer(stack.handler(t))
 	t.Cleanup(srv.Close)

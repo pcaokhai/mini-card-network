@@ -19,6 +19,7 @@ import (
 const (
 	currencyVND     = "704"
 	limitCardToken  = "tok_limit"
+	linkSignedOn    = "SIGNED_ON"
 	dailyLimitOnCap = 50_000_000 // above three runs' planned spend on tok_limit
 	// A seed whose first purchases all miss their expected outcome is talking to a stack that
 	// can't authorise (link down, keys mismatched); stop instead of logging 246 failures.
@@ -111,7 +112,7 @@ func (r *Runner) ensureSignedOn(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if state == "SIGNED_ON" {
+		if state == linkSignedOn {
 			return nil
 		}
 		if !signOnSent && state == "CONNECTED" {

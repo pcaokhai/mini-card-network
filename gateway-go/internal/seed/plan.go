@@ -9,6 +9,9 @@ import (
 // ExpectApproved is Txn.Expect for a purchase the issuer should approve; declines use their RC.
 const ExpectApproved = "APPROVED"
 
+// secondCardToken is the large-balance card that takes every approval the others can't budget.
+const secondCardToken = "tok_second"
+
 // LimitPerTransaction is the per-transaction limit the seed sets on tok_limit through the
 // issuer Card Admin API, so any purchase above it is declined RC 61 by the issuer's velocity rule.
 const LimitPerTransaction int64 = 500_000
@@ -89,8 +92,8 @@ func lastHourTimes(now time.Time, rng *rand.Rand) []time.Time {
 	for _, v := range lastHourShape {
 		total += v
 	}
-	counts := make([]int, bucketCount)
-	remainders := make([]float64, bucketCount)
+	var counts [bucketCount]int
+	var remainders [bucketCount]float64
 	assigned := 0
 	for i, v := range lastHourShape {
 		exact := float64(v*lastHourCount) / float64(total)
@@ -98,11 +101,11 @@ func lastHourTimes(now time.Time, rng *rand.Rand) []time.Time {
 		remainders[i] = exact - float64(int(exact))
 		assigned += counts[i]
 	}
-	order := make([]int, bucketCount)
+	var order [bucketCount]int
 	for i := range order {
 		order[i] = i
 	}
-	sort.SliceStable(order, func(a, b int) bool { return remainders[order[a]] > remainders[order[b]] })
+	sort.SliceStable(order[:], func(a, b int) bool { return remainders[order[a]] > remainders[order[b]] })
 	for k := 0; assigned < lastHourCount; k = (k + 1) % bucketCount {
 		counts[order[k]]++
 		assigned++
@@ -179,7 +182,7 @@ func (p *planner) txnFor(expect string) Txn {
 		return Txn{CardToken: "tok_low", TerminalID: m.terminalID, Amount: p.amount(150_000, 1_300_000), Expect: expect}
 	case "61":
 		m := merchants[2+p.rng.Intn(2)] // supermarket or fuel
-		return Txn{CardToken: "tok_limit", TerminalID: m.terminalID, Amount: p.amount(LimitPerTransaction+20_000, 650_000), Expect: expect}
+		return Txn{CardToken: limitCardToken, TerminalID: m.terminalID, Amount: p.amount(LimitPerTransaction+20_000, 650_000), Expect: expect}
 	case "62", "54":
 		m := p.merchant()
 		card := map[string]string{"62": "tok_blocked", "54": "tok_expired"}[expect]
@@ -197,12 +200,12 @@ func (p *planner) approvalCard(amount int64) string {
 	case amount <= 95_000 && p.spent["tok_normal"]+amount <= normalCardBudget && p.rng.Float64() < 0.5:
 		p.spent["tok_normal"] += amount
 		return "tok_normal"
-	case amount <= LimitPerTransaction && p.spent["tok_limit"]+amount <= limitCardBudget && p.rng.Float64() < 0.25:
-		p.spent["tok_limit"] += amount
-		return "tok_limit"
+	case amount <= LimitPerTransaction && p.spent[limitCardToken]+amount <= limitCardBudget && p.rng.Float64() < 0.25:
+		p.spent[limitCardToken] += amount
+		return limitCardToken
 	default:
-		p.spent["tok_second"] += amount
-		return "tok_second"
+		p.spent[secondCardToken] += amount
+		return secondCardToken
 	}
 }
 
@@ -216,10 +219,10 @@ func (p *planner) markCancellations(txns []Txn, n int) {
 		if txns[i].Expect != ExpectApproved {
 			continue
 		}
-		if txns[i].CardToken != "tok_second" {
+		if txns[i].CardToken != secondCardToken {
 			p.spent[txns[i].CardToken] -= txns[i].Amount
-			p.spent["tok_second"] += txns[i].Amount
-			txns[i].CardToken = "tok_second"
+			p.spent[secondCardToken] += txns[i].Amount
+			txns[i].CardToken = secondCardToken
 		}
 		txns[i].Cancel = true
 		n--
