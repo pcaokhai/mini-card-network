@@ -69,17 +69,22 @@ type Supervisor struct {
 	// stan outlives each connection: the RRN (docs/03 §5) is the hour plus the STAN, so a count
 	// restarting on reconnect would reissue RRNs already used this hour.
 	stan atomic.Int64
+
+	// signOnAgain asks the connection loop to sign on again: the issuer answered 91 because it
+	// holds the acquirer signed off (another session's sign-off does that), which echoes can't see.
+	signOnAgain chan struct{}
 }
 
 // NewSupervisor builds a Supervisor that reports link state through store.
 func NewSupervisor(cfg Config, store LinkStore) *Supervisor {
+	signOnAgain := make(chan struct{}, 1)
 	if cfg.EchoTimeout == 0 {
 		cfg.EchoTimeout = cfg.EchoInterval
 	}
 	if cfg.Backoff == (Backoff{}) {
 		cfg.Backoff = Backoff{Base: time.Second, Cap: 30 * time.Second}
 	}
-	return &Supervisor{cfg: cfg, store: store}
+	return &Supervisor{cfg: cfg, store: store, signOnAgain: signOnAgain}
 }
 
 // SetHub wires a Hub so every status/event transition is also broadcast over WebSocket.
@@ -168,8 +173,18 @@ func (s *Supervisor) Send(ctx context.Context, mti string, fields map[int]string
 	if mux == nil {
 		return nil, ErrNotSignedOn
 	}
-	return mux.Send(ctx, mti, fields)
+	resp, err := mux.Send(ctx, mti, fields)
+	if err == nil && resp[39] == rcNotSignedOn && mti[:2] != "08" {
+		select {
+		case s.signOnAgain <- struct{}{}:
+		default: // one request pending is enough
+		}
+	}
+	return resp, err
 }
+
+// rcNotSignedOn is the issuer's answer to a message on a link it holds signed off.
+const rcNotSignedOn = "91"
 
 // setStatus updates the store and, if a Hub is wired, broadcasts the new link state.
 func (s *Supervisor) setStatus(ctx context.Context, status string) {
@@ -294,21 +309,44 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 			return nil
 		case err := <-serveErr:
 			return err
+		case <-s.signOnAgain:
+			s.resignOn(ctx, connCtx)
 		case <-ticker.C:
-			s.triggerMu.Lock()
-			latency, err := s.echo(ctx)
-			s.triggerMu.Unlock()
-			if err != nil {
-				failures++
-				if failures >= s.cfg.EchoFailureLimit {
-					return err
-				}
-				continue
+			if err := s.echoTick(ctx, &failures); err != nil {
+				return err
 			}
-			failures = 0
-			_ = s.store.RecordEcho(ctx, endpointName, int(latency.Milliseconds()))
 		}
 	}
+}
+
+// echoTick sends the periodic echo; after EchoFailureLimit failures in a row the link is dropped.
+func (s *Supervisor) echoTick(ctx context.Context, failures *int) error {
+	s.triggerMu.Lock()
+	latency, err := s.echo(ctx)
+	s.triggerMu.Unlock()
+	if err != nil {
+		*failures++
+		if *failures >= s.cfg.EchoFailureLimit {
+			return err
+		}
+		return nil
+	}
+	*failures = 0
+	_ = s.store.RecordEcho(ctx, endpointName, int(latency.Milliseconds()))
+	return nil
+}
+
+// resignOn signs on again on the live connection after the issuer answered 91. A failure leaves
+// the link as it is; the next 91 asks again.
+func (s *Supervisor) resignOn(ctx, connCtx context.Context) {
+	s.triggerMu.Lock()
+	err := s.signOn(connCtx)
+	s.triggerMu.Unlock()
+	if err != nil {
+		s.recordEvent(ctx, "WARN", "Issuer still holds the link signed off", "0800 sign-on after RC 91 failed: "+err.Error())
+		return
+	}
+	s.recordEvent(ctx, "WARN", "Signed on again: the issuer had the link signed off", "RC 91 on a request → 0800 sign-on")
 }
 
 func (s *Supervisor) signOn(ctx context.Context) error {
