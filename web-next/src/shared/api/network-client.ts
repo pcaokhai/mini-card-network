@@ -6,6 +6,8 @@ import type { paths, components } from "@/shared/api/generated/schema";
 export type Link = components["schemas"]["Link"];
 export type NetworkEvent = components["schemas"]["NetworkEvent"];
 export type LinkAction = "echo" | "sign-on" | "sign-off";
+export type SwitchStatus = components["schemas"]["SwitchStatus"];
+export type SafQueue = paths["/v1/network/saf"]["get"]["responses"][200]["content"]["application/json"];
 
 const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 
@@ -15,6 +17,8 @@ const liveFetch = (...args: Parameters<typeof globalThis.fetch>) => globalThis.f
 
 const LINKS_KEY = ["network", "links"] as const;
 const EVENTS_KEY = ["network", "events"] as const;
+const SAF_KEY = ["network", "saf"] as const;
+const SWITCH_KEY = ["network", "switch"] as const;
 
 /** MCN-205: no live WS push exists yet (useWsEvents is not built) — poll instead. */
 const POLL_INTERVAL_MS = 5000;
@@ -24,6 +28,30 @@ export function useLinks() {
     queryKey: LINKS_KEY,
     queryFn: async (): Promise<Link[]> => {
       const { data, error } = await client.GET("/v1/network/links", { fetch: liveFetch });
+      if (error) throw error;
+      return data;
+    },
+    refetchInterval: POLL_INTERVAL_MS,
+  });
+}
+
+export function useSafQueue() {
+  return useQuery({
+    queryKey: SAF_KEY,
+    queryFn: async (): Promise<SafQueue> => {
+      const { data, error } = await client.GET("/v1/network/saf", { fetch: liveFetch });
+      if (error) throw error;
+      return data;
+    },
+    refetchInterval: POLL_INTERVAL_MS,
+  });
+}
+
+export function useSwitchStatus() {
+  return useQuery({
+    queryKey: SWITCH_KEY,
+    queryFn: async (): Promise<SwitchStatus> => {
+      const { data, error } = await client.GET("/v1/network/switch", { fetch: liveFetch });
       if (error) throw error;
       return data;
     },

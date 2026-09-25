@@ -9,12 +9,27 @@ const CARD_CLASS = "flex flex-col gap-1.5 rounded-card border border-border bg-s
 const LABEL_CLASS = "text-[13px] font-medium text-muted";
 const VALUE_CLASS = "text-[28px] font-bold tracking-tight tabular-nums";
 const SUB_CLASS = "text-[13px] text-muted";
+const SUB_TECH_CLASS = "font-mono text-xs text-muted";
+
+function peakSample(throughput: Overview["throughput"]): { tps: number; at: string } | null {
+  const peak = throughput.reduce<Overview["throughput"][number] | null>(
+    (best, sample) => (best === null || sample.tps > best.tps ? sample : best),
+    null,
+  );
+  if (peak === null) return null;
+  const at = new Date(peak.at);
+  const label = Number.isNaN(at.getTime())
+    ? peak.at
+    : at.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", hour12: false });
+  return { tps: peak.tps, at: label };
+}
 
 export function KpiCards({ overview }: { overview: Overview }) {
   const t = useTranslations("overview.kpi");
   const expert = useDisplayMode((s) => s.mode === "expert");
   const deltaPct = overview.transactionsDeltaPct;
-  const peakTps = Math.max(0, ...overview.throughput.map((sample) => sample.tps));
+  const peak = peakSample(overview.throughput);
+  const sub = expert ? SUB_TECH_CLASS : SUB_CLASS;
 
   return (
     <dl className="grid grid-cols-2 gap-4 xl:grid-cols-4">
@@ -22,7 +37,7 @@ export function KpiCards({ overview }: { overview: Overview }) {
         <dt className={LABEL_CLASS}>{t("transactionsToday")}</dt>
         <dd className={VALUE_CLASS}>{overview.transactionsToday.toLocaleString("vi-VN")}</dd>
         {expert ? (
-          <p className={SUB_CLASS}>{t("transactionsTech", { peak: peakTps, at: "p99" })}</p>
+          peak !== null && <p className={SUB_TECH_CLASS}>{t("transactionsTech", { peak: peak.tps, at: peak.at })}</p>
         ) : (
           deltaPct !== undefined && (
             <p className={deltaPct >= 0 ? "text-[13px] font-medium text-ok" : SUB_CLASS}>
@@ -36,12 +51,12 @@ export function KpiCards({ overview }: { overview: Overview }) {
       <div className={CARD_CLASS}>
         <dt className={LABEL_CLASS}>{t("approvalRate")}</dt>
         <dd className={VALUE_CLASS}>{(overview.approvalRate * 100).toLocaleString("vi-VN", { maximumFractionDigits: 1 })}%</dd>
-        <p className={SUB_CLASS}>{t(expert ? "approvalTech" : "approvalSteady")}</p>
+        <p className={sub}>{t(expert ? "approvalTech" : "approvalSteady")}</p>
       </div>
       <div className={CARD_CLASS}>
         <dt className={LABEL_CLASS}>{t("p99Latency")}</dt>
         <dd className={VALUE_CLASS}>{overview.p99LatencyMs} ms</dd>
-        <p className={SUB_CLASS}>
+        <p className={sub}>
           {expert
             ? t("latencyTech")
             : t(overview.p99LatencyMs < FAST_LATENCY_MS ? "latencyFast" : "latencySlow", {
@@ -56,8 +71,10 @@ export function KpiCards({ overview }: { overview: Overview }) {
       >
         <dt className={LABEL_CLASS}>{t("ledgerMatches")}</dt>
         <dd className={VALUE_CLASS}>{overview.ledgerMatches ? t("ledgerOk") : t("ledgerMismatch")}</dd>
-        <p className={SUB_CLASS}>
-          {expert ? t("ledgerTech") : t(overview.ledgerMatches ? "ledgerNoGap" : "ledgerHasGap")}
+        <p className={sub}>
+          {expert
+            ? t(overview.ledgerMatches ? "ledgerTech" : "ledgerTechMismatch")
+            : t(overview.ledgerMatches ? "ledgerNoGap" : "ledgerHasGap")}
         </p>
       </div>
     </dl>

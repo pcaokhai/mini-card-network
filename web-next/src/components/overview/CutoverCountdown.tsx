@@ -17,6 +17,13 @@ function msUntilNextCutover(now: Date): number {
   return cutover.getTime() - now.getTime();
 }
 
+function businessDayLabel(remainingMs: number): string {
+  const cutover = new Date(Date.now() + remainingMs);
+  const day = String(cutover.getDate()).padStart(2, "0");
+  const month = String(cutover.getMonth() + 1).padStart(2, "0");
+  return `${day}/${month}`;
+}
+
 export function CutoverCountdown() {
   const t = useTranslations("overview.cutover");
   const [remainingMs, setRemainingMs] = useState(() => msUntilNextCutover(new Date()));
@@ -36,7 +43,9 @@ export function CutoverCountdown() {
       <p className="text-[22px] font-bold" data-testid="cutover-remaining">
         {t("remaining", { hours, minutes })}
       </p>
-      <p className="text-[13px] leading-relaxed text-[#C9CBD2]">{t("body")}</p>
+      <p className="text-[13px] leading-relaxed text-[#C9CBD2]" suppressHydrationWarning>
+        {t("body", { date: businessDayLabel(remainingMs) })}
+      </p>
       <Link
         href="/settlement"
         className="mt-1 inline-flex h-10 items-center self-start rounded-[10px] bg-surface px-4 text-sm font-semibold text-ink"
