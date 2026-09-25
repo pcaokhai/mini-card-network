@@ -187,14 +187,22 @@ func TestDecode_masksShortPANByPosition__LAB_S1(t *testing.T) {
 	}
 }
 
-func TestDecode_masksPANInFreeText__LAB_S2(t *testing.T) {
-	d, err := Encode("0200", map[string]string{"3": "000000", "11": "000123", "48": "CARD 9704360000004417 KEY ABC"})
-	if err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	requireNoLeak(t, d, "9704360000004417")
-	if f := findField(d.Fields, "48"); !strings.Contains(f.Value, "970436******4417") {
-		t.Fatalf("DE 48 value = %q", f.Value)
+func TestDecode_masksPANInFreeText__LAB_S2_SF1(t *testing.T) {
+	for text, want := range map[string]string{
+		"CARD 9704360000004417 KEY ABC": "CARD 970436******4417 KEY ABC",
+		"CARD9704360000004417":          "CARD970436******4417",
+		"PAN_9704360000004417":          "PAN_970436******4417",
+		"97043600000044170001":          "970436**********0001",
+	} {
+		d, err := Encode("0200", map[string]string{"3": "000000", "11": "000123", "48": text})
+		if err != nil {
+			t.Fatalf("Encode %q: %v", text, err)
+		}
+		requireNoLeak(t, d, "9704360000004417")
+		f := findField(d.Fields, "48")
+		if f.Value != want || f.Raw[3:] != want || findSegment(d.Segments, "48").Text[3:] != want {
+			t.Fatalf("DE 48 %q: value=%q raw=%q, want %q", text, f.Value, f.Raw, want)
+		}
 	}
 }
 

@@ -3,12 +3,12 @@
 package lab
 
 import (
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/mcn/gateway-go/internal/iso8583"
-	"github.com/mcn/gateway-go/internal/obs"
 )
 
 // panDE is the data element carrying the PAN (contracts/iso8583/packager-spec.yaml).
@@ -19,6 +19,11 @@ const panDE = 2
 // ponytail: duplicates packager-spec.yaml's sensitive flags (LAB-G8); generate from the spec once
 // codegen carries them.
 var secretDEs = map[int]bool{52: true, 55: true, 64: true, 128: true}
+
+// freeTextPAN matches any run of 13+ digits in an/ans text, with no word boundaries: obs.MaskPAN's
+// \b\d{13,19}\b misses a PAN glued to letters or "_" (CARD9704..., PAN_9704...) or inside a
+// longer digit run. Over-masking a long reference number is the safe side in the Lab.
+var freeTextPAN = regexp.MustCompile(`\d{13,}`)
 
 // panVisibleHead / panVisibleTail are the PAN digits PCI DSS 3.4 allows on display.
 const (
@@ -147,7 +152,7 @@ func redactValue(de int, value string) string {
 	case secretDEs[de]:
 		return strings.Repeat("*", len(value))
 	case strings.HasPrefix(iso8583.Fields[de].Type, "an"):
-		return obs.MaskPAN(value)
+		return freeTextPAN.ReplaceAllStringFunc(value, maskPANByPosition)
 	}
 	return value
 }
