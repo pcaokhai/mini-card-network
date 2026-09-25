@@ -111,3 +111,24 @@ func TestLoad_requiresZMKHex__MCN_504_AC1(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, cfg.ZMK)
 }
+
+func TestLoad_initialWorkingKeysAreOptionalHexAESKeys__MCN_002(t *testing.T) {
+	cfg, err := Load(env(withLMK(nil)))
+	require.NoError(t, err)
+	require.Nil(t, cfg.InitialZAK, "unset means no provisioning")
+	require.Nil(t, cfg.InitialZPK)
+
+	cfg, err = Load(env(withLMK(map[string]string{
+		"ZAK_HEX": "3132333435363738393a3b3c3d3e3f40", //gitleaks:allow
+		"ZPK_HEX": "2132333435363738393a3b3c3d3e3f41", //gitleaks:allow
+	})))
+	require.NoError(t, err)
+	require.Len(t, cfg.InitialZAK, 16)
+	require.Len(t, cfg.InitialZPK, 16)
+
+	_, err = Load(env(withLMK(map[string]string{"ZAK_HEX": "zz"})))
+	require.ErrorContains(t, err, "ZAK_HEX")
+
+	_, err = Load(env(withLMK(map[string]string{"ZPK_HEX": "0102030405"})))
+	require.ErrorContains(t, err, "ZPK_HEX", "5 bytes is not an AES key length")
+}

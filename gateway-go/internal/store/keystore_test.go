@@ -53,3 +53,24 @@ func TestKeyStoreRepository_findRecentlyRetiredWithinWindow__MCN_504_AC2(t *test
 	require.NoError(t, err)
 	require.Nil(t, stale)
 }
+
+func TestKeyStore_ensureActiveInsertsOnlyWhenNoneActive__MCN_002(t *testing.T) {
+	repo := NewKeyStoreRepository(newTestPool(t))
+	ctx := context.Background()
+
+	inserted, err := repo.EnsureActive(ctx, "ZAK", "AAAAAAAA", "ABC123")
+	require.NoError(t, err)
+	require.True(t, inserted)
+
+	inserted, err = repo.EnsureActive(ctx, "ZAK", "BBBBBBBB", "DEF456")
+	require.NoError(t, err)
+	require.False(t, inserted, "an ACTIVE ZAK already exists")
+
+	rows, err := repo.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "ACTIVE", rows[0].Status)
+	require.Equal(t, "ABC123", rows[0].KCV)
+	require.Equal(t, "AAAAAAAA", rows[0].KeyUnderLMKHex)
+	require.NotNil(t, rows[0].ActivatedAt)
+}

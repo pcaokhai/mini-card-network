@@ -13,19 +13,22 @@ import (
 	"github.com/mcn/gateway-go/internal/advtxn"
 )
 
-type fakeAdvTxn struct{ result advtxn.Transaction }
+type fakeAdvTxn struct {
+	result advtxn.Transaction
+	err    error
+}
 
 func (f *fakeAdvTxn) CreatePreAuth(context.Context, advtxn.PreAuthRequest, string) (advtxn.Transaction, error) {
-	return f.result, nil
+	return f.result, f.err
 }
 func (f *fakeAdvTxn) CreateCompletion(context.Context, string, advtxn.CompletionRequest, string) (advtxn.Transaction, error) {
-	return f.result, nil
+	return f.result, f.err
 }
 func (f *fakeAdvTxn) CreateRefund(context.Context, advtxn.RefundRequest, string) (advtxn.Transaction, error) {
-	return f.result, nil
+	return f.result, f.err
 }
 func (f *fakeAdvTxn) CreateBalanceInquiry(context.Context, advtxn.BalanceInquiryRequest, string) (advtxn.Transaction, error) {
-	return f.result, nil
+	return f.result, f.err
 }
 
 func TestPostPreAuthorizations_returns201__MCN_603_AC1(t *testing.T) {

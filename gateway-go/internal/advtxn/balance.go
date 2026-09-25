@@ -40,7 +40,7 @@ func (s *Service) CreateBalanceInquiry(ctx context.Context, req BalanceInquiryRe
 		32: acquirerID,
 		37: rrn,
 		41: req.TerminalID,
-		42: fixedMerchantID,
+		42: "", // filled by send() from the terminal's merchant
 	}
 
 	return s.send(ctx, sendParams{

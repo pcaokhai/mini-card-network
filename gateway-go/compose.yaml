@@ -16,6 +16,11 @@ services:
       # identical key material to interoperate (MCN-504's DE 48 lesson).
       LMK_TEST_VALUE_HEX: "7efceea1547be94806b5cbf318eab4065aa4c7ba5cf875a12d7cc613d8d18141" #gitleaks:allow
       ZMK_HEX: "0000000000000000000000000000000000000000000000000000000000000000" #gitleaks:allow
+      # Initial working keys, registered as ACTIVE at startup only when key_store has none (a
+      # rotation's key is never overwritten). Must equal issuer-jpos/compose.yaml's ZAK_HEX /
+      # ZPK_HEX or every MAC and PIN translation fails. Lab-only values.
+      ZAK_HEX: "3132333435363738393a3b3c3d3e3f40" #gitleaks:allow
+      ZPK_HEX: "2132333435363738393a3b3c3d3e3f41" #gitleaks:allow
       # Empty by default (CORS off). Local dev only - web-next's real BFF proxy doesn't exist
       # yet (docs/09-risk-register.md R-10), so the browser calls this gateway directly and
       # needs CORS to do it. Never set in a topology with a real server-side proxy.

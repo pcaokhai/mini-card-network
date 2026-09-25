@@ -54,7 +54,7 @@ func (s *Service) CreatePreAuth(ctx context.Context, req PreAuthRequest, idempot
 		32: acquirerID,
 		37: rrn,
 		41: req.TerminalID,
-		42: fixedMerchantID,
+		42: "", // filled by send() from the terminal's merchant
 		49: req.Amount.Currency,
 	}
 

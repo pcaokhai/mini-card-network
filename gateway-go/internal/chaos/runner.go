@@ -21,7 +21,7 @@ const (
 
 	fixedAmountMinor = 10000 // one fixed small amount per synthetic purchase; simplest thing that verifies the invariant
 	currency         = "704"
-	terminalID       = "TERM00000001" // ponytail: reuses the single seeded terminal (see purchase.Service's fixedMerchantID comment)
+	terminalID       = "00000042" // migration 00002's terminal, always present even before `make seed`
 
 	safDrainPollInterval = 500 * time.Millisecond
 	safDrainTimeout      = 65 * time.Second // SAF's own backoff cap (60s) plus margin

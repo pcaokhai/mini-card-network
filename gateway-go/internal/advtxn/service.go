@@ -32,10 +32,6 @@ const (
 
 	rcPartialApproval = "10" // docs/03 C1: partial approval, DE 4 carries the approved amount
 
-	// ponytail: v1 seeds exactly one terminal/merchant, same fixture purchase.Service uses
-	// (contracts/fixtures/cards.json). Duplicated here rather than exported from purchase
-	// because it's a fixture literal, not shared behavior.
-	fixedMerchantID = "GOCPHO000000001"
 )
 
 // Money mirrors contracts/openapi.yaml's Money schema; reused directly from purchase per DRY
@@ -86,6 +82,7 @@ type Transaction struct {
 	Balance        *Money    `json:"balance,omitempty"`
 	MaskedPAN      string    `json:"maskedPan,omitempty"`
 	TerminalID     string    `json:"terminalId,omitempty"`
+	MerchantName   string    `json:"merchantName,omitempty"`
 	AuthCode       string    `json:"authCode,omitempty"`
 	OriginalRRN    string    `json:"originalRrn,omitempty"`
 	BusinessDate   string    `json:"businessDate"`
@@ -102,6 +99,7 @@ type MuxSender interface {
 // TranLogPort persists tran_log rows; *store.TranLogRepository satisfies it.
 type TranLogPort interface {
 	Insert(ctx context.Context, row store.TranLogRow) (int64, error)
+	Get(ctx context.Context, rrn string) (store.TranLogRow, error)
 	UpdateStatus(ctx context.Context, id int64, status, responseCode, authCode string) error
 }
 
@@ -121,6 +119,7 @@ type HubPort interface {
 type Service struct {
 	mux         MuxSender
 	cardTokens  *purchase.CardTokenRegistry
+	merchants   purchase.MerchantResolver
 	tranLog     TranLogPort
 	idempotency IdempotencyPort
 	hub         HubPort
@@ -131,8 +130,8 @@ type Service struct {
 // NewService builds a Service, reusing the same dependency shapes purchase.NewService takes
 // (mux, cardTokens, tranLog, idempotency, hub, hsmModule, zak) - Ruling 2: a sibling service,
 // not a re-derivation of purchase.Service's already-proven wiring.
-func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, tranLog TranLogPort, idempotency IdempotencyPort, hub HubPort, hsmModule hsm.Module, zak []byte) *Service {
-	return &Service{mux: mux, cardTokens: cardTokens, tranLog: tranLog, idempotency: idempotency, hub: hub, hsm: hsmModule, zak: zak}
+func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency IdempotencyPort, hub HubPort, hsmModule hsm.Module, zak []byte) *Service {
+	return &Service{mux: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, idempotency: idempotency, hub: hub, hsm: hsmModule, zak: zak}
 }
 
 // sendParams carries what each flow-specific Create* method fills in before calling send.
@@ -150,6 +149,23 @@ type sendParams struct {
 	requestHash    string
 }
 
+// finalizeFields attributes the message to the terminal's merchant, then MACs it: DE 42 is
+// rewritten only for flows whose message carries it (completion's 0220 has none), and before the
+// MAC so the MAC covers it.
+func (s *Service) finalizeFields(ctx context.Context, p sendParams) (store.Merchant, error) {
+	merchant, err := s.merchants.Merchant(ctx, p.terminalID)
+	if err != nil {
+		return store.Merchant{}, fmt.Errorf("resolve merchant for terminal %s: %w", p.terminalID, err)
+	}
+	if _, ok := p.fields[42]; ok {
+		p.fields[42] = merchant.MID
+	}
+	if err := attachMAC(s.hsm, s.zak, p.mti, p.fields); err != nil {
+		return store.Merchant{}, fmt.Errorf("compute outgoing MAC: %w", err)
+	}
+	return merchant, nil
+}
+
 // send MACs and sends p.fields, persists the outcome, broadcasts it, and stores the idempotent
 // response - the one place every flow's send path runs (Global Constraints: every outgoing
 // message is MAC'd, no new path bypasses it).
@@ -164,13 +180,14 @@ func (s *Service) send(ctx context.Context, p sendParams) (Transaction, error) {
 		return txn, nil
 	}
 
-	if err := attachMAC(s.hsm, s.zak, p.mti, p.fields); err != nil {
-		return Transaction{}, fmt.Errorf("compute outgoing MAC: %w", err)
+	merchant, err := s.finalizeFields(ctx, p)
+	if err != nil {
+		return Transaction{}, err
 	}
 
 	row := store.TranLogRow{
 		RRN: p.rrn, Type: p.txnType, Status: "SENT", Amount: p.requestedAmt.Amount, Currency: p.requestedAmt.Currency,
-		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: fixedMerchantID, NetworkSTAN: p.stan,
+		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: merchant.MID, NetworkSTAN: p.stan,
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {
@@ -186,6 +203,7 @@ func (s *Service) send(ctx context.Context, p sendParams) (Transaction, error) {
 
 	txn := mapResponseToTransaction(p.txnType, p.requestedAmt, resp)
 	txn.RRN, txn.STAN, txn.MaskedPAN, txn.TerminalID, txn.OriginalRRN = p.rrn, p.stan, p.maskedPAN, p.terminalID, p.originalRRN
+	txn.MerchantName = merchant.Name
 	now := time.Now().UTC()
 	txn.CreatedAt = now
 	txn.BusinessDate = now.Format("2006-01-02")

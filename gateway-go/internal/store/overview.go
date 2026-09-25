@@ -6,7 +6,9 @@ import (
 )
 
 const (
-	throughputWindowMinutes = 30
+	// The Overview chart is 24 bars of 2.5 minutes (docs/api/overview-page.md §3.1 rule 1).
+	throughputBuckets       = 24
+	throughputBucketSeconds = 150
 	stateApproved           = "APPROVED"
 	stateDeclined           = "DECLINED"
 	stateTimedOut           = "TIMED_OUT"
@@ -123,29 +125,45 @@ func (r *TranLogRepository) overviewDeltaPct(ctx context.Context, now, dayStart 
 	return &delta, nil
 }
 
+// overviewThroughput returns throughputBuckets dense, ascending samples ending at now: bucket i
+// covers (now - (24-i)*150s, now - (23-i)*150s], At is its start and TPS is count/150. Empty
+// buckets are present with TPS 0 so the chart's x-axis is real time.
 func (r *TranLogRepository) overviewThroughput(ctx context.Context, now time.Time) ([]ThroughputSample, error) {
+	window := time.Duration(throughputBuckets*throughputBucketSeconds) * time.Second
 	rows, err := r.pool.Query(ctx, `
-		SELECT date_trunc('minute', created_at) AS bucket, count(*)
+		SELECT floor(EXTRACT(EPOCH FROM ($1 - created_at)) / $2)::int AS age, count(*)
 		FROM tran_log
-		WHERE created_at >= $1
-		GROUP BY bucket
-		ORDER BY bucket
-	`, now.Add(-throughputWindowMinutes*time.Minute))
+		WHERE created_at > $3 AND created_at <= $1
+		GROUP BY age
+	`, now, throughputBucketSeconds, now.Add(-window))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var samples []ThroughputSample
+	counts := make([]int64, throughputBuckets)
 	for rows.Next() {
-		var at time.Time
+		var age int
 		var count int64
-		if err := rows.Scan(&at, &count); err != nil {
+		if err := rows.Scan(&age, &count); err != nil {
 			return nil, err
 		}
-		samples = append(samples, ThroughputSample{At: at, TPS: float64(count) / 60})
+		if age >= 0 && age < throughputBuckets {
+			counts[throughputBuckets-1-age] = count
+		}
 	}
-	return samples, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	samples := make([]ThroughputSample, throughputBuckets)
+	for i, count := range counts {
+		samples[i] = ThroughputSample{
+			At:  now.Add(-time.Duration((throughputBuckets-i)*throughputBucketSeconds) * time.Second),
+			TPS: float64(count) / throughputBucketSeconds,
+		}
+	}
+	return samples, nil
 }
 
 func (r *TranLogRepository) overviewDeclineReasons(ctx context.Context, dayStart time.Time) ([]DeclineReasonCount, error) {

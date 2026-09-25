@@ -75,11 +75,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
 	keyStoreRepo := store.NewKeyStoreRepository(pool)
-	zak := loadActiveZAK(ctx, keyStoreRepo, hsmModule, logger)
+	zak := loadActiveZAK(ctx, keyStoreRepo, hsmModule, cfg, logger)
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
-	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, keyStoreRepo)
-	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, hsmModule, zak)
+	terminalRepo := store.NewTerminalRepository(pool)
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, keyStoreRepo)
+	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, hsmModule, zak)
 	rotationRepo := rotation.NewRepository(pool)
 	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK)
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
@@ -161,11 +162,32 @@ func serve(s *http.Server, ln net.Listener) error {
 	return nil
 }
 
-// loadActiveZAK looks up the ACTIVE ZAK, logging and continuing with a nil key on failure.
-// ponytail: no ZAK provisioning flow exists yet (MCN-501 seeded no keys) - log and carry on
-// rather than blocking startup; add fail-fast once a seeding story exists to make "no ZAK" mean
-// "misconfigured" instead of "not provisioned yet".
-func loadActiveZAK(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, logger *slog.Logger) []byte {
+// provisionInitialKeys registers ZAK_HEX / ZPK_HEX as the ACTIVE working keys when key_store has
+// none, so a fresh stack MACs from the first purchase. A key set by a rotation is left alone.
+func provisionInitialKeys(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, cfg config.Config, logger *slog.Logger) error {
+	for _, k := range []struct {
+		keyType string
+		clear   []byte
+	}{{"ZAK", cfg.InitialZAK}, {"ZPK", cfg.InitialZPK}} {
+		inserted, kcv, err := rotation.ProvisionInitialKey(ctx, repo, hsmModule, k.keyType, k.clear)
+		if err != nil {
+			return err
+		}
+		if inserted {
+			logger.Info("registered initial working key", "key_type", k.keyType, "kcv", kcv)
+		}
+	}
+	return nil
+}
+
+// loadActiveZAK registers the initial working keys if needed, then looks up the ACTIVE ZAK,
+// logging and continuing with a nil key on failure.
+// A nil key only happens when ZAK_HEX is unset and no rotation has run: MAC then fails per
+// purchase instead of blocking startup, which keeps the unit-level run tests key-free.
+func loadActiveZAK(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, cfg config.Config, logger *slog.Logger) []byte {
+	if err := provisionInitialKeys(ctx, repo, hsmModule, cfg, logger); err != nil {
+		logger.Error("register initial working keys", "error", err.Error())
+	}
 	zak, err := activeClearKey(ctx, repo, hsmModule, "ZAK")
 	if err != nil {
 		logger.Warn("no active ZAK found, MAC on purchases will fail until one is provisioned", "error", err.Error())

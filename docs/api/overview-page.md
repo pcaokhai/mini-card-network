@@ -28,13 +28,13 @@ Design reference: canvas `project/Main.dc.html` (docs/01-prd.md §7.1). Every ex
 
 | # | Call | Provider | Cadence | Feeds | Gates page render | Gateway status (2026-09-25) |
 | --- | --- | --- | --- | --- | --- | --- |
-| 3.1 | `GET /v1/metrics/overview` | gateway-go | on load, then every 30 s | KPIs, throughput bars, decline reasons | **Yes**: page renders nothing until it succeeds | Implemented; bucketing and decline grouping differ from this spec (§6) |
+| 3.1 | `GET /v1/metrics/overview` | gateway-go | on load, then every 30 s | KPIs, throughput bars, decline reasons | **Yes**: page renders nothing until it succeeds | Implemented; decline grouping is a UI gap (§6 G5) |
 | 3.2 | `GET /v1/transactions?limit=8` | gateway-go | once on load | Feed table seed rows | No | Implemented |
 | 3.3 | `WS /v1/stream` (`transaction.created`, `transaction.updated`) | gateway-go | push | Feed table live rows | No | `created` only; `updated` never sent |
 | 3.4 | `GET /v1/network/links` | gateway-go | every 5 s | Header badge, health row 1 | No | Implemented |
 | 3.5 | `GET /v1/network/saf` | gateway-go | every 5 s | Health row 2 | No | Implemented |
 | 3.6 | `GET /v1/network/switch` | gateway-go | every 5 s | Health row 3 | No | **Missing: returns 404** |
-| 3.7 | `GET /v1/keys/acquirer` | gateway-go | once on load | Health row 4 | No | Implemented; empty until the first rotation |
+| 3.7 | `GET /v1/keys/acquirer` | gateway-go | once on load | Health row 4 | No | Implemented; the configured ZAK/ZPK are registered at startup |
 
 All REST calls are `GET`, idempotent, need no headers beyond the conventions in docs/04 §2, and are cached per query key by TanStack Query. A failing call hides only the element it feeds, except 3.1 (see §5).
 
@@ -177,7 +177,7 @@ Schema `KeyInfo[]`. The UI reads the `ZPK` with `status = ACTIVE`; the row is hi
 | `1 ≤ daysRemaining ≤ 7` | amber | same | same |
 | `daysRemaining ≤ 0` | red | `Đã hết hạn, cần đổi khóa ngay` | same |
 
-Provider rule: the keys the gateway actually uses (`ZPK_HEX`, `ZAK_HEX` at startup) must appear as `ACTIVE` rows. **Today `key_store` is written only by a rotation (G4)**, so a fresh stack returns `[]` and the row is hidden even though the gateway is using a ZPK.
+Provider rule: the keys the gateway actually uses must appear as `ACTIVE` rows. At startup the gateway registers `ZAK_HEX` / `ZPK_HEX` (the same values the issuer is configured with) as `ACTIVE` when `key_store` has none of that type; a key set by a rotation is never overwritten.
 
 ### 3.8 Client-only data (no API)
 
@@ -222,9 +222,9 @@ A backend that adds a new RC must add it to docs/03 §8 and both message files; 
 | ID | Gap | Evidence | Owner | Proposed fix |
 | --- | --- | --- | --- | --- |
 | G1 | `GET /v1/network/switch` not implemented | `curl :8080/v1/network/switch` → 404; no route in `internal/api` | GW | MCN-802 AC1 (after MCN-801) |
-| G2 | Throughput is 1-minute, sparse buckets (`date_trunc('minute')`, only minutes with rows, `tps = count/60`) | `internal/store/overview.go` `overviewThroughput` | GW | 24 × 150 s buckets via `generate_series`, zero-filled, `tps = count/150` (rule 3.1-1). Also add the bucket size to the schema description |
+| G2 | ~~Throughput was 1-minute, sparse buckets over 30 minutes~~ | fixed: 24 dense × 150 s buckets, `tps = count/150` | GW | Done (MCN-002 seed work). Adding the bucket size to the schema description is still open |
 | G3 | `transaction.updated` never broadcast | only `BroadcastTransaction("transaction.created", …)` in `purchase`/`advtxn` | GW | Broadcast on every status transition, including SAF reversal completion |
-| G4 | `key_store` empty until the first rotation | `INSERT INTO key_store` only in `rotation/runner.go`; migration creates the table empty | GW | On startup, register the configured ZPK/ZAK as `ACTIVE` when no active row exists |
+| G4 | ~~`key_store` empty until the first rotation, so a fresh stack had no ZAK and every purchase failed its MAC~~ | fixed: startup registers `ZAK_HEX`/`ZPK_HEX` | GW | Done (MCN-002 seed work) |
 | G5 | Canvas groups the tail into "Lý do khác"; the UI lists every code | `DeclineReasonsBreakdown.tsx` renders all rows | WEB | Keep the provider presentation-free; fold everything after the top 4 into one "Lý do khác" row client-side |
 | G6 | `TransactionSummary.latencyMs` is always `null` | `toSummaryDTO` never sets it | GW | Not used by this page; fix with the Journey screen |
 | G7 | "Today" is the UTC day, so in Vietnam (UTC+7) the KPIs reset at 07:00 local | `now.Truncate(24h)` in `store.Overview` | GW + product | Decide: business date (cutover) vs local calendar day. Record as a ruling |
@@ -242,7 +242,7 @@ Question asked: after `make up && make seed`, does the backend hold data that ma
 | Issuer link | SIGNED_ON, echo seconds ago | Migration seeds `issuer`/`DISCONNECTED`; becomes SIGNED_ON once the gateway signs on | ✓ |
 | SAF queue | empty | empty | ✓ |
 | Stand-in / circuit | STIP OFF · CLOSED | endpoint 404 | ✗ (G1) |
-| Security key | ZPK `3F9A21`, 26 days left | none until a rotation; lifetime is 365 days in the gateway, not the 90 the mock uses | ✗ (G4) |
+| Security key | ZPK `3F9A21`, 26 days left | registered at startup from `ZPK_HEX` (after the MCN-002 gateway change); lifetime is 365 days in the gateway, not the 90 the mock uses | ✓ after MCN-002 |
 
 Observed on the running stack (2026-09-25): 3 transactions in total, all from 2026-09-24, all card 4417 and merchant `Ca phe Goc Pho`. Two are stuck in `SENT` and one in `REVERSAL_PENDING` (RC 96, the key-rotation gap noted in `docs/plans/MCN-503.md`). `metrics/overview` returns all zeros because none of them are "today".
 

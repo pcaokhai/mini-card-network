@@ -24,6 +24,11 @@ type Config struct {
 	ChaosFakeIssuerAddr string
 	LMKTestValueHex     string
 	ZMK                 []byte
+	// InitialZAK / InitialZPK are the working keys the issuer is configured with. When
+	// key_store has no ACTIVE key of that type, the gateway registers these at startup so a
+	// fresh stack can MAC and verify from the first purchase; nil means "provision nothing".
+	InitialZAK []byte
+	InitialZPK []byte
 	// CORSAllowedOrigin is empty by default (CORS middleware off - safe for a topology where a
 	// server-side BFF calls the gateway, never a browser directly). Set it only for local dev
 	// where web-next talks to the gateway straight from the browser (docs/09-risk-register.md
@@ -69,15 +74,8 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 	cfg.ZMK = zmk
 
-	if raw := getenv("SAF_ENC_KEY"); raw != "" {
-		key, err := base64.StdEncoding.DecodeString(raw)
-		if err != nil {
-			return Config{}, fmt.Errorf("SAF_ENC_KEY: not valid base64: %w", err)
-		}
-		if len(key) != 32 {
-			return Config{}, fmt.Errorf("SAF_ENC_KEY: must decode to 32 bytes (AES-256), got %d", len(key))
-		}
-		cfg.SafEncKey = key
+	if err := loadOptionalKeys(getenv, &cfg); err != nil {
+		return Config{}, err
 	}
 	// ponytail: an unset SAF_ENC_KEY leaves cfg.SafEncKey nil, and saf.encodePayload/decodePayload
 	// treat a nil key as "store the SAF payload unencrypted" - acceptable for local/dev
@@ -85,6 +83,45 @@ func Load(getenv func(string) string) (Config, error) {
 	// must set SAF_ENC_KEY (docs/10-engineering-standards.md §2 PCI DSS).
 
 	return cfg, nil
+}
+
+// loadOptionalKeys reads the keys a lab stack may leave unset: SAF_ENC_KEY (base64, 32 bytes)
+// and the initial working keys ZAK_HEX / ZPK_HEX (hex AES).
+func loadOptionalKeys(getenv func(string) string, cfg *Config) error {
+	if raw := getenv("SAF_ENC_KEY"); raw != "" {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return fmt.Errorf("SAF_ENC_KEY: not valid base64: %w", err)
+		}
+		if len(key) != 32 {
+			return fmt.Errorf("SAF_ENC_KEY: must decode to 32 bytes (AES-256), got %d", len(key))
+		}
+		cfg.SafEncKey = key
+	}
+	var err error
+	if cfg.InitialZAK, err = optionalAESKeyHex(getenv, "ZAK_HEX"); err != nil {
+		return err
+	}
+	cfg.InitialZPK, err = optionalAESKeyHex(getenv, "ZPK_HEX")
+	return err
+}
+
+// optionalAESKeyHex decodes name as a hex AES key (16, 24 or 32 bytes); unset returns nil.
+func optionalAESKeyHex(getenv func(string) string, name string) ([]byte, error) {
+	raw := getenv(name)
+	if raw == "" {
+		return nil, nil
+	}
+	key, err := hex.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: not valid hex: %w", name, err)
+	}
+	switch len(key) {
+	case 16, 24, 32:
+		return key, nil
+	default:
+		return nil, fmt.Errorf("%s: must decode to 16, 24 or 32 bytes (AES), got %d", name, len(key))
+	}
 }
 
 func valueOr(v, fallback string) string {

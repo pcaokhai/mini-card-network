@@ -123,3 +123,35 @@ func TestTranLogRepository_overview_noDeltaWithoutYesterdayBaseline__MCN_306(t *
 	require.Nil(t, stats.TransactionsDeltaPct)
 	require.Equal(t, int64(0), stats.P50LatencyMs)
 }
+
+func TestTranLogRepository_overview_throughputIs24DenseBuckets__MCN_306(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewTranLogRepository(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	at := func(rrn string, ago time.Duration) {
+		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID})
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `UPDATE tran_log SET created_at = $2 WHERE id = $1`, id, now.Add(-ago))
+		require.NoError(t, err)
+	}
+	at("626514000401", 10*time.Second)  // newest bucket
+	at("626514000402", 20*time.Second)  // newest bucket
+	at("626514000403", 160*time.Second) // second newest
+	at("626514000404", 59*time.Minute)  // oldest bucket
+	at("626514000405", 61*time.Minute)  // outside the window
+
+	stats, err := repo.Overview(ctx, now)
+	require.NoError(t, err)
+
+	require.Len(t, stats.Throughput, 24)
+	for i := 1; i < 24; i++ {
+		require.Equal(t, 150*time.Second, stats.Throughput[i].At.Sub(stats.Throughput[i-1].At), "bucket %d", i)
+	}
+	require.WithinDuration(t, now.Add(-150*time.Second), stats.Throughput[23].At, time.Millisecond)
+	require.InDelta(t, 2.0/150, stats.Throughput[23].TPS, 1e-9)
+	require.InDelta(t, 1.0/150, stats.Throughput[22].TPS, 1e-9)
+	require.InDelta(t, 1.0/150, stats.Throughput[0].TPS, 1e-9)
+	require.Zero(t, stats.Throughput[10].TPS, "empty buckets are present as zero")
+}

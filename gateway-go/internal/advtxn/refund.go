@@ -40,7 +40,7 @@ func (s *Service) CreateRefund(ctx context.Context, req RefundRequest, idempoten
 		32: acquirerID,
 		37: rrn,
 		41: req.TerminalID,
-		42: fixedMerchantID,
+		42: "", // filled by send() from the terminal's merchant
 		49: req.Amount.Currency,
 	}
 

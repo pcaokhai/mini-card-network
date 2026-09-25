@@ -16,6 +16,11 @@ const (
 // CreateCompletion sends a 0220 completing the pre-authorization identified by rrn, DE 37
 // referencing it (docs/03 "C8 completion references the pre-auth").
 func (s *Service) CreateCompletion(ctx context.Context, rrn string, req CompletionRequest, idempotencyKey string) (Transaction, error) {
+	// The completion happens at the pre-auth's terminal and card; the request carries neither.
+	preAuth, err := s.tranLog.Get(ctx, rrn)
+	if err != nil {
+		return Transaction{}, fmt.Errorf("look up pre-authorization %s: %w", rrn, err)
+	}
 	stan, ok := s.mux.NextSTAN()
 	if !ok {
 		return Transaction{}, fmt.Errorf("advtxn: no STAN available")
@@ -36,6 +41,7 @@ func (s *Service) CreateCompletion(ctx context.Context, rrn string, req Completi
 	return s.send(ctx, sendParams{
 		mti: "0220", txnType: tranTypeCompletion, route: routeCompletion, fields: fields,
 		rrn: completionRRN, stan: stan, originalRRN: rrn,
+		terminalID: preAuth.TerminalID, maskedPAN: preAuth.MaskedPAN,
 		requestedAmt: req.Amount, idempotencyKey: idempotencyKey, requestHash: hashRequest(req),
 	})
 }
