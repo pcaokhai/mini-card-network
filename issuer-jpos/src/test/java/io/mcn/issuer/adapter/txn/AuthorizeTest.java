@@ -93,4 +93,33 @@ class AuthorizeTest {
     assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("61");
     Mockito.verifyNoInteractions(lockRepo, ledgerRepo, velocityCounterRepo);
   }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName(
+      "R-1: the overdraft floor is enforced in the debit path, under the account lock")
+  void debitIsApprovedDownToTheOverdraftFloorAndDeclinedPastIt() throws Exception {
+    var lockRepo = Mockito.mock(AccountLockRepository.class);
+    // available 5 000 with a 10 000 overdraft: the floor is -10 000
+    when(lockRepo.lockAndGet(any(), anyLong()))
+        .thenReturn(new AccountRow(1L, 5_000L, 5_000L, 10_000L, 0L));
+    var authorize =
+        new Authorize(
+            lockRepo,
+            Mockito.mock(LedgerRepository.class),
+            Mockito.mock(VelocityCounterRepository.class),
+            new AuthCodeGenerator(),
+            fakeDataSource());
+
+    Context toTheFloor = new Context();
+    toTheFloor.put(TxnContextKeys.ACCOUNT_ID, 1L);
+    toTheFloor.put(TxnContextKeys.AMOUNT, 15_000L);
+    authorize.prepare(1L, toTheFloor);
+    Context pastTheFloor = new Context();
+    pastTheFloor.put(TxnContextKeys.ACCOUNT_ID, 1L);
+    pastTheFloor.put(TxnContextKeys.AMOUNT, 15_001L);
+    authorize.prepare(2L, pastTheFloor);
+
+    assertThat(toTheFloor.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("00");
+    assertThat(pastTheFloor.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("51");
+  }
 }

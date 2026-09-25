@@ -58,16 +58,19 @@ class AccountLockRepositoryTest {
   }
 
   @Test
-  void adjustNeverTakesTheBalanceBelowTheOverdraftFloor() throws Exception {
+  @org.junit.jupiter.api.DisplayName(
+      "R-1: a reversal may overdraw - the floor is Authorize's rule, not the account table's")
+  void adjustMayTakeTheBalanceBelowTheOverdraftFloor() throws Exception {
     var ds = TestDataSources.migrated(postgres);
     long accountId = new AccountRepository(ds).insert("ACC-TEST-2", "704", 50_000L);
     var repo = new AccountLockRepository(ds);
 
     try (Connection conn = ds.getConnection()) {
-      org.assertj.core.api.Assertions.assertThatThrownBy(
-              () -> repo.adjust(conn, accountId, -50_001L))
-          .isInstanceOf(IllegalStateException.class);
-      assertThat(repo.lockAndGet(conn, accountId).availableBalance()).isEqualTo(50_000L);
+      var after = repo.adjust(conn, accountId, -50_001L);
+
+      assertThat(after.availableBalance()).isEqualTo(-1L);
+      assertThat(after.ledgerBalance()).isEqualTo(-1L);
+      assertThat(after.overdraftLimit()).isZero();
     }
   }
 }

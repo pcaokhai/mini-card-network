@@ -47,7 +47,6 @@ import org.jpos.util.Destroyable;
 public class Authorize implements TransactionParticipant, Configurable, Destroyable {
 
   private static final String CURRENCY = "704";
-  private static final String PURCHASE_TRAN_TYPE = "PURCHASE";
 
   private AccountLockRepository lockRepository;
   private LedgerRepository ledgerRepository;
@@ -125,12 +124,16 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     }
   }
 
-  /** Purchase or cash: RC 51 unless the funds cover it; then debit, journal and velocity. */
+  /**
+   * Purchase or cash: RC 51 unless the balance stays at or above the overdraft floor ({@code
+   * -overdraft_limit}), checked here under the row lock because the account table no longer
+   * enforces it (reversals must be able to overdraw); then debit, journal and velocity.
+   */
   private boolean debit(Connection conn, Context ctx) {
     long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
     long amount = ctx.get(TxnContextKeys.AMOUNT);
     AccountRow account = lockRepository.lockAndGet(conn, accountId);
-    if (account.availableBalance() < amount) {
+    if (account.availableBalance() - amount < -account.overdraftLimit()) {
       ctx.put(TxnContextKeys.RESPONSE_CODE, "51");
       ctx.put(TxnContextKeys.DECLINE_REASON, "insufficient funds");
       return false;
@@ -141,7 +144,7 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     Long cardId = ctx.get(TxnContextKeys.CARD_ID);
     if (cardId != null) {
       velocityCounterRepository.incrementDaily(
-          conn, cardId, PURCHASE_TRAN_TYPE, businessDate, amount);
+          conn, cardId, VelocityCounterRepository.DEBIT_TRAN_TYPE, businessDate, amount);
     }
     return true;
   }

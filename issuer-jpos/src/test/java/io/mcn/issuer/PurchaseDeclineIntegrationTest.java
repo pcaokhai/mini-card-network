@@ -469,6 +469,85 @@ class PurchaseDeclineIntegrationTest {
   }
 
   @Test
+  @Order(14)
+  @DisplayName(
+      "R-1: reversing a refund the customer already spent answers 0430 00, overdraws the account"
+          + " and records NEGATIVE_BALANCE_AFTER_REVERSAL")
+  void reversingASpentRefundOverdrawsAndRecordsAnEvent() throws Exception {
+    String pan = "9704360000004417"; // crd_normal0001, no overdraft
+    long accountId = accountIdByAccountNo("ACC-crd_normal0001");
+    assertThat(financial(40, pan, "200000", 100_000L).getString(39)).isEqualTo("00");
+    long spendAll = accountBalance(accountId);
+    assertThat(purchase(41, pan, spendAll).getString(39)).isEqualTo("00");
+
+    ISOMsg ack = reversal(42, 40, "200000", 100_000L);
+
+    assertThat(ack.getMTI()).isEqualTo("0430");
+    assertThat(ack.getString(39)).isEqualTo("00");
+    assertThat(accountBalance(accountId)).isEqualTo(-100_000L);
+    assertThat(ledgerBalance(accountId)).isEqualTo(-100_000L);
+    assertThat(
+            single(
+                "SELECT count(*) FROM audit_log WHERE action = 'NEGATIVE_BALANCE_AFTER_REVERSAL'"
+                    + " AND entity_type = 'account' AND entity_id = ?::text",
+                accountId))
+        .isEqualTo(1);
+    assertThat(unbalancedJournalCount()).isZero();
+  }
+
+  @Test
+  @Order(15)
+  @DisplayName("R-3: reversing a purchase frees its daily limit, so the next purchase passes")
+  void reversingAPurchaseFreesItsDailyVelocity() throws Exception {
+    String pan = "9704360000009021"; // crd_lowbal0002, well funded since the refund in Order 8
+    long cardId = single("SELECT id FROM card WHERE card_ref = 'crd_lowbal0002' AND 0 < ?", 1);
+    long usedToday = velocityToday(cardId, "txn_amount");
+    execute(
+        "INSERT INTO card_limit (card_id, tran_type, period, max_amount) VALUES ("
+            + cardId
+            + ", 'ALL', 'DAILY', "
+            + (usedToday + 50_000L)
+            + ")");
+    try {
+      assertThat(purchase(43, pan, 50_000L).getString(39)).isEqualTo("00");
+      assertThat(purchase(44, pan, 10_000L).getString(39)).isEqualTo("61");
+      long countBefore = velocityToday(cardId, "txn_count");
+
+      reversal(45, 43, "000000", 50_000L);
+
+      assertThat(velocityToday(cardId, "txn_amount")).isEqualTo(usedToday);
+      assertThat(velocityToday(cardId, "txn_count")).isEqualTo(countBefore - 1);
+      assertThat(purchase(46, pan, 10_000L).getString(39)).isEqualTo("00");
+    } finally {
+      execute("DELETE FROM card_limit WHERE card_id = " + cardId);
+    }
+  }
+
+  @Test
+  @Order(16)
+  @DisplayName("R-2: a duplicate balance inquiry replays the stored DE 54 and DE 38")
+  void duplicateBalanceInquiryReplaysDe54AndDe38() throws Exception {
+    ISOMsg first = financial(47, SECOND_PAN, "310000", null);
+    ISOMsg duplicate = financial(47, SECOND_PAN, "310000", null);
+
+    assertThat(first.getString(54)).startsWith("704C");
+    assertThat(duplicate.getString(39)).isEqualTo("00");
+    assertThat(duplicate.getString(54)).isEqualTo(first.getString(54));
+    assertThat(duplicate.getString(38)).isEqualTo(first.getString(38));
+  }
+
+  private static long velocityToday(long cardId, String column) throws Exception {
+    return single(
+        "SELECT COALESCE(SUM("
+            + column
+            + "), 0) FROM velocity_counter WHERE card_id = ? AND period = 'DAILY'"
+            + " AND period_key = '"
+            + java.time.LocalDate.now() // the date Authorize keys the counter with
+            + "'",
+        cardId);
+  }
+
+  @Test
   @Order(99)
   @DisplayName(
       "POS-G18: after purchases, reversals, refunds and refund reversals, every account's balance"

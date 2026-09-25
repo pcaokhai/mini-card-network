@@ -110,7 +110,8 @@ public class LogAndOutbox implements AbortParticipant, Configurable, Destroyable
           status,
           responseCode,
           authCode,
-          declineReason);
+          declineReason,
+          ctx.<Long>get(TxnContextKeys.BALANCE));
     } else {
       // ponytail: prepare() never ran (an earlier participant aborted before this one's turn) -
       // one-shot insert with the outcome already known, same as MCN-302a's original behavior.

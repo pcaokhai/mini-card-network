@@ -2,14 +2,18 @@ package io.mcn.issuer.adapter.txn;
 
 import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.persistence.AccountLockRepository;
+import io.mcn.issuer.adapter.persistence.AccountRow;
+import io.mcn.issuer.adapter.persistence.AuditLogRepository;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
 import io.mcn.issuer.adapter.persistence.OriginalTransactionRow;
 import io.mcn.issuer.adapter.persistence.ReversalWithoutOriginalRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRepository;
+import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import java.io.Serializable;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDate;
+import java.util.Map;
 import javax.sql.DataSource;
 import org.jpos.core.Configurable;
 import org.jpos.core.Configuration;
@@ -35,6 +39,8 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
   private LedgerRepository ledgerRepository;
   private ReversalWithoutOriginalRepository reversalWithoutOriginalRepository;
   private AccountLockRepository accountLockRepository;
+  private VelocityCounterRepository velocityCounterRepository;
+  private AuditLogRepository auditLogRepository;
   private DataSource dataSource;
   private HikariDataSource ownedDataSource;
 
@@ -72,6 +78,26 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
       ReversalWithoutOriginalRepository reversalWithoutOriginalRepository,
       AccountLockRepository accountLockRepository,
       DataSource dataSource) {
+    this(
+        tranLogRepository,
+        ledgerRepository,
+        reversalWithoutOriginalRepository,
+        accountLockRepository,
+        new VelocityCounterRepository(dataSource),
+        new AuditLogRepository(dataSource),
+        dataSource);
+  }
+
+  public LocateAndReverse(
+      TranLogRepository tranLogRepository,
+      LedgerRepository ledgerRepository,
+      ReversalWithoutOriginalRepository reversalWithoutOriginalRepository,
+      AccountLockRepository accountLockRepository,
+      VelocityCounterRepository velocityCounterRepository,
+      AuditLogRepository auditLogRepository,
+      DataSource dataSource) {
+    this.velocityCounterRepository = velocityCounterRepository;
+    this.auditLogRepository = auditLogRepository;
     this.tranLogRepository = tranLogRepository;
     this.ledgerRepository = ledgerRepository;
     this.reversalWithoutOriginalRepository = reversalWithoutOriginalRepository;
@@ -87,6 +113,8 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
     this.ledgerRepository = new LedgerRepository();
     this.reversalWithoutOriginalRepository = new ReversalWithoutOriginalRepository(ownedDataSource);
     this.accountLockRepository = new AccountLockRepository(ownedDataSource);
+    this.velocityCounterRepository = new VelocityCounterRepository(ownedDataSource);
+    this.auditLogRepository = new AuditLogRepository(ownedDataSource);
   }
 
   @Override
@@ -137,15 +165,59 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
     try (Connection conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
       if (tranLogRepository.markReversed(conn, original.id(), original.businessDate())) {
-        // Balances change only with their journal, in its transaction (docs/10 §5).
-        ledgerRepository
-            .postReversalOf(conn, original.id(), original.businessDate())
-            .forEach((accountId, delta) -> accountLockRepository.adjust(conn, accountId, delta));
+        undo(conn, original);
       }
       conn.commit();
     } catch (SQLException e) {
       throw new IllegalStateException("post reversal journal failed", e);
     }
     return PREPARED;
+  }
+
+  /**
+   * Everything the original did, undone in the caller's transaction: the mirrored journal, the
+   * balance it moved (docs/10 §5), and - for a debit - its count against the day's velocity limits
+   * (R-3). A reversal always posts, even past the overdraft floor (an advice can't be declined,
+   * docs/03 §7.3); that case is recorded for follow-up (R-1).
+   */
+  private void undo(Connection conn, OriginalTransactionRow original) {
+    Map<Long, Long> deltas =
+        ledgerRepository.postReversalOf(conn, original.id(), original.businessDate());
+    for (var entry : deltas.entrySet()) {
+      AccountRow after = accountLockRepository.adjust(conn, entry.getKey(), entry.getValue());
+      if (after.availableBalance() < -after.overdraftLimit()) {
+        recordNegativeBalance(conn, original, entry.getValue(), after);
+      }
+    }
+    boolean originalDebitedTheCustomer =
+        deltas.values().stream().mapToLong(Long::longValue).sum() > 0;
+    if (originalDebitedTheCustomer) {
+      velocityCounterRepository.decrementDaily(
+          conn,
+          original.cardId(),
+          VelocityCounterRepository.DEBIT_TRAN_TYPE,
+          original.businessDate(),
+          original.amount());
+    }
+  }
+
+  private void recordNegativeBalance(
+      Connection conn, OriginalTransactionRow original, long delta, AccountRow after) {
+    auditLogRepository.record(
+        conn,
+        "issuer",
+        "NEGATIVE_BALANCE_AFTER_REVERSAL",
+        "account",
+        String.valueOf(after.id()),
+        "{\"availableBalance\":" + (after.availableBalance() - delta) + "}",
+        "{\"availableBalance\":"
+            + after.availableBalance()
+            + ",\"overdraftLimit\":"
+            + after.overdraftLimit()
+            + ",\"reversedTranId\":"
+            + original.id()
+            + ",\"businessDate\":\""
+            + original.businessDate()
+            + "\"}");
   }
 }

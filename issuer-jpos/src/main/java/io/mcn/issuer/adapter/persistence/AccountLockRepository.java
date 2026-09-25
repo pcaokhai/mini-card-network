@@ -49,20 +49,29 @@ public class AccountLockRepository {
    * movements that can't be declined for funds (a refund credit, a reversal), unlike {@link
    * #debit}: {@code chk_available_floor} still guards the overdraft floor.
    */
-  public void adjust(Connection conn, long accountId, long signedAmount) {
+  public AccountRow adjust(Connection conn, long accountId, long signedAmount) {
     String sql =
         """
         UPDATE account SET available_balance = available_balance + ?,
                             ledger_balance = ledger_balance + ?,
                             version = version + 1,
                             updated_at = now()
-        WHERE id = ?""";
+        WHERE id = ?
+        RETURNING id, available_balance, ledger_balance, overdraft_limit, version""";
     try (PreparedStatement stmt = conn.prepareStatement(sql)) {
       stmt.setLong(1, signedAmount);
       stmt.setLong(2, signedAmount);
       stmt.setLong(3, accountId);
-      if (stmt.executeUpdate() != 1) {
-        throw new IllegalStateException("account not found: " + accountId);
+      try (ResultSet rs = stmt.executeQuery()) {
+        if (!rs.next()) {
+          throw new IllegalStateException("account not found: " + accountId);
+        }
+        return new AccountRow(
+            rs.getLong("id"),
+            rs.getLong("available_balance"),
+            rs.getLong("ledger_balance"),
+            rs.getLong("overdraft_limit"),
+            rs.getLong("version"));
       }
     } catch (SQLException e) {
       throw new IllegalStateException("adjust account balance failed", e);

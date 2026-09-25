@@ -67,10 +67,22 @@ public class TranLogRepository {
       String responseCode,
       String authCode,
       String declineReason) {
+    updateOutcome(tranId, businessDate, status, responseCode, authCode, declineReason, null);
+  }
+
+  /** As above, plus the balance a balance inquiry answered, so a duplicate replays it (R-2). */
+  public void updateOutcome(
+      long tranId,
+      LocalDate businessDate,
+      String status,
+      String responseCode,
+      String authCode,
+      String declineReason,
+      Long balance) {
     String sql =
         """
         UPDATE tran_log SET status = ?, response_code = ?, auth_code = ?, decline_reason = ?,
-                             updated_at = now()
+                             balance = ?, updated_at = now()
         WHERE id = ? AND business_date = ?""";
     try (var conn = dataSource.getConnection();
         var stmt = conn.prepareStatement(sql)) {
@@ -78,8 +90,9 @@ public class TranLogRepository {
       stmt.setString(2, responseCode);
       stmt.setString(3, authCode);
       stmt.setString(4, declineReason);
-      stmt.setLong(5, tranId);
-      stmt.setObject(6, businessDate);
+      stmt.setObject(5, balance, java.sql.Types.BIGINT);
+      stmt.setLong(6, tranId);
+      stmt.setObject(7, businessDate);
       stmt.executeUpdate();
     } catch (SQLException e) {
       throw new IllegalStateException("update tran_log outcome failed", e);
@@ -97,7 +110,7 @@ public class TranLogRepository {
         """
         SELECT business_date, mti, tran_type, processing_code, acquirer_id, tid, mid, stan,
                transmission_dt_raw, rrn, amount, currency, card_id, status, response_code,
-               auth_code, decline_reason
+               auth_code, decline_reason, balance
         FROM tran_log
         WHERE acquirer_id = ? AND tid = ? AND stan = ? AND transmission_dt_raw = ?
           AND mti = ? AND business_date = ?""";
@@ -113,6 +126,8 @@ public class TranLogRepository {
       if (!rs.next()) return Optional.empty();
       long rawCardId = rs.getLong("card_id");
       Long cardId = rs.wasNull() ? null : rawCardId;
+      long rawBalance = rs.getLong("balance");
+      Long balance = rs.wasNull() ? null : rawBalance;
       return Optional.of(
           new TranLogRow(
               rs.getObject("business_date", LocalDate.class),
@@ -131,7 +146,8 @@ public class TranLogRepository {
               rs.getString("status"),
               rs.getString("response_code") == null ? null : rs.getString("response_code").trim(),
               rs.getString("auth_code") == null ? null : rs.getString("auth_code").trim(),
-              rs.getString("decline_reason")));
+              rs.getString("decline_reason"),
+              balance));
     } catch (SQLException e) {
       throw new IllegalStateException("find tran_log by dedupe key failed", e);
     }

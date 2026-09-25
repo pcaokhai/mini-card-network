@@ -8,10 +8,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import io.mcn.issuer.adapter.persistence.AccountLockRepository;
+import io.mcn.issuer.adapter.persistence.AccountRow;
+import io.mcn.issuer.adapter.persistence.AuditLogRepository;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
 import io.mcn.issuer.adapter.persistence.OriginalTransactionRow;
 import io.mcn.issuer.adapter.persistence.ReversalWithoutOriginalRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRepository;
+import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import java.time.LocalDate;
 import java.util.Map;
 import java.util.Optional;
@@ -30,13 +33,18 @@ class LocateAndReverseTest {
     when(tranLog.markReversed(any(), eq(42L), any())).thenReturn(true);
     when(ledger.postReversalOf(any(), eq(42L), any())).thenReturn(Map.of(99L, 10_000L));
     var accounts = mock(AccountLockRepository.class);
+    when(accounts.adjust(any(), eq(99L), eq(10_000L)))
+        .thenReturn(new AccountRow(99L, 10_000L, 10_000L, 0L, 1L));
+    var velocity = mock(VelocityCounterRepository.class);
     Context ctx = contextWithReversalKey();
 
-    newLocateAndReverse(tranLog, ledger, accounts).prepare(0, ctx);
+    newLocateAndReverse(tranLog, ledger, accounts, velocity).prepare(0, ctx);
 
     verify(tranLog).markReversed(any(), eq(42L), any());
     verify(ledger).postReversalOf(any(), eq(42L), any());
     verify(accounts).adjust(any(), eq(99L), eq(10_000L)); // balance moves with its journal
+    // R-3: the reversed debit no longer counts against the day's velocity limits
+    verify(velocity).decrementDaily(any(), eq(7L), eq("PURCHASE"), any(), eq(10_000L));
   }
 
   /** A 0420 and its 0421 repeat in flight together: only the one that flips APPROVED posts. */
@@ -72,16 +80,26 @@ class LocateAndReverseTest {
 
   private static LocateAndReverse newLocateAndReverse(
       TranLogRepository tranLog, LedgerRepository ledger) throws Exception {
-    return newLocateAndReverse(tranLog, ledger, mock(AccountLockRepository.class));
+    return newLocateAndReverse(
+        tranLog, ledger, mock(AccountLockRepository.class), mock(VelocityCounterRepository.class));
   }
 
   private static LocateAndReverse newLocateAndReverse(
-      TranLogRepository tranLog, LedgerRepository ledger, AccountLockRepository accounts)
+      TranLogRepository tranLog,
+      LedgerRepository ledger,
+      AccountLockRepository accounts,
+      VelocityCounterRepository velocity)
       throws Exception {
     var ds = mock(DataSource.class);
     when(ds.getConnection()).thenReturn(mock(java.sql.Connection.class));
     return new LocateAndReverse(
-        tranLog, ledger, mock(ReversalWithoutOriginalRepository.class), accounts, ds);
+        tranLog,
+        ledger,
+        mock(ReversalWithoutOriginalRepository.class),
+        accounts,
+        velocity,
+        mock(AuditLogRepository.class),
+        ds);
   }
 
   @Test
