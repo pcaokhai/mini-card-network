@@ -629,72 +629,113 @@
   },
   "cards": {
     "title": "Thẻ và tài khoản",
-    "statusHeading": "Trạng thái thẻ",
-    "balanceHeading": "Số dư",
-    "limitsHeading": "Hạn mức",
+    "subtitle": "Xem số dư, tiền đang tạm giữ, hạn mức và sổ cái của từng thẻ. Mọi thay đổi đều được ghi vào nhật ký kiểm toán.",
+    "loadFailed": "Không tải được thẻ này. Thử tải lại trang.",
     "list": {
-      "empty": "Chưa có thẻ nào",
-      "heading": "Thẻ của khách hàng"
+      "heading": "Thẻ của khách hàng",
+      "empty": "Chưa có thẻ nào"
+    },
+    "visual": {
+      "brand": "MCN Debit",
+      "expires": "Hết hạn {expiry}",
+      "locked": "Thẻ đang bị khóa"
     },
     "status": {
-      "ACTIVE": "Đang hoạt động",
-      "BLOCKED": "Đã khóa",
-      "LOST": "Mất thẻ",
-      "STOLEN": "Bị đánh cắp",
-      "EXPIRED": "Hết hạn",
-      "PIN_BLOCKED": "Khóa PIN"
-    },
-    "balance": {
-      "ledger": "Số dư sổ cái",
-      "available": "Số dư khả dụng",
-      "held": "Đang giữ"
-    },
-    "holds": {
-      "title": "Khoản giữ",
-      "empty": "Chưa có khoản giữ nào",
-      "status": {
-        "ACTIVE": "Đang hoạt động",
-        "COMPLETED": "Đã hoàn tất",
-        "RELEASED": "Đã giải phóng",
-        "EXPIRED": "Hết hạn"
-      }
-    },
-    "limits": {
-      "daily": "Hạn mức ngày",
-      "perTransaction": "Hạn mức mỗi giao dịch",
-      "save": "Lưu"
-    },
-    "ledger": {
-      "title": "Sổ cái",
-      "description": "Mô tả",
-      "postings": "Bút toán"
-    },
-    "blockDialog": {
+      "heading": "Trạng thái thẻ",
+      "easy": {
+        "active": "Đang hoạt động",
+        "locked": "Đã khóa",
+        "expired": "Đã hết hạn"
+      },
+      "easyDesc": {
+        "active": "Thẻ dùng được bình thường ở mọi máy POS.",
+        "locked": "Mọi giao dịch mới sẽ bị từ chối với lý do thẻ bị khóa.",
+        "expired": "Thẻ đã quá ngày hết hạn. Khách cần được phát hành thẻ mới."
+      },
+      "expertDesc": {
+        "active": "card.status = {status} · mọi kiểm tra tiếp theo chạy bình thường.",
+        "locked": "card.status = {status} → participant Validate trả RC 62.",
+        "expired": "expiry {expiry} < business date → RC 54."
+      },
       "block": "Khóa thẻ",
       "unblock": "Mở khóa thẻ",
-      "blockPrompt": "Khóa thẻ sẽ dừng ngay các giao dịch mới. Xác nhận để tiếp tục.",
-      "unblockPrompt": "Mở khóa thẻ sẽ cho phép giao dịch mới trở lại. Xác nhận để tiếp tục.",
-      "reason": "Lý do",
-      "reasons": {
-        "CUSTOMER_REQUEST": "Yêu cầu của khách hàng",
-        "LOST": "Mất thẻ",
-        "STOLEN": "Bị đánh cắp",
-        "FRAUD_SUSPECTED": "Nghi ngờ gian lận"
+      "confirmBlock": "Khóa thẻ •••• {last4}? Mọi giao dịch mới sẽ bị từ chối cho tới khi mở khóa.",
+      "confirmUnblock": "Mở khóa thẻ •••• {last4}? Thẻ sẽ dùng lại được ngay.",
+      "confirmBlockButton": "Xác nhận khóa",
+      "confirmUnblockButton": "Xác nhận mở khóa",
+      "cancel": "Hủy",
+      "failed": "Không đổi được trạng thái thẻ: {detail}",
+      "auditEasy": "Đã ghi nhật ký: {action, select, block {khóa} other {mở khóa}} thẻ •••• {last4} lúc {time}",
+      "auditExpert": "audit_log · {action, select, block {CARD_BLOCKED} other {CARD_UNBLOCKED}} · card {last4} · actor ops"
+    },
+    "balance": {
+      "heading": "Số dư",
+      "easy": {
+        "ledger": "Số dư trong sổ",
+        "held": "Đang tạm giữ",
+        "available": "Có thể chi tiêu"
       },
-      "confirm": "Xác nhận",
-      "cancel": "Hủy"
+      "expert": {
+        "ledger": "ledger_balance",
+        "held": "Σ auth_hold ACTIVE",
+        "available": "available_balance"
+      },
+      "holdEasy": "Tạm giữ cho {merchant} · {amount}",
+      "holdExpert": "auth_hold ACTIVE · {merchant} · {amount}",
+      "holdUntil": "Tự giải phóng {date}"
     },
-    "audit": {
-      "CARD_BLOCKED": "{actor} đã khóa thẻ này lúc {at}",
-      "CARD_UNBLOCKED": "{actor} đã mở khóa thẻ này lúc {at}",
-      "LIMITS_UPDATED": "{actor} đã cập nhật hạn mức lúc {at}"
+    "limits": {
+      "heading": "Hạn mức",
+      "easy": {
+        "daily": "Hạn mức mỗi ngày",
+        "perTransaction": "Hạn mức mỗi giao dịch"
+      },
+      "expert": {
+        "daily": "card_limit ALL / DAILY",
+        "perTransaction": "card_limit ALL / PER_TXN"
+      },
+      "unset": "Chưa đặt",
+      "used": "Đã dùng hôm nay {used} · {percent}% hạn mức",
+      "usedNoLimit": "Đã dùng hôm nay {used}",
+      "stale": "Someone changed this card. Reload to continue.",
+      "reload": "Tải lại",
+      "failed": "Không lưu được hạn mức: {detail}"
     },
-    "actions": {
-      "block": "Khóa thẻ",
-      "unblock": "Mở khóa thẻ"
-    },
-    "errors": {
-      "staleCard": "Someone changed this card. Reload to continue."
+    "ledger": {
+      "easy": {
+        "title": "Lịch sử tiền vào, tiền ra",
+        "note": "Mỗi khoản đều có đối ứng nên sổ luôn cân",
+        "a": "Loại",
+        "b": "Số tiền",
+        "more": "Xem thêm"
+      },
+      "expert": {
+        "title": "Bút toán kép (journal)",
+        "note": "Mỗi journal: Σ Nợ = Σ Có, kiểm tra lúc COMMIT",
+        "a": "Vế Nợ",
+        "b": "Vế Có",
+        "more": "Load more"
+      },
+      "time": "Giờ",
+      "description": "Nội dung",
+      "empty": "Chưa có bút toán nào",
+      "kind": {
+        "out": "Tiền ra",
+        "in": "Tiền vào",
+        "none": "Không đổi"
+      },
+      "debit": "Nợ {account}",
+      "credit": "Có {account} · {amount}",
+      "notPosted": "Không hạch toán",
+      "type": {
+        "PURCHASE": "Mua hàng",
+        "CASH": "Rút tiền mặt",
+        "REFUND": "Hoàn tiền",
+        "REVERSAL": "Hoàn tiền tự động",
+        "COMPLETION": "Hoàn tất tiền tạm giữ",
+        "FEE": "Phí",
+        "ADJUSTMENT": "Điều chỉnh"
+      }
     }
   },
   "security": {
@@ -952,7 +993,6 @@
       "openInLab": "Mở trong phòng lab"
     },
     "field": {
-      "MTI": "Loại message",
       "2": "Số thẻ (đã che)",
       "3": "Loại giao dịch",
       "4": "Số tiền",
@@ -973,7 +1013,8 @@
       "52": "PIN đã mã hóa",
       "64": "Chữ ký chống giả mạo",
       "90": "Thông tin giao dịch gốc",
-      "128": "Chữ ký chống giả mạo"
+      "128": "Chữ ký chống giả mạo",
+      "MTI": "Loại message"
     },
     "money": {
       "heading": "Tiền trong tài khoản khách",
@@ -999,9 +1040,6 @@
     "cutoverAt": "Chốt ngày lúc {time}"
   },
   "responseCodes": {
-    "00": "Đã duyệt",
-    "05": "Ngân hàng từ chối",
-    "06": "Lỗi khi tự hủy",
     "10": "Duyệt một phần",
     "12": "Giao dịch không hợp lệ",
     "13": "Số tiền không hợp lệ",
@@ -1020,7 +1058,10 @@
     "91": "Mất kết nối ngân hàng",
     "94": "Giao dịch bị trùng",
     "95": "Lỗi đối soát",
-    "96": "Lỗi hệ thống"
+    "96": "Lỗi hệ thống",
+    "00": "Đã duyệt",
+    "05": "Ngân hàng từ chối",
+    "06": "Lỗi khi tự hủy"
   },
   "transactionStatus": {
     "CREATED": "Đang chờ",

@@ -629,72 +629,113 @@
   },
   "cards": {
     "title": "Cards and accounts",
-    "statusHeading": "Card status",
-    "balanceHeading": "Balance",
-    "limitsHeading": "Limits",
+    "subtitle": "See each card's balance, money on hold, limits and ledger. Every change is written to the audit log.",
+    "loadFailed": "This card could not be loaded. Try reloading the page.",
     "list": {
-      "empty": "No cards yet",
-      "heading": "Customer cards"
+      "heading": "Customer cards",
+      "empty": "No cards yet"
+    },
+    "visual": {
+      "brand": "MCN Debit",
+      "expires": "Expires {expiry}",
+      "locked": "Card is blocked"
     },
     "status": {
-      "ACTIVE": "Active",
-      "BLOCKED": "Blocked",
-      "LOST": "Lost",
-      "STOLEN": "Stolen",
-      "EXPIRED": "Expired",
-      "PIN_BLOCKED": "PIN blocked"
-    },
-    "balance": {
-      "ledger": "Ledger balance",
-      "available": "Available balance",
-      "held": "Held"
-    },
-    "holds": {
-      "title": "Holds",
-      "empty": "No holds yet",
-      "status": {
-        "ACTIVE": "Active",
-        "COMPLETED": "Completed",
-        "RELEASED": "Released",
-        "EXPIRED": "Expired"
-      }
-    },
-    "limits": {
-      "daily": "Daily limit",
-      "perTransaction": "Per-transaction limit",
-      "save": "Save"
-    },
-    "ledger": {
-      "title": "Ledger",
-      "description": "Description",
-      "postings": "Postings"
-    },
-    "blockDialog": {
+      "heading": "Card status",
+      "easy": {
+        "active": "Active",
+        "locked": "Blocked",
+        "expired": "Expired"
+      },
+      "easyDesc": {
+        "active": "The card works normally at every POS.",
+        "locked": "Every new transaction will be declined because the card is blocked.",
+        "expired": "The card is past its expiry date. The customer needs a new card."
+      },
+      "expertDesc": {
+        "active": "card.status = {status} · every later check runs as usual.",
+        "locked": "card.status = {status} → participant Validate returns RC 62.",
+        "expired": "expiry {expiry} < business date → RC 54."
+      },
       "block": "Block card",
       "unblock": "Unblock card",
-      "blockPrompt": "Blocking this card stops new purchases immediately. Confirm to continue.",
-      "unblockPrompt": "Unblocking this card allows new purchases again. Confirm to continue.",
-      "reason": "Reason",
-      "reasons": {
-        "CUSTOMER_REQUEST": "Customer request",
-        "LOST": "Lost",
-        "STOLEN": "Stolen",
-        "FRAUD_SUSPECTED": "Fraud suspected"
+      "confirmBlock": "Block card •••• {last4}? Every new transaction will be declined until it is unblocked.",
+      "confirmUnblock": "Unblock card •••• {last4}? It can be used again straight away.",
+      "confirmBlockButton": "Confirm block",
+      "confirmUnblockButton": "Confirm unblock",
+      "cancel": "Cancel",
+      "failed": "The card status could not be changed: {detail}",
+      "auditEasy": "Logged: {action, select, block {blocked} other {unblocked}} card •••• {last4} at {time}",
+      "auditExpert": "audit_log · {action, select, block {CARD_BLOCKED} other {CARD_UNBLOCKED}} · card {last4} · actor ops"
+    },
+    "balance": {
+      "heading": "Balance",
+      "easy": {
+        "ledger": "Balance in the ledger",
+        "held": "On hold",
+        "available": "Available to spend"
       },
-      "confirm": "Confirm",
-      "cancel": "Cancel"
+      "expert": {
+        "ledger": "ledger_balance",
+        "held": "Σ auth_hold ACTIVE",
+        "available": "available_balance"
+      },
+      "holdEasy": "On hold for {merchant} · {amount}",
+      "holdExpert": "auth_hold ACTIVE · {merchant} · {amount}",
+      "holdUntil": "Released automatically {date}"
     },
-    "audit": {
-      "CARD_BLOCKED": "{actor} blocked this card on {at}",
-      "CARD_UNBLOCKED": "{actor} unblocked this card on {at}",
-      "LIMITS_UPDATED": "{actor} updated limits on {at}"
+    "limits": {
+      "heading": "Limits",
+      "easy": {
+        "daily": "Daily limit",
+        "perTransaction": "Limit per transaction"
+      },
+      "expert": {
+        "daily": "card_limit ALL / DAILY",
+        "perTransaction": "card_limit ALL / PER_TXN"
+      },
+      "unset": "Not set",
+      "used": "Used today {used} · {percent}% of the limit",
+      "usedNoLimit": "Used today {used}",
+      "stale": "Someone changed this card. Reload to continue.",
+      "reload": "Reload",
+      "failed": "The limits could not be saved: {detail}"
     },
-    "actions": {
-      "block": "Block card",
-      "unblock": "Unblock card"
-    },
-    "errors": {
-      "staleCard": "Someone changed this card. Reload to continue."
+    "ledger": {
+      "easy": {
+        "title": "Money in, money out",
+        "note": "Every amount has a counterpart, so the ledger always balances",
+        "a": "Type",
+        "b": "Amount",
+        "more": "Show more"
+      },
+      "expert": {
+        "title": "Double-entry journal",
+        "note": "Each journal: Σ debit = Σ credit, checked at COMMIT",
+        "a": "Debit leg",
+        "b": "Credit leg",
+        "more": "Load more"
+      },
+      "time": "Time",
+      "description": "Description",
+      "empty": "No journal entries yet",
+      "kind": {
+        "out": "Money out",
+        "in": "Money in",
+        "none": "No change"
+      },
+      "debit": "Dr {account}",
+      "credit": "Cr {account} · {amount}",
+      "notPosted": "Not posted",
+      "type": {
+        "PURCHASE": "Purchase",
+        "CASH": "Cash withdrawal",
+        "REFUND": "Refund",
+        "REVERSAL": "Automatic refund",
+        "COMPLETION": "Hold completed",
+        "FEE": "Fee",
+        "ADJUSTMENT": "Adjustment"
+      }
     }
   },
   "security": {
@@ -952,7 +993,6 @@
       "openInLab": "Open in the message lab"
     },
     "field": {
-      "MTI": "Message type",
       "2": "Card number (masked)",
       "3": "Transaction type",
       "4": "Amount",
@@ -973,7 +1013,8 @@
       "52": "Encrypted PIN",
       "64": "Anti-tamper signature",
       "90": "Original transaction",
-      "128": "Anti-tamper signature"
+      "128": "Anti-tamper signature",
+      "MTI": "Message type"
     },
     "money": {
       "heading": "Money in the customer's account",
@@ -999,9 +1040,6 @@
     "cutoverAt": "Cutover at {time}"
   },
   "responseCodes": {
-    "00": "Approved",
-    "05": "Do not honor",
-    "06": "Reversal error",
     "10": "Partially approved",
     "12": "Invalid transaction",
     "13": "Invalid amount",
@@ -1020,7 +1058,10 @@
     "91": "Link is down",
     "94": "Duplicate transaction",
     "95": "Reconciliation error",
-    "96": "System error"
+    "96": "System error",
+    "00": "Approved",
+    "05": "Do not honor",
+    "06": "Reversal error"
   },
   "transactionStatus": {
     "CREATED": "Pending",
