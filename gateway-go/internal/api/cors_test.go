@@ -10,7 +10,7 @@ import (
 
 func TestCORSMiddleware_emptyOriginIsPassthrough__R10(t *testing.T) {
 	called := false
-	h := CORSMiddleware("")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+	h := CORSMiddleware("")(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/metrics/overview", nil))
@@ -21,7 +21,7 @@ func TestCORSMiddleware_emptyOriginIsPassthrough__R10(t *testing.T) {
 
 func TestCORSMiddleware_setsHeadersAndHandlesPreflight__R10(t *testing.T) {
 	called := false
-	h := CORSMiddleware("http://localhost:3000")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
+	h := CORSMiddleware("http://localhost:3000")(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/metrics/overview", nil))
