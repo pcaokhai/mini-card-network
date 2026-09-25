@@ -64,31 +64,32 @@ const SWITCH: SwitchStatus = {
 };
 
 const ACQUIRER_KEYS: KeyInfo[] = [
-  { keyType: "ZPK", counterparty: "issuer", kcv: "3F9A21", status: "ACTIVE", daysRemaining: 26, lifetimeDays: 90 },
-  { keyType: "ZAK", counterparty: "issuer", kcv: "7C0E45", status: "ACTIVE", daysRemaining: 41, lifetimeDays: 90 },
+  { keyType: "ZPK", counterparty: "issuer", kcv: "3F9A21", status: "ACTIVE", daysRemaining: 26, lifetimeDays: 365 },
+  { keyType: "ZAK", counterparty: "issuer", kcv: "7C0E45", status: "ACTIVE", daysRemaining: 41, lifetimeDays: 365 },
 ];
 
-// Test PANs only (contracts/fixtures/cards.json, BIN 970436). The canvas also shows
-// ••••1208 and ••••5540, which are not fixture cards, so those rows reuse fixture cards.
-type FeedRow = [string, string, number, TransactionSummary["status"], string | null, string];
+// Rows mirror the canvas, limited to outcomes the real stack produces from
+// contracts/fixtures/cards.json: 4417/5540 approve, 9021 (80 000 ₫) declines 51 above its balance,
+// 1208 declines 61 above its 500 000 ₫ limit, 3310 is blocked (62), 7765 is expired (54). Only the
+// last four digits appear here; the frontend never holds a PAN (web-next/CLAUDE.md).
+// Deviations from the canvas: its ••••3310 approval and ••••7765 "Đã tự hủy · RC 91" cannot happen
+// with those cards, so they use ••••5540, and a reversal after a timeout carries no RC. The canvas's
+// "Sai mã PIN" (RC 55) needs the PIN forwarded to the issuer first (risk R-12).
+type FeedRow = [string, string, string, number, TransactionSummary["status"], string | null, string];
 const FEED: readonly FeedRow[] = [
-  ["Cà phê Góc Phố", "9704360000004417", 250_000, "APPROVED", "00", "Đã duyệt"],
-  ["Nhà sách Ánh Dương", "9704360000009021", 1_240_000, "DECLINED", "51", "Không đủ tiền"],
-  ["Siêu thị Hoa Sen", "9704360000003310", 486_500, "APPROVED", "00", "Đã duyệt"],
-  ["Trạm xăng Bến Nghé", "9704360000007765", 600_000, "REVERSED", "91", "Đã tự hủy"],
-  ["Quán bún Cô Ba", "9704360000004417", 65_000, "APPROVED", "00", "Đã duyệt"],
-  ["Tiệm bánh Mây", "9704360000003310", 120_000, "DECLINED", "55", "Sai mã PIN"],
-  ["Nhà thuốc Bình An", "9704360000009021", 358_000, "SENT", null, "Đang chờ"],
+  ["Cà phê Góc Phố", "00000042", "4417", 250_000, "APPROVED", "00", "Đã duyệt"],
+  ["Nhà sách Ánh Dương", "00000043", "9021", 1_240_000, "DECLINED", "51", "Không đủ tiền"],
+  ["Siêu thị Hoa Sen", "00000044", "5540", 486_500, "APPROVED", "00", "Đã duyệt"],
+  ["Trạm xăng Bến Nghé", "00000045", "5540", 600_000, "REVERSED", null, "Đã tự hủy"],
+  ["Quán bún Cô Ba", "00000046", "4417", 65_000, "APPROVED", "00", "Đã duyệt"],
+  ["Tiệm bánh Mây", "00000047", "1208", 120_000, "DECLINED", "55", "Sai mã PIN"],
+  ["Nhà thuốc Bình An", "00000048", "5540", 358_000, "SENT", null, "Đang chờ"],
 ];
 const FEED_GAP_MS = 17_000;
 
-function maskPan(pan: string): string {
-  return `${pan.slice(0, 6)}******${pan.slice(-4)}`;
-}
-
 function recentTransactions(): TransactionSummary[] {
   const now = Date.now();
-  return FEED.map(([merchantName, pan, amount, status, responseCode, responseLabel], i) => ({
+  return FEED.map(([merchantName, terminalId, last4, amount, status, responseCode, responseLabel], i) => ({
     rrn: String(626_514_000_123 - i),
     stan: String(123 - i).padStart(6, "0"),
     type: "PURCHASE",
@@ -96,8 +97,8 @@ function recentTransactions(): TransactionSummary[] {
     responseCode,
     responseLabel,
     amount: { amount, currency: "704" },
-    maskedPan: maskPan(pan),
-    terminalId: "TERM0001",
+    maskedPan: `970436******${last4}`,
+    terminalId,
     merchantName,
     latencyMs: 96 + i * 11,
     createdAt: new Date(now - i * FEED_GAP_MS).toISOString(),
