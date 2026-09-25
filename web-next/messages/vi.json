@@ -290,28 +290,130 @@
   },
   "network": {
     "title": "Vận hành mạng",
-    "linksHeading": "Các đường kết nối",
-    "statusPill": {
-      "SIGNED_ON": "Đã đăng nhập",
-      "CONNECTED": "Đã kết nối",
-      "DOWN": "Mất kết nối",
-      "DISCONNECTED": "Ngắt kết nối"
+    "subtitle": "Theo dõi các đường kết nối giữa hai ngân hàng, hàng đợi gửi lại và chế độ duyệt thay khi có sự cố.",
+    "toggle": {
+      "down": "Mô phỏng ngân hàng phát hành sập",
+      "restore": "Khôi phục ngân hàng phát hành"
     },
-    "table": {
-      "link": "Liên kết",
-      "status": "Trạng thái",
-      "lastEcho": "Echo gần nhất",
-      "p99": "Độ trễ p99",
-      "inFlight": "Đang xử lý"
+    "topology": {
+      "heading": "Sơ đồ kết nối",
+      "ariaLabel": "Sơ đồ mạng",
+      "segmentUp": "{from} → {to}: đang hoạt động",
+      "segmentDown": "{from} → {to}: mất kết nối",
+      "pos": {
+        "title": "Máy POS",
+        "easy": "{count} máy đã đăng ký",
+        "tech": "{count} terminals registered",
+        "easyUnavailable": "Chưa có danh sách máy",
+        "techUnavailable": "GET /v1/terminals · chưa có"
+      },
+      "acquirer": {
+        "title": "Ngân hàng thanh toán",
+        "easy": "{count} máy chủ gateway",
+        "tech": "{names} (Go)",
+        "easyDown": "Mất kết nối tới mạng",
+        "techDown": "{names} DOWN"
+      },
+      "switch": {
+        "title": "Bộ chuyển mạch",
+        "easy": "Định tuyến theo đầu số thẻ",
+        "tech": "BIN routing · MUX pool",
+        "easyStip": "Đang duyệt thay",
+        "techStip": "STIP ACTIVE · circuit {circuit}",
+        "easyUnavailable": "Chưa có dữ liệu",
+        "techUnavailable": "GET /v1/network/switch · chưa có"
+      },
+      "issuer": {
+        "title": "Ngân hàng phát hành",
+        "easy": "{count} máy chủ đang chạy",
+        "tech": "{names} (jPOS)",
+        "easyDown": "Không phản hồi",
+        "techDown": "{names} DOWN"
+      }
     },
-    "actions": {
-      "echo": "Echo ngay",
-      "signOn": "Đăng nhập",
-      "signOff": "Đăng xuất"
+    "links": {
+      "heading": "Các đường kết nối",
+      "ariaLabel": "Các kết nối",
+      "colLink": "Kết nối",
+      "colStatus": "Trạng thái",
+      "colLatencyEasy": "Độ trễ",
+      "colLatencyTech": "p99",
+      "colEchoEasy": "Kiểm tra gần nhất",
+      "colEchoTech": "Echo 0800/301",
+      "switch": "Bộ chuyển mạch",
+      "protocol": "ISO 8583 · 2-byte header",
+      "pingEasy": "Kiểm tra ngay",
+      "pingTech": "Gửi echo",
+      "latency": "{ms} ms",
+      "status": {
+        "SIGNED_ON": "Đã đăng nhập",
+        "CONNECTED": "Đã kết nối",
+        "DOWN": "Mất kết nối",
+        "DISCONNECTED": "Ngắt kết nối"
+      },
+      "echo": {
+        "noReply": "Không phản hồi",
+        "none": "Chưa kiểm tra",
+        "justNow": "Vừa xong",
+        "seconds": "{n} giây trước",
+        "minutes": "{n} phút trước",
+        "hours": "{n} giờ trước"
+      },
+      "empty": "Chưa có đường kết nối nào được báo về."
     },
     "events": {
-      "empty": "Chưa có sự kiện mạng nào",
-      "heading": "Dòng thời gian sự kiện"
+      "heading": "Nhật ký sự kiện hôm nay",
+      "ariaLabel": "Nhật ký sự kiện",
+      "empty": "Hôm nay chưa có sự kiện mạng nào."
+    },
+    "breaker": {
+      "ariaLabel": "Ngắt mạch và duyệt thay",
+      "titleEasy": "Tự ngắt và duyệt thay",
+      "titleTech": "Circuit breaker và STIP",
+      "state": {
+        "CLOSED": "Bình thường",
+        "OPEN": "Đã ngắt",
+        "HALF_OPEN": "Đang thử lại"
+      },
+      "desc": {
+        "CLOSED": {
+          "easy": "Mọi thứ bình thường: giao dịch được gửi thẳng tới ngân hàng phát hành để quyết định.",
+          "tech": "CLOSED: mọi request đi thẳng tới issuer. Mở mạch khi 3 echo liên tiếp timeout hoặc tỉ lệ lỗi > 50%."
+        },
+        "OPEN": {
+          "easy": "Ngân hàng phát hành không trả lời nên hệ thống ngừng gửi tới đó. Giao dịch nhỏ được duyệt thay và sẽ được báo lại khi ngân hàng hoạt động trở lại.",
+          "tech": "OPEN: không gửi sang issuer, switch tự authorize theo STIP rules và ghi advice vào SAF. Sau 30 s chuyển HALF_OPEN để thử lại."
+        },
+        "HALF_OPEN": {
+          "easy": "Hệ thống đang gửi thử vài giao dịch tới ngân hàng phát hành. Nếu trả lời tốt, mọi thứ trở lại bình thường.",
+          "tech": "HALF_OPEN: cho một số request thử đi tới issuer. Thành công thì CLOSED, lỗi thì OPEN lại."
+        },
+        "unavailable": {
+          "easy": "Bộ chuyển mạch chưa báo trạng thái. Giao dịch đang đi thẳng từ gateway tới ngân hàng phát hành.",
+          "tech": "GET /v1/network/switch chưa có trên gateway (MCN-802). Không có circuit breaker và STIP."
+        }
+      },
+      "limitEasy": "Duyệt thay tối đa mỗi giao dịch",
+      "limitTech": "STIP limit / txn",
+      "countEasy": "Đã duyệt thay",
+      "countTech": "STIP approved"
+    },
+    "saf": {
+      "ariaLabel": "Hàng đợi gửi lại",
+      "titleEasy": "Hàng đợi gửi lại",
+      "titleTech": "SAF queue",
+      "depth": "{count} lệnh",
+      "emptyBadge": "Trống",
+      "emptyEasy": "Không có lệnh nào đang chờ. Mọi thông báo đã tới nơi.",
+      "emptyTech": "depth {depth} · dead {dead} · oldest —",
+      "advice": "Thông báo duyệt thay",
+      "reversal": "Lệnh hủy",
+      "withAmount": "{label} · {amount}",
+      "adviceTech": "{mti} advice · STIP approved",
+      "reversalTech": "{mti} reversal",
+      "rrn": "RRN {rrn}",
+      "attemptsEasy": "Đã thử {n} lần",
+      "attemptsTech": "attempts {n}"
     }
   },
   "pos": {
