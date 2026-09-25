@@ -307,3 +307,35 @@ func (r *TranLogRepository) LastSTANInRRNPrefix(ctx context.Context, prefix stri
 		prefix).Scan(&last)
 	return last, err
 }
+
+// Backdate moves rrn's tran_log.created_at to at and shifts every tran_state_history row of it by
+// the same amount, so its latencies are unchanged. Seed-only: it rewrites the acquirer's record of
+// when a transaction happened, which the issuer's ledger does not follow (docs/plans/
+// MCN-002-acquirer-seed.md ruling 2).
+func (r *TranLogRepository) Backdate(ctx context.Context, rrn string, at time.Time) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var id int64
+	var createdAt time.Time
+	err = tx.QueryRow(ctx, `SELECT id, created_at FROM tran_log WHERE rrn = $1 FOR UPDATE`, rrn).Scan(&id, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	shift := at.Sub(createdAt)
+	if _, err := tx.Exec(ctx, `UPDATE tran_log SET created_at = $2 WHERE id = $1`, id, at); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE tran_state_history SET created_at = created_at + make_interval(secs => $2) WHERE tran_id = $1`,
+		id, shift.Seconds()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
