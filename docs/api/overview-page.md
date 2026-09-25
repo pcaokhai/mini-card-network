@@ -248,7 +248,9 @@ Observed on the running stack (2026-09-25): 3 transactions in total, all from 20
 
 The mock itself also has rows no real backend could produce from the fixtures: ••••3310 (blocked) shown as approved and as "Sai mã PIN", and ••••9021 (80 000 ₫ balance) with a pending 358 000 ₫ purchase. The canvas cards 1208 and 5540 do not exist in the fixtures at all.
 
-### Recommended seed (MCN-303 follow-up)
+### Recommended seed (MCN-002 AC4, acquirer half)
+
+Being implemented per [`docs/plans/MCN-002-acquirer-seed.md`](../plans/MCN-002-acquirer-seed.md), with fixture cards ••••1208 and ••••5540 added and backdating accepted. RC 55 ("Sai mã PIN") cannot be seeded because the gateway never forwards the PIN block; see risk R-12.
 
 To make the real stack reproduce the canvas without bypassing the ledger (root CLAUDE.md §9):
 

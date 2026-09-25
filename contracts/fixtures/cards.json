@@ -1,12 +1,20 @@
 {
-  "_comment": "Lab-only test cards. PAN and PIN are fake and only used by the POS simulator inside gateway-go and by issuer seed data. They must never appear in API responses, logs or the browser.",
+  "_comment": "Lab-only test cards. PAN and PIN are fake and only used by the POS simulator inside gateway-go and by issuer seed data. They must never appear in API responses, logs or the browser. tok_limit gets a 500 000 VND per-transaction limit from the acquirer seed (docs/plans/MCN-002-acquirer-seed.md); tok_second carries most seeded approvals.",
   "cards": [
-    { "cardToken": "tok_normal",  "cardRef": "crd_normal0001",  "pan": "9704360000004417", "expiry": "2811", "pin": "1234", "holderName": "Nguyen Minh Anh", "status": "ACTIVE",  "balance": 5000000, "currency": "704" },
-    { "cardToken": "tok_low",     "cardRef": "crd_lowbal0002",  "pan": "9704360000009021", "expiry": "2903", "pin": "1234", "holderName": "Tran Thu Ha",     "status": "ACTIVE",  "balance": 80000,   "currency": "704" },
-    { "cardToken": "tok_blocked", "cardRef": "crd_blockd0003",  "pan": "9704360000003310", "expiry": "2707", "pin": "1234", "holderName": "Le Quoc Bao",     "status": "BLOCKED", "balance": 2000000, "currency": "704" },
-    { "cardToken": "tok_expired", "cardRef": "crd_expird0004",  "pan": "9704360000007765", "expiry": "2608", "pin": "1234", "holderName": "Pham Gia Huy",    "status": "ACTIVE",  "balance": 1500000, "currency": "704" }
+    { "cardToken": "tok_normal",  "cardRef": "crd_normal0001",  "pan": "9704360000004417", "expiry": "2811", "pin": "1234", "holderName": "Nguyen Minh Anh", "status": "ACTIVE",  "balance": 5000000,   "currency": "704" },
+    { "cardToken": "tok_low",     "cardRef": "crd_lowbal0002",  "pan": "9704360000009021", "expiry": "2903", "pin": "1234", "holderName": "Tran Thu Ha",     "status": "ACTIVE",  "balance": 80000,     "currency": "704" },
+    { "cardToken": "tok_blocked", "cardRef": "crd_blockd0003",  "pan": "9704360000003310", "expiry": "2707", "pin": "1234", "holderName": "Le Quoc Bao",     "status": "BLOCKED", "balance": 2000000,   "currency": "704" },
+    { "cardToken": "tok_expired", "cardRef": "crd_expird0004",  "pan": "9704360000007765", "expiry": "2608", "pin": "1234", "holderName": "Pham Gia Huy",    "status": "ACTIVE",  "balance": 1500000,   "currency": "704" },
+    { "cardToken": "tok_limit",   "cardRef": "crd_limit00005",  "pan": "9704360000001208", "expiry": "2912", "pin": "1234", "holderName": "Vo Thanh Tam",    "status": "ACTIVE",  "balance": 50000000,  "currency": "704" },
+    { "cardToken": "tok_second",  "cardRef": "crd_second0006",  "pan": "9704360000005540", "expiry": "3006", "pin": "1234", "holderName": "Dang Ngoc Linh",  "status": "ACTIVE",  "balance": 200000000, "currency": "704" }
   ],
   "terminals": [
-    { "terminalId": "00000042", "merchantId": "GOCPHO000000001", "merchantName": "Ca phe Goc Pho", "mcc": "5814" }
+    { "terminalId": "00000042", "merchantId": "GOCPHO000000001", "merchantName": "Cà phê Góc Phố",     "mcc": "5814" },
+    { "terminalId": "00000043", "merchantId": "ANHDUO000000001", "merchantName": "Nhà sách Ánh Dương", "mcc": "5942" },
+    { "terminalId": "00000044", "merchantId": "HOASEN000000001", "merchantName": "Siêu thị Hoa Sen",   "mcc": "5411" },
+    { "terminalId": "00000045", "merchantId": "BENNGH000000001", "merchantName": "Trạm xăng Bến Nghé", "mcc": "5541" },
+    { "terminalId": "00000046", "merchantId": "BUNCOB000000001", "merchantName": "Quán bún Cô Ba",     "mcc": "5812" },
+    { "terminalId": "00000047", "merchantId": "BANHMA000000001", "merchantName": "Tiệm bánh Mây",      "mcc": "5462" },
+    { "terminalId": "00000048", "merchantId": "BINHAN000000001", "merchantName": "Nhà thuốc Bình An",  "mcc": "5912" }
   ]
 }
