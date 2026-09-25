@@ -43,26 +43,6 @@ public class AccountLockRepository {
     }
   }
 
-  /** Optimistic-version-checked debit; returns whether it actually affected a row. */
-  public boolean debit(Connection conn, long accountId, long amount, long expectedVersion) {
-    String sql =
-        """
-        UPDATE account SET available_balance = available_balance - ?,
-                            ledger_balance = ledger_balance - ?,
-                            version = version + 1,
-                            updated_at = now()
-        WHERE id = ? AND version = ?""";
-    try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-      stmt.setLong(1, amount);
-      stmt.setLong(2, amount);
-      stmt.setLong(3, accountId);
-      stmt.setLong(4, expectedVersion);
-      return stmt.executeUpdate() == 1;
-    } catch (SQLException e) {
-      throw new IllegalStateException("debit account failed", e);
-    }
-  }
-
   /**
    * Adds {@code signedAmount} (negative = debit) to both balances, in the caller's transaction. The
    * UPDATE row-locks the account itself, so no prior {@link #lockAndGet} is needed. Used for

@@ -30,28 +30,44 @@ class AccountLockRepositoryTest {
       var account = repo.lockAndGet(conn, accountId);
       assertThat(account.availableBalance()).isEqualTo(100_000L);
 
-      boolean debited = repo.debit(conn, accountId, 10_000L, account.version());
-      assertThat(debited).isTrue();
+      repo.adjust(conn, accountId, -10_000L);
       conn.commit();
     }
 
     try (Connection conn = ds.getConnection()) {
       var after = repo.lockAndGet(conn, accountId);
       assertThat(after.availableBalance()).isEqualTo(90_000L);
+      assertThat(after.ledgerBalance()).isEqualTo(90_000L);
       assertThat(after.version()).isEqualTo(1L);
     }
   }
 
   @Test
-  void debitFailsWhenVersionIsStale() throws Exception {
+  @org.junit.jupiter.api.DisplayName("POS-G17: a credit raises both balances")
+  void adjustCreditsBothBalances() throws Exception {
     var ds = TestDataSources.migrated(postgres);
-    var accounts = new AccountRepository(ds);
-    long accountId = accounts.insert("ACC-TEST-2", "704", 50_000L);
+    long accountId = new AccountRepository(ds).insert("ACC-TEST-3", "704", 5_000L);
     var repo = new AccountLockRepository(ds);
 
     try (Connection conn = ds.getConnection()) {
-      boolean debited = repo.debit(conn, accountId, 1_000L, 999L);
-      assertThat(debited).isFalse();
+      repo.adjust(conn, accountId, 2_500L);
+      var after = repo.lockAndGet(conn, accountId);
+      assertThat(after.availableBalance()).isEqualTo(7_500L);
+      assertThat(after.ledgerBalance()).isEqualTo(7_500L);
+    }
+  }
+
+  @Test
+  void adjustNeverTakesTheBalanceBelowTheOverdraftFloor() throws Exception {
+    var ds = TestDataSources.migrated(postgres);
+    long accountId = new AccountRepository(ds).insert("ACC-TEST-2", "704", 50_000L);
+    var repo = new AccountLockRepository(ds);
+
+    try (Connection conn = ds.getConnection()) {
+      org.assertj.core.api.Assertions.assertThatThrownBy(
+              () -> repo.adjust(conn, accountId, -50_001L))
+          .isInstanceOf(IllegalStateException.class);
+      assertThat(repo.lockAndGet(conn, accountId).availableBalance()).isEqualTo(50_000L);
     }
   }
 }

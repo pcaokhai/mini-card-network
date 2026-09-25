@@ -468,6 +468,38 @@ class PurchaseDeclineIntegrationTest {
     assertThat(accountBalance(accountId)).isEqualTo(before);
   }
 
+  @Test
+  @Order(99)
+  @DisplayName(
+      "POS-G18: after purchases, reversals, refunds and refund reversals, every account's balance"
+          + " = opening + Σ credits − Σ debits of its postings")
+  void everyAccountBalanceEqualsOpeningPlusItsPostings() throws Exception {
+    var fixture =
+        new com.fasterxml.jackson.databind.ObjectMapper()
+            .readTree(Path.of("../contracts/fixtures/cards.json").toFile());
+    var cards = fixture.isArray() ? fixture : fixture.path("cards");
+    String sql =
+        """
+        SELECT a.ledger_balance, a.available_balance,
+               COALESCE(SUM(CASE p.direction WHEN 'C' THEN p.amount ELSE -p.amount END), 0)
+        FROM account a LEFT JOIN ledger_posting p ON p.account_id = a.id
+        WHERE a.account_no = ? GROUP BY a.id""";
+    for (var card : cards) {
+      String accountNo = "ACC-" + card.path("cardRef").asText();
+      long opening = card.path("balance").asLong();
+      try (var conn = dataSource.getConnection();
+          var stmt = conn.prepareStatement(sql)) {
+        stmt.setString(1, accountNo);
+        try (ResultSet rs = stmt.executeQuery()) {
+          rs.next();
+          assertThat(rs.getLong(1)).as("ledger " + accountNo).isEqualTo(opening + rs.getLong(3));
+          assertThat(rs.getLong(2)).as("available " + accountNo).isEqualTo(rs.getLong(1));
+        }
+      }
+    }
+    assertThat(unbalancedJournalCount()).isZero();
+  }
+
   private static void execute(String sql) throws Exception {
     try (var conn = dataSource.getConnection();
         var stmt = conn.createStatement()) {

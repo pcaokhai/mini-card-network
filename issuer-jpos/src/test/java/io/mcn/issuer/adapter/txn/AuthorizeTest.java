@@ -33,7 +33,6 @@ class AuthorizeTest {
     var velocityCounterRepo = Mockito.mock(VelocityCounterRepository.class);
     when(lockRepo.lockAndGet(any(), anyLong()))
         .thenReturn(new AccountRow(1L, 100_000L, 100_000L, 0L, 0L));
-    when(lockRepo.debit(any(), anyLong(), anyLong(), anyLong())).thenReturn(true);
 
     Context ctx = new Context();
     ctx.put(TxnContextKeys.ACCOUNT_ID, 1L);
@@ -49,6 +48,7 @@ class AuthorizeTest {
     assertThat(result & PREPARED).isEqualTo(PREPARED);
     assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("00");
     assertThat(ctx.<String>get(TxnContextKeys.AUTH_CODE)).hasSize(6);
+    Mockito.verify(lockRepo).adjust(any(), Mockito.eq(1L), Mockito.eq(-10_000L));
     Mockito.verify(ledgerRepo)
         .postPurchase(any(), Mockito.eq(42L), any(), Mockito.eq(1L), Mockito.eq(10_000L), any());
     Mockito.verify(velocityCounterRepo)

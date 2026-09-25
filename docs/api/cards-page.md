@@ -125,7 +125,7 @@ GET /api/v1/cards
 | header `ETag` | string | ✓ | kept with the query data; sent as `If-Match` by §4.6 | – | – |
 
 **Provider rules.**
-1. `ledgerBalance` and `availableBalance` are the `account` row's `ledger_balance` and `available_balance` in the account currency (`704`).
+1. `ledgerBalance` and `availableBalance` are read straight from the `account` row's `ledger_balance` and `available_balance` columns (`AccountRepository.findById`) in the account currency (`704`), not summed from the ledger. Those columns change only through `AccountLockRepository.adjust`, in the same transaction as the journal that explains the change, so balance = opening + Σ credits − Σ debits of the account's postings. Before #119 a reversal wrote its journal but never updated the columns, so any card with a reversal showed a balance too low by the reversed amounts (pos-page.md §9 POS-G18).
 2. `holds` is always `[]`, because no PREAUTH flow ships yet (MCN-603; the `ponytail:` note in `cardDetail()`). The dev:mock card 4417 has one hold, as in the canvas (Ruling R9).
 3. `limits` holds the `card_limit` rows with `txn_type = 'ALL'`. A missing row reads as `amount: 0`, and the UI shows "Chưa đặt" for it (Ruling R6).
 4. `usedToday` = `SUM(velocity_counter.txn_amount)` for the card, with `period = 'DAILY'` and `period_key` = `system_state.current_business_date` (CARDS-G12). While no cutover has written that row, it falls back to the calendar date, which is also what the ISO path keys the counters with.
@@ -418,4 +418,4 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack (GET only). |
 | 1.1 | 2026-09-25 | Issuer gap fixes in #115: CARDS-G1, G2, G4, G5 (issuer half), G6, G7, G8, G9, G10, G12 and G13 are marked Fixed, and G14 needed no provider change. §4 provider rules, request tables and error tables now describe the new behaviour. The `Idempotency-Key` must be a UUID, requests with the same key that are in flight together replay under the card lock (§4.4 rule 2), and limits must be positive (§4.6 rule 6). The G12 note covers MCN-702. Adds CARDS-G16 and G17 (Fixed) and G18 (open), and documents the If-Match forms (§4.6) and the PAN masking in problems (G9). |
-| 1.2 | 2026-09-25 | CARDS-G18 marked Fixed in #119: authorization and the Admin API read card status through the same rule. |
+| 1.2 | 2026-09-25 | CARDS-G18 marked Fixed in #119: authorization and the Admin API read card status through the same rule. §4.2 rule 1 states where the balances come from and the pre-#119 reversal gap. |

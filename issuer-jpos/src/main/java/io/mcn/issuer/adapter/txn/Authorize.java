@@ -135,13 +135,7 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
       ctx.put(TxnContextKeys.DECLINE_REASON, "insufficient funds");
       return false;
     }
-    if (!lockRepository.debit(conn, accountId, amount, account.version())) {
-      // ponytail: the row lock (FOR UPDATE) serializes every writer on this account within one
-      // DB transaction - a failed optimistic-version check here means the lock isn't actually
-      // being held, which is a real bug, not a retryable race. Fail loudly rather than looping.
-      throw new IllegalStateException(
-          "account " + accountId + " version changed under a held row lock");
-    }
+    lockRepository.adjust(conn, accountId, -amount);
     LocalDate businessDate = businessDate(ctx);
     ledgerRepository.postPurchase(conn, tranId(ctx), businessDate, accountId, amount, CURRENCY);
     Long cardId = ctx.get(TxnContextKeys.CARD_ID);
