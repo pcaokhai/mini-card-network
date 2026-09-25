@@ -784,6 +784,7 @@ components:
       type: object
       required: [transactionsToday, approvalRate, p99LatencyMs, ledgerMatches, throughput, declineReasons]
       properties:
+        businessDate: { type: string, format: date, description: "The acquirer's current business date (ADR-007); every per-day figure in this object counts this date" }
         transactionsToday: { type: integer }
         transactionsDeltaPct: { type: number }
         approvalRate: { type: number, minimum: 0, maximum: 1 }
