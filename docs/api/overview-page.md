@@ -341,7 +341,7 @@ Payload bounds: `throughput` always has 24 elements; `declineReasons` has at mos
 | --- | --- | --- | --- | --- |
 | OVW-G1 | `GET /v1/network/switch` not implemented | `curl :3000/api/v1/network/switch` → 404; no route in `gateway-go/internal/api` | GW | MCN-802 AC1, after MCN-801 (`feat/MCN-801-switch`, unmerged) |
 | OVW-G2 | ~~Throughput was 1-minute, sparse buckets over 30 minutes~~ | **Fixed**: 24 dense × 150 s buckets, `tps = count/150` (verified live) | GW | Done (MCN-002 seed work). Documenting the bucket size in the schema description is still open |
-| OVW-G3 | ~~`transaction.updated` is never broadcast~~ | **Fixed** (#PR2): `transaction.updated` on cancellation, late response and SAF acknowledgement (`reversalAckAnnouncer` → `purchase.Service.BroadcastUpdate`) | GW | Done |
+| OVW-G3 | ~~`transaction.updated` is never broadcast~~ | **Fixed** (#117): `transaction.updated` on cancellation, late response and SAF acknowledgement (`reversalAckAnnouncer` → `purchase.Service.BroadcastUpdate`) | GW | Done |
 | OVW-G4 | ~~`key_store` empty until the first rotation, so a fresh stack had no ZAK and every purchase failed its MAC~~ | **Fixed**: startup registers `ZAK_HEX`/`ZPK_HEX` (verified live, §4.7) | GW | Done (MCN-002 seed work) |
 | OVW-G5 | The canvas folds the tail into "Lý do khác"; the UI lists every code | `DeclineReasonsBreakdown.tsx` sorts and renders all rows | WEB | **Fixed** in #125: the top four coded reasons, the rest folded client-side into "Lý do khác" |
 | OVW-G6 | ~~`TransactionSummary.latencyMs` always `null`~~ | **Fixed**: `toSummaryDTO` sets it from `journey.LatencyMs` (live values `8059`, `20`) | GW | Done (MCN-304 journey canvas) |
@@ -349,7 +349,7 @@ Payload bounds: `throughput` always has 24 elements; `declineReasons` has at mos
 | OVW-G8 | No loading or error state for the page | `OverviewScreen.tsx`: `if (!overviewQuery.data) return null;` | WEB | **Fixed** in #125: a loading skeleton and a problem banner |
 | OVW-G9 | The live feed's socket never connects on the BFF origin | `useWsEvents` falls back to `ws://{location.host}/v1/stream`; `curl :3000/v1/stream` → 404; `NEXT_PUBLIC_WS_URL` is set nowhere in the repo | WEB + PLAT | **Fixed** in #124 (documented): `web-next/.env.example` sets `NEXT_PUBLIC_WS_URL`; Route Handlers can't proxy the upgrade |
 | OVW-G10 | WS authentication differs from docs/04 §1 | The hub's `CheckOrigin` accepts every origin and reads no `token`; there is no `/api/stream-token` route under `web-next/src/app/api` | GW + WEB | Implement the token, or amend docs/04 through an ADR |
-| OVW-G11 | ~~A declined row without an RC is counted under `responseCode: ""`~~ | **Fixed** (#PR2): `purchase.ResponseCodeOf` records a response without DE 39 as RC `30`; `overviewDeclineReasons` skips rows with no RC | GW | Done |
+| OVW-G11 | ~~A declined row without an RC is counted under `responseCode: ""`~~ | **Fixed** (#117): `purchase.ResponseCodeOf` records a response without DE 39 as RC `30`; `overviewDeclineReasons` skips rows with no RC | GW | Done |
 | OVW-G12 | Gateway problem responses don't follow docs/04 §3 | `problem()` in `internal/api/lab.go` writes the bare slug as both `type` and `title`, with no `https://mcn.local/problems/` prefix, no `instance`, no `traceId`, and the raw Go error as `detail` | GW | One problem writer with the docs/04 shape; `internal` 500s carry only `traceId` |
 
 ### 9.1 Seed data check
@@ -397,4 +397,4 @@ Still open for this page: OVW-G1, G5, G7 to G10, G12. Also:
 | 1.0 | 2026-09-25 | First integration contract and seed-data check (#82) |
 | 2.0 | 2026-09-25 | Rewritten into the per-page template, with real examples from the local stack. G2, G4 and G6 marked fixed. Added G9–G12 (WS origin, WS authentication, empty-RC decline bucket, problem format) |
 | 2.1 | 2026-09-26 | OVW-G5, OVW-G8 fixed; OVW-G9 closed by #124; the date shown is `Overview.businessDate` (ADR-007) (#125) |
-| 2.2 | 2026-09-25 | OVW-G3 and OVW-G11 fixed (#PR2) |
+| 2.2 | 2026-09-25 | OVW-G3 and OVW-G11 fixed (#117) |
