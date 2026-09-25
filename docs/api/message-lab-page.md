@@ -251,9 +251,10 @@ None. The page consumes no WebSocket event.
 | Topic | Rule on this page | Status |
 | --- | --- | --- |
 | PAN display | DE 2 is shown as first 6 + last 4 (`970436******4417`) in the raw segments, the detail card and the field table. The Easy raw note says so: "Số thẻ đã được che để bảo mật." | Met in `segments[]`, `fields[].value` and `fields[].raw` (#112) |
-| PAN in responses | No response field may carry a full PAN (MCN-103-AC4, engineering rule 2). | Met (#112): `fields[].raw` is masked and `samples[].raw` is served redacted. Test BIN 970436 only, never a real card |
+| PAN in responses | No response field may carry a full PAN (MCN-103-AC4, engineering rule 2). | Met (#112) on every output path (`value`, `raw`, `segments[]`, `samples[].raw`, decode and encode): DE 2 is masked by position at any length (first 6 + last 4, or only the last 4 when 10 digits or fewer); any 13–19 digit run in an `an`/`ans` field (e.g. DE 48) is masked; DE 55 is redacted whole, because EMV tags 5A and 57 carry the PAN and track 2 equivalent. Test BIN 970436 only, never a real card |
 | PAN in requests | The page POSTs a sample's redacted `raw` back to decode. The provider maps a served sample to its golden vector inside `internal/lab`, so no clear PAN crosses the wire in either direction. | Met (#112) |
-| PIN block, MAC | DE 52 (PIN block) and DE 64/128 (MAC) are redacted to asterisks of the same length in `value`, `raw`, `segments[]` and `samples[].raw`, on decode and encode. | Met (#112) |
+| Expiry | DE 14 (expiration date) is shown in clear. PCI DSS allows this once the PAN is masked. | Accepted |
+| PIN block, ICC data, MAC | DE 52 (PIN block), DE 55 (ICC data) and DE 64/128 (MAC) are redacted to asterisks of the same length in `value`, `raw`, `segments[]` and `samples[].raw`, on decode and encode. | Met (#112) |
 | Key material | None. | – |
 | Audit trail | None: every call is read-only. | – |
 | Destructive actions | None. | – |
@@ -284,16 +285,17 @@ Load: at most 1 samples call and 4 decode calls per page session (decodes are ca
 | ID | Gap | Evidence | Owner lane | Proposed fix / story |
 | --- | --- | --- | --- | --- |
 | LAB-G1 | `fields[].raw` for DE 2 carries the full PAN (with its LL prefix). Only `value` and `segments[]` are masked. Violates MCN-103-AC4 and engineering rule 2. | `gateway-go/internal/lab/decode.go:57` takes `Raw` from `segByDE` (built at `:103` from unmasked segments); live decode of the 0200 sample returned `"raw":"1697…4417"` unmasked | GW | **Fixed** in #112: `fields[].raw` is built from the redacted segments |
-| LAB-G2 | `GET /v1/lab/messages/samples` returns `raw` with the test PAN, the DE 52 PIN block and the DE 64 MAC in clear. The decode response also returns DE 52 unmasked. Acceptable only because the vectors are synthetic; the contract (`info.description`: "No PAN/CVV/PIN/track data ever") says otherwise. | `gateway-go/internal/lab/samples.go:14`; live samples response | GW + contracts | **Fixed** in #112: samples are served redacted, same framing; decode maps a served sample to its vector inside `internal/lab`, and DE 52/64/128 are redacted everywhere. No ADR or contract change needed |
+| LAB-G2 | `GET /v1/lab/messages/samples` returns `raw` with the test PAN, the DE 52 PIN block and the DE 64 MAC in clear. The decode response also returns DE 52 unmasked. Acceptable only because the vectors are synthetic; the contract (`info.description`: "No PAN/CVV/PIN/track data ever") says otherwise. | `gateway-go/internal/lab/samples.go:14`; live samples response | GW + contracts | **Fixed** in #112: samples are served redacted, same framing; decode maps a served sample to its vector inside `internal/lab`, and DE 52/55/64/128 are redacted everywhere. No ADR or contract change needed |
 | LAB-G3 | Encode returns no packed message. MCN-103-AC2 and docs/04 §4 say it "returns the packed message"; `DecodedMessage` has no field for it. | `contracts/openapi.yaml` `DecodedMessage`; `internal/lab/decode.go` `Encode` returns `Decode(packed)` | contracts + GW | Add `raw` to the encode response (contract PR), then return `packed` |
 | LAB-G4 | Problem `type` is a bare code (`INVALID_MTI`, `invalid-request`), not the URI form `https://mcn.local/problems/<slug>` of docs/04 §3. There is no `instance` or `traceId`, and codec types are SCREAMING_CASE while the others are kebab-case. | `gateway-go/internal/api/lab.go` `problem()`; live 400 bodies | GW | One shared problem writer that emits URI types; map codec codes to `validation-error` with `errors[]` |
 | LAB-G5 | An empty samples list leaves "Đang tải message mẫu…" on screen forever. | `MessageLabScreen.tsx`: loading shows while `!decoded && !error`, and decode is disabled without a `raw` | WEB | Render an empty state when `samples.data` is `[]` |
 | LAB-G6 | `maxLength: 8192` on `raw` isn't enforced. The request is bounded only by the server's 5 s `ReadTimeout`. | `internal/api/lab.go` `handleDecode` has no `http.MaxBytesReader` | GW | **Fixed** in #112: `http.MaxBytesReader` on decode and encode; `raw` over 8192 answers 400 `validation-error` |
 | LAB-G7 | The provider's `easyName`, `technicalName` and `format` are English and coarse (`n`, `b`). The page ignores them for the 27 DEs in its own `FIELD_SPECS` and glossary, so two sources of truth exist for DE names and formats. | `web-next/src/components/lab/lab-model.ts` `FIELD_SPECS`; plan Ruling R2 | WEB + GW | Accepted for v1 (R2). Long term: return the packager-spec format string (e.g. `n..19 LLVAR`) and drop the client table |
+| LAB-G8 | The Lab's redaction set (`secretDEs` in `internal/lab/decode.go`: 52, 55, 64, 128, plus DE 2 by position) duplicates packager-spec's `sensitive` flags (2, 14, 48, 52, 55; none on 64/128), and codegen drops the flag, so the two can drift. | `contracts/iso8583/packager-spec.yaml`; `internal/iso8583/spec_gen.go` has no `Sensitive` field | contracts + GW | Contracts PR adds `sensitive: mac` to DE 64/128; the generator emits a `Sensitive` field; the Lab redacts from it and drops `secretDEs` |
 
 ## 10. Change log
 
 | Version | Date | Change |
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack |
-| 1.1 | 2026-09-25 | LAB-G1, LAB-G2 and LAB-G6 fixed (#112); §6 updated |
+| 1.1 | 2026-09-25 | LAB-G1, LAB-G2 and LAB-G6 fixed (#112), including DE 55 redaction and position-based DE 2 masking after security review; §6 updated; LAB-G8 added |

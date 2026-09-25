@@ -107,3 +107,38 @@ func TestLabDecode_rawOverMaxLengthIsValidationError__LAB_G6(t *testing.T) {
 type decodeRequest struct {
 	Raw string `json:"raw"`
 }
+
+func TestLabEncode_neverReturnsCardDataInClear__LAB_S4(t *testing.T) {
+	r := chi.NewRouter()
+	MountLab(r)
+	const pan, pinBlock, icc = "9704360000004417", "7A3F09C21B84D6E0", "5A08970436000000441757109704360000004417D28122010000000F"
+	body, _ := json.Marshal(encodeRequest{MTI: "0200", Fields: map[string]string{
+		"2": pan, "3": "000000", "11": "000123", "48": "CARD " + pan, "52": pinBlock, "55": icc,
+	}})
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/lab/messages/encode", bytes.NewReader(body)))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	for _, leak := range []string{pan, pinBlock, "D2812201"} {
+		require.NotContains(t, rec.Body.String(), leak)
+	}
+	require.Contains(t, rec.Body.String(), "970436******4417")
+}
+
+func TestLabEncode_oversizeBodyIsValidationError__LAB_S4(t *testing.T) {
+	r := chi.NewRouter()
+	MountLab(r)
+	body, _ := json.Marshal(encodeRequest{MTI: "0200", Fields: map[string]string{"48": strings.Repeat("A", 1<<20)}})
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/lab/messages/encode", bytes.NewReader(body)))
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, "validation-error", got["type"])
+}
+
+type encodeRequest struct {
+	MTI    string            `json:"mti"`
+	Fields map[string]string `json:"fields"`
+}

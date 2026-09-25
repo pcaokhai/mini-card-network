@@ -27,30 +27,36 @@ var sampleVectors = []string{
 // Samples returns the golden vectors as human-labeled samples, with the PAN masked and the
 // PIN block and MAC redacted in raw (LAB-G2).
 var Samples = []Sample{
-	{MTI: "0200", Label: "Purchase, chip + PIN", Raw: redactRaw(sampleVectors[0])},
-	{MTI: "0210", Label: "Purchase approved", Raw: redactRaw(sampleVectors[1])},
-	{MTI: "0420", Label: "Reversal on timeout", Raw: redactRaw(sampleVectors[2])},
-	{MTI: "0800", Label: "Echo (network management)", Raw: redactRaw(sampleVectors[3])},
+	{MTI: "0200", Label: "Purchase, chip + PIN", Raw: mustRedactRaw(sampleVectors[0])},
+	{MTI: "0210", Label: "Purchase approved", Raw: mustRedactRaw(sampleVectors[1])},
+	{MTI: "0420", Label: "Reversal on timeout", Raw: mustRedactRaw(sampleVectors[2])},
+	{MTI: "0800", Label: "Echo (network management)", Raw: mustRedactRaw(sampleVectors[3])},
 }
 
 // clearSamples maps each served (redacted) sample back to its golden vector for Decode.
 var clearSamples = func() map[string]string {
 	m := make(map[string]string, len(sampleVectors))
 	for _, v := range sampleVectors {
-		m[redactRaw(v)] = v
+		m[mustRedactRaw(v)] = v
 	}
 	return m
 }()
 
-// redactRaw rebuilds a packed message from its redacted segments. Redaction keeps every
-// segment's length, so the result has the same framing as the original.
-func redactRaw(raw string) string {
+// mustRedactRaw rebuilds a golden vector from its redacted segments (redaction keeps every
+// segment's length, so the framing is unchanged). It runs only at package init on the fixed
+// vectors above: a vector that stops parsing is a build defect, and falling back to "" would
+// let Decode("") map to a clear vector.
+func mustRedactRaw(raw string) string {
 	_, _, segments, err := iso8583.UnpackSegmented(raw)
 	if err != nil {
-		return "" // never fall back to the clear message
+		panic("lab: golden sample vector no longer parses: " + err.Error())
 	}
+	return joinSegments(redactSegments(segments))
+}
+
+func joinSegments(segments []Segment) string {
 	var b strings.Builder
-	for _, s := range redactSegments(segments) {
+	for _, s := range segments {
 		b.WriteString(s.Text)
 	}
 	return b.String()

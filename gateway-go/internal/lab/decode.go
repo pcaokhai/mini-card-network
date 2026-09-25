@@ -14,8 +14,17 @@ import (
 // panDE is the data element carrying the PAN (contracts/iso8583/packager-spec.yaml).
 const panDE = 2
 
-// secretDEs never leave the Lab in any form, not even partially: PIN block and MACs (engineering rule 2).
-var secretDEs = map[int]bool{52: true, 64: true, 128: true}
+// secretDEs never leave the Lab in any form, not even partially (engineering rule 2): PIN block,
+// ICC data (EMV tags 5A and 57 carry the PAN and track 2 equivalent) and MACs.
+// ponytail: duplicates packager-spec.yaml's sensitive flags (LAB-G8); generate from the spec once
+// codegen carries them.
+var secretDEs = map[int]bool{52: true, 55: true, 64: true, 128: true}
+
+// panVisibleHead / panVisibleTail are the PAN digits PCI DSS 3.4 allows on display.
+const (
+	panVisibleHead = 6
+	panVisibleTail = 4
+)
 
 // Field is one decoded data element, ready for the Lab UI (contracts/openapi.yaml IsoField).
 type Field struct {
@@ -129,22 +138,36 @@ func redactSegments(segments []Segment) []Segment {
 	return out
 }
 
+// redactValue masks one field's value: DE 2 by position, secret DEs in full, and any PAN-like
+// digit run in free text (an/ans) such as DE 48.
 func redactValue(de int, value string) string {
 	switch {
 	case de == panDE:
-		return obs.MaskPAN(value)
+		return maskPANByPosition(value)
 	case secretDEs[de]:
 		return strings.Repeat("*", len(value))
+	case strings.HasPrefix(iso8583.Fields[de].Type, "an"):
+		return obs.MaskPAN(value)
 	}
 	return value
 }
 
-// redactWire is redactValue for on-wire text: PAN masking keeps the LL/LLL length prefix so the
-// framing stays visible for teaching. Secret DEs are fixed-length, so they carry no prefix.
-func redactWire(de int, text string) string {
-	if de != panDE {
-		return redactValue(de, text)
+// maskPANByPosition masks DE 2 whatever its length: obs.MaskPAN only matches 13-19 digit runs,
+// but DE 2 is the PAN by definition. First 6 + last 4 when at least one digit stays hidden,
+// otherwise only the last 4.
+func maskPANByPosition(pan string) string {
+	if len(pan) > panVisibleHead+panVisibleTail {
+		return pan[:panVisibleHead] + strings.Repeat("*", len(pan)-panVisibleHead-panVisibleTail) + pan[len(pan)-panVisibleTail:]
 	}
+	if len(pan) > panVisibleTail {
+		return strings.Repeat("*", len(pan)-panVisibleTail) + pan[len(pan)-panVisibleTail:]
+	}
+	return strings.Repeat("*", len(pan))
+}
+
+// redactWire is redactValue for on-wire text: the LL/LLL length prefix stays visible so the
+// framing can still be taught, and redaction keeps the length.
+func redactWire(de int, text string) string {
 	prefixLen := 0
 	switch iso8583.Fields[de].Prefix {
 	case "LL":
@@ -152,8 +175,8 @@ func redactWire(de int, text string) string {
 	case "LLL":
 		prefixLen = 3
 	}
-	if prefixLen >= len(text) {
-		return text
+	if prefixLen > len(text) {
+		return strings.Repeat("*", len(text))
 	}
-	return text[:prefixLen] + obs.MaskPAN(text[prefixLen:])
+	return text[:prefixLen] + redactValue(de, text[prefixLen:])
 }

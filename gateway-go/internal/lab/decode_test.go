@@ -1,6 +1,7 @@
 package lab
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -126,5 +127,97 @@ func TestSamples_neverCarrySensitiveDataInClearAndStillDecode__LAB_G2(t *testing
 		if !reflect.DeepEqual(fromMasked, fromClear) {
 			t.Fatalf("sample %s decodes differently from its vector", s.MTI)
 		}
+	}
+}
+
+// iccWithPANAndTrack2 is DE 55 carrying EMV tag 5A (PAN) and tag 57 (track 2 equivalent).
+const iccWithPANAndTrack2 = "5A0897043600000044175710" + "9704360000004417D28122010000000F"
+
+// requireNoLeak fails when any secret appears anywhere in the JSON the Lab would return.
+func requireNoLeak(t *testing.T, d Decoded, secrets ...string) {
+	t.Helper()
+	body, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range secrets {
+		if strings.Contains(string(body), s) {
+			t.Fatalf("response leaks %q: %s", s, body)
+		}
+	}
+}
+
+func TestEncodeAndDecode_redactWholeICCData__LAB_B1(t *testing.T) {
+	encoded, err := Encode("0200", map[string]string{"3": "000000", "11": "000123", "55": iccWithPANAndTrack2})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	requireNoLeak(t, encoded, "9704360000004417", "970436000000441", "D2812201")
+	f := findField(encoded.Fields, "55")
+	if f.Value != strings.Repeat("*", len(iccWithPANAndTrack2)) {
+		t.Fatalf("DE 55 value not redacted: %q", f.Value)
+	}
+
+	packed, err := iso8583.Pack("0200", map[int]string{3: "000000", 11: "000123", 55: iccWithPANAndTrack2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := Decode(packed)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	requireNoLeak(t, decoded, "9704360000004417", "970436000000441", "D2812201")
+}
+
+func TestDecode_masksShortPANByPosition__LAB_S1(t *testing.T) {
+	for pan, want := range map[string]string{
+		"97043600017":  "970436*0017",
+		"970436000017": "970436**0017",
+		"9704360017":   "******0017",
+	} {
+		d, err := Encode("0200", map[string]string{"2": pan, "3": "000000", "11": "000123"})
+		if err != nil {
+			t.Fatalf("Encode %s: %v", pan, err)
+		}
+		f := findField(d.Fields, "2")
+		if f.Value != want || f.Raw != f.Raw[:2]+want {
+			t.Fatalf("PAN %s: value=%q raw=%q, want %q", pan, f.Value, f.Raw, want)
+		}
+		requireNoLeak(t, d, pan)
+	}
+}
+
+func TestDecode_masksPANInFreeText__LAB_S2(t *testing.T) {
+	d, err := Encode("0200", map[string]string{"3": "000000", "11": "000123", "48": "CARD 9704360000004417 KEY ABC"})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	requireNoLeak(t, d, "9704360000004417")
+	if f := findField(d.Fields, "48"); !strings.Contains(f.Value, "970436******4417") {
+		t.Fatalf("DE 48 value = %q", f.Value)
+	}
+}
+
+func TestEncode_redactsSecondaryMAC__LAB_S4(t *testing.T) {
+	const mac = "0123456789ABCDEF"
+	d, err := Encode("0200", map[string]string{"3": "000000", "11": "000123", "70": "301", "128": mac})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if d.SecondaryBitmap == nil {
+		t.Fatal("expected a secondary bitmap for DE 128")
+	}
+	requireNoLeak(t, d, mac)
+	if f := findField(d.Fields, "128"); f.Value != strings.Repeat("*", len(mac)) {
+		t.Fatalf("DE 128 value = %q", f.Value)
+	}
+}
+
+func TestClearSamples_neverKeyedByEmptyString__LAB_N1(t *testing.T) {
+	if _, ok := clearSamples[""]; ok {
+		t.Fatal(`Decode("") would map to a clear golden vector`)
+	}
+	if _, err := Decode(""); err == nil {
+		t.Fatal(`Decode("") must fail`)
 	}
 }
