@@ -15,6 +15,7 @@ const SUB_TECH_CLASS = "font-mono text-xs text-muted";
 const formatCount = (n: number) => Math.round(n).toLocaleString("vi-VN");
 const formatPercent = (n: number) => `${n.toLocaleString("vi-VN", { maximumFractionDigits: 1 })}%`;
 const formatMs = (n: number) => `${Math.round(n)} ms`;
+const formatTps = (n: number) => n.toLocaleString("vi-VN", { maximumFractionDigits: 2 });
 
 function peakSample(throughput: Overview["throughput"]): { tps: number; at: string } | null {
   const peak = throughput.reduce<Overview["throughput"][number] | null>(
@@ -44,7 +45,9 @@ export function KpiCards({ overview }: { overview: Overview }) {
           <CountUp value={overview.transactionsToday} format={formatCount} />
         </dd>
         {expert ? (
-          peak !== null && <p className={SUB_TECH_CLASS}>{t("transactionsTech", { peak: peak.tps, at: peak.at })}</p>
+          peak !== null && (
+            <p className={SUB_TECH_CLASS}>{t("transactionsTech", { peak: formatTps(peak.tps), at: peak.at })}</p>
+          )
         ) : (
           deltaPct !== undefined && (
             <p className={SUB_CLASS}>
