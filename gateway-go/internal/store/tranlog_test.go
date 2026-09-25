@@ -213,3 +213,19 @@ func TestTranLogRepository_lastSTANInTheHoursRRNPrefix__MCN_203(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, none)
 }
+
+func TestTranLogRepository_getReadsRespondedAt__MCN_304(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	id, err := repo.Insert(ctx, TranLogRow{RRN: "answered", Status: "SENT", Amount: 500, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, Type: tranTypePurchase})
+	require.NoError(t, err)
+
+	before, err := repo.Get(ctx, "answered")
+	require.NoError(t, err)
+	require.NoError(t, repo.UpdateStatus(ctx, id, statusApproved, "00", "A00001"))
+	after, err := repo.Get(ctx, "answered")
+	require.NoError(t, err)
+
+	require.Nil(t, before.RespondedAt)
+	require.NotNil(t, after.RespondedAt)
+}

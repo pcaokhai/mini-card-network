@@ -111,7 +111,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.MountNetwork(r, linkRepo, supervisor, safRepo)
 	api.MountPurchases(r, purchaseService)
 	api.MountAdvancedTransactions(r, advtxnService)
-	api.MountTransactionsQuery(r, tranLogRepo)
+	api.MountTransactionsQuery(r, tranLogRepo, saf.NewReversalLookup(safRepo, cfg.SafEncKey))
 	api.MountOverview(r, tranLogRepo)
 	api.MountKeys(r, keyStoreRepo)
 	api.MountRotations(r, rotationAdapter{runner: rotationRunner, repo: rotationRepo})

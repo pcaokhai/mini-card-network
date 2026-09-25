@@ -165,3 +165,34 @@ func TestSafRepository_aClaimedRowIsLeased__MCN_401(t *testing.T) {
 	require.Len(t, first, 1)
 	require.Empty(t, again)
 }
+
+func TestSafRepository_findReversalReturnsLatest0420__MCN_304(t *testing.T) {
+	pool := newTestPool(t)
+	tranLog := NewTranLogRepository(pool)
+	saf := NewSafRepository(pool)
+	ctx := context.Background()
+	tranID := insertTestTran(ctx, t, tranLog, "626514000789", "000789")
+	other := insertTestTran(ctx, t, tranLog, "626514000790", "000790")
+
+	_, err := saf.FindReversal(ctx, tranID)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	_, err = saf.Enqueue(ctx, tranID, "0420", []byte("first"))
+	require.NoError(t, err)
+	id, err := saf.Enqueue(ctx, tranID, "0420", []byte("second"))
+	require.NoError(t, err)
+	_, err = saf.Enqueue(ctx, other, "0420", []byte("other"))
+	require.NoError(t, err)
+	require.NoError(t, saf.MarkInFlight(ctx, id, 2, time.Now(), "i/o timeout"))
+	require.NoError(t, saf.MarkAcked(ctx, id))
+
+	got, err := saf.FindReversal(ctx, tranID)
+	require.NoError(t, err)
+
+	require.Equal(t, id, got.ID)
+	require.Equal(t, []byte("second"), got.Payload)
+	require.Equal(t, "ACKED", got.Status)
+	require.Equal(t, 2, got.Attempts)
+	require.False(t, got.CreatedAt.IsZero())
+	require.NotNil(t, got.AckedAt)
+}

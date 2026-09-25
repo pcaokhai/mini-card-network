@@ -21,12 +21,18 @@ type TranLogReader interface {
 	ListStateHistory(ctx context.Context, tranID int64) ([]store.StateTransition, error)
 }
 
+// ReversalReader reads a transaction's queued reversal for its journey (nil when none);
+// *saf.ReversalLookup satisfies it.
+type ReversalReader interface {
+	Reversal(ctx context.Context, tranID int64) (*journey.Reversal, error)
+}
+
 // MountTransactionsQuery registers the read-only transaction routes (contracts/openapi.yaml, tag
 // "transactions"): list, detail, and journey.
-func MountTransactionsQuery(r chi.Router, reader TranLogReader) {
+func MountTransactionsQuery(r chi.Router, reader TranLogReader, reversals ReversalReader) {
 	r.Get("/v1/transactions", handleListTransactions(reader))
 	r.Get("/v1/transactions/{rrn}", handleGetTransaction(reader))
-	r.Get("/v1/transactions/{rrn}/journey", handleGetTransactionJourney(reader))
+	r.Get("/v1/transactions/{rrn}/journey", handleGetTransactionJourney(reader, reversals))
 }
 
 func handleListTransactions(reader TranLogReader) http.HandlerFunc {
@@ -67,7 +73,7 @@ func handleGetTransaction(reader TranLogReader) http.HandlerFunc {
 	}
 }
 
-func handleGetTransactionJourney(reader TranLogReader) http.HandlerFunc {
+func handleGetTransactionJourney(reader TranLogReader, reversals ReversalReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		row, err := reader.Get(req.Context(), chi.URLParam(req, "rrn"))
 		if errors.Is(err, store.ErrNotFound) {
@@ -83,9 +89,26 @@ func handleGetTransactionJourney(reader TranLogReader) http.HandlerFunc {
 			problem(w, http.StatusInternalServerError, "journey-read-failed", err.Error())
 			return
 		}
-		j := journey.BuildJourney(row, history)
+		rev, err := findReversal(req.Context(), reversals, row.ID, history)
+		if err != nil {
+			problem(w, http.StatusInternalServerError, "journey-read-failed", err.Error())
+			return
+		}
+		j := journey.BuildJourney(row, history, rev)
 		writeJSONBody(w, http.StatusOK, toJourneyDTO(row, j))
 	}
+}
+
+const statusReversalPending = "REVERSAL_PENDING"
+
+// findReversal reads saf_queue only for a transaction that ever queued a reversal.
+func findReversal(ctx context.Context, reversals ReversalReader, tranID int64, history []store.StateTransition) (*journey.Reversal, error) {
+	for _, st := range history {
+		if st.ToStatus == statusReversalPending {
+			return reversals.Reversal(ctx, tranID)
+		}
+	}
+	return nil, nil
 }
 
 func parseTransactionFilter(req *http.Request) (store.TransactionFilter, error) {
@@ -170,6 +193,7 @@ func toSummaryDTO(row store.TranLogRow) transactionSummaryDTO {
 		MaskedPAN:     row.MaskedPAN,
 		TerminalID:    row.TerminalID,
 		MerchantName:  row.MerchantName,
+		LatencyMs:     journey.LatencyMs(row),
 		CreatedAt:     row.CreatedAt,
 	}
 }
@@ -194,13 +218,15 @@ type journeyDTO struct {
 }
 
 type journeyStepDTO struct {
-	Seq           int    `json:"seq"`
-	Actor         string `json:"actor"`
-	OffsetMs      int    `json:"offsetMs"`
-	Title         string `json:"title"`
-	EasyText      string `json:"easyText"`
-	TechnicalText string `json:"technicalText"`
-	Kind          string `json:"kind"`
+	Seq           int                 `json:"seq"`
+	Code          string              `json:"code"`
+	Actor         string              `json:"actor"`
+	OffsetMs      int                 `json:"offsetMs"`
+	Title         string              `json:"title"`
+	EasyText      string              `json:"easyText"`
+	TechnicalText string              `json:"technicalText"`
+	Kind          string              `json:"kind"`
+	Message       *journey.IsoMessage `json:"message"`
 }
 
 type moneyRowDTO struct {
@@ -214,7 +240,7 @@ func toJourneyDTO(row store.TranLogRow, j journey.Journey) journeyDTO {
 	steps := make([]journeyStepDTO, len(j.Steps))
 	for i, s := range j.Steps {
 		steps[i] = journeyStepDTO{
-			Seq: s.Seq, Actor: string(s.Actor), OffsetMs: s.OffsetMs, Title: s.Title,
+			Seq: s.Seq, Code: string(s.Code), Actor: string(s.Actor), Message: s.Message, OffsetMs: s.OffsetMs, Title: s.Title,
 			EasyText: s.EasyText, TechnicalText: s.TechnicalText, Kind: string(s.Kind),
 		}
 	}
