@@ -232,29 +232,43 @@ A backend that adds a new RC must add it to docs/03 §8 and both message files; 
 
 ## 7. Seed data check
 
-Question asked: after `make up && make seed`, does the backend hold data that makes this page look like the canvas? **No.** What exists today:
+Question asked: after `make up && make seed`, does the backend hold data that makes this page look like the canvas? **Yes, since the MCN-002 seed work**, with the exceptions below. Before it, the gateway seed only printed a placeholder, every purchase used one hard-wired merchant, and a fresh stack could not complete a purchase or a reversal at all (see "Defects the seed exposed").
 
-| Page element | Canvas / `dev:mock` | Real backend after `make up && make seed` | Match |
+`make seed` (`gateway-go/cmd/seed`, plan [`docs/plans/MCN-002-acquirer-seed.md`](../plans/MCN-002-acquirer-seed.md)) upserts the fixture merchants and terminals, signs the issuer link on, sets ••••1208's per-transaction limit through the issuer Card Admin API, and then sends real `POST /v1/transactions/purchases` calls, so `tran_log`, the issuer ledger and the WS events stay consistent. It cancels two approvals, which sends real 0420s, and waits for REVERSED. It then backdates the gateway's rows so the last hour follows the canvas's bar shape and yesterday's window gives the day-over-day delta.
+
+Verified on a fresh stack (2026-09-25, `make down -v && make up && make seed`, first try):
+
+| Page element | Canvas | Real backend after `make seed` | Match |
 | --- | --- | --- | --- |
-| Transactions, KPIs, bars, decline reasons | 1 950 today, 94.2 %, 7 merchants, 5 decline codes | Nothing: `gateway-go/Makefile` `seed` only prints `acquirer seed arrives with MCN-303`. Rows exist only after someone uses the POS | ✗ |
-| Merchant names | 7 Vietnamese merchants with diacritics | 1 merchant, `Ca phe Goc Pho` (no diacritics), and every purchase is hard-wired to it (`fixedMerchantID`) | ✗ |
-| Cards | ••••4417, 9021, 3310, 7765, plus 1208 and 5540 | 4 fixture cards: 4417 normal (5 000 000 ₫), 9021 low balance (80 000 ₫), 3310 **BLOCKED**, 7765 **expired** (08/26) | Partial |
-| Issuer link | SIGNED_ON, echo seconds ago | Migration seeds `issuer`/`DISCONNECTED`; becomes SIGNED_ON once the gateway signs on | ✓ |
-| SAF queue | empty | empty | ✓ |
+| Transactions today / delta | 1 950, +12 % | 130 today, +12 % vs the same window yesterday (116). Volume is scaled down: the gateway is driven one purchase at a time | Shape ✓, volume scaled |
+| Approval rate | 94.2 % | 93.8 % (231 of 246 approved across both days) | ✓ |
+| 60-minute bars | 24 bars, canvas heights | 24 non-empty 150 s buckets in the canvas's proportions | ✓ |
+| Decline reasons | 51, 61, 55, 62, 54 + "Lý do khác" | 51, 61, 62, 54 from real issuer decisions. No RC 55 (R-12) | Partial (R-12, G5) |
+| Merchants / cards | 7 merchants, ••••4417/9021/3310/7765/1208/5540 | Same 7 merchants and 6 cards, all from `contracts/fixtures/cards.json` | ✓ |
+| "Đã tự hủy" rows | 1 | 2 cancellations reach REVERSED on both hosts, with the issuer's reversing journal | ✓ |
+| Issuer link, SAF, key | SIGNED_ON, empty, ZPK KCV | SIGNED_ON, SAF depth 0 / 0 dead, ZPK registered from `ZPK_HEX` | ✓ |
 | Stand-in / circuit | STIP OFF · CLOSED | endpoint 404 | ✗ (G1) |
-| Security key | ZPK `3F9A21`, 26 days left | registered at startup from `ZPK_HEX` (after the MCN-002 gateway change); lifetime is 365 days in the gateway, not the 90 the mock uses | ✓ after MCN-002 |
 
-Observed on the running stack (2026-09-25): 3 transactions in total, all from 2026-09-24, all card 4417 and merchant `Ca phe Goc Pho`. Two are stuck in `SENT` and one in `REVERSAL_PENDING` (RC 96, the key-rotation gap noted in `docs/plans/MCN-503.md`). `metrics/overview` returns all zeros because none of them are "today".
+A second run on the same stack adds another 246 rows. Every RRN stays unique across a gateway restart.
 
-The mock itself also has rows no real backend could produce from the fixtures: ••••3310 (blocked) shown as approved and as "Sai mã PIN", and ••••9021 (80 000 ₫ balance) with a pending 358 000 ₫ purchase. The canvas cards 1208 and 5540 do not exist in the fixtures at all.
+### Defects the seed exposed (fixed)
 
-### Recommended seed (MCN-002 AC4, acquirer half)
+| Defect | Effect | Fix |
+| --- | --- | --- |
+| The issuer never MACed its 0210 | Every real purchase declined RC 96 | ISS `Respond` signs responses |
+| RCs 06, 10, 17, 62, 68, 95 missing from the issuer's RC table | An RC 62 decline failed with an FK violation | ISS migration V6 |
+| 0420 chain: DE 90 had a blank STAN, the advice lacked mandatory fields and a MAC, send errors were swallowed, the issuer answered every 0420 with RC 30, and the gateway ACKed any 0430 | No reversal had ever completed end to end (root CLAUDE.md §6.4) | GW `saf` advice / worker, ISS listener routing. [`docs/plans/MCN-401-reversal-0420-fix.md`](../plans/MCN-401-reversal-0420-fix.md) |
+| An aborted reversal was answered "00", and two reversals of one purchase could both post | The acquirer could mark REVERSED money the issuer never returned, or the issuer could return it twice | ISS: only "00" once recorded; guarded status update in the journal transaction |
+| The STAN counter restarted at 1 on every reconnect and restart | 492 rows, 250 distinct RRNs | GW shared counter resumed from `tran_log` |
+| Sign-on waited on a dead socket with no timeout | The first seed on a fresh stack hit `409 broken pipe` until the gateway was restarted | GW supervisor: connection-scoped sign-on with a timeout |
+| Bars scaled to `max(1, peak)` and TPS rendered as a raw float | A flat chart at real (< 1 TPS) volume | WEB |
+| Mocks embedded full test PANs | PCI rule (root CLAUDE.md §6.2) broken in web source | WEB: last-4 only |
 
-Being implemented per [`docs/plans/MCN-002-acquirer-seed.md`](../plans/MCN-002-acquirer-seed.md), with fixture cards ••••1208 and ••••5540 added and backdating accepted. RC 55 ("Sai mã PIN") cannot be seeded because the gateway never forwards the PIN block; see risk R-12.
+### Still open
 
-To make the real stack reproduce the canvas without bypassing the ledger (root CLAUDE.md §9):
-
-1. **Fixtures (contract PR):** add the canvas merchants to `contracts/fixtures/cards.json` `terminals` (one terminal each, with Vietnamese names and MCCs). Decide whether to add fixture cards for 1208/5540 or map those canvas rows onto the existing four.
-2. **Gateway:** resolve the merchant from the terminal instead of `fixedMerchantID`; seed `merchant`/`terminal` from the fixture file.
-3. **`make seed` for gateway-go:** drive real `POST /v1/transactions/purchases` calls, which keeps tran_log, the issuer ledger and the WS events consistent. Pick card and amount so each outcome is the real one: 4417 approved, 9021 over 80 000 ₫ → RC 51, 3310 → RC 62, 7765 → RC 54, wrong PIN on 4417 → RC 55. The Chaos API gives a reversal (RC 91 → REVERSED). Backdating rows for the day-over-day delta and the 60-minute bars would need a seed-only path; decide whether that is acceptable.
-4. **Mocks:** once 1–3 exist, regenerate `scenario-handlers.ts` rows from the same fixture outcomes so `dev:mock` and the real stack show the same kinds of rows.
+- **G1** `/v1/network/switch` (MCN-802).
+- **G3** `transaction.updated` is never broadcast, so a reversal only shows after the next poll.
+- **G5** decline tail grouping.
+- **G7** UTC "today".
+- **R-12** the gateway never forwards a PIN block, so RC 55 ("Sai mã PIN") cannot be produced. `docs/09-risk-register.md`.
+- A REVERSED row shows its original approval's RC 00 ("Đã tự hủy · RC 00"). Showing the 0420's reason code (for example 17, customer cancellation) needs a field in `TransactionSummary`. That is a contract change, so it goes in its own contract PR.

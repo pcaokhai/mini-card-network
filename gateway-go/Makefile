@@ -13,8 +13,12 @@ fmt:
 	gofmt -w .
 	golangci-lint fmt ./...
 
+# Needs the stack up (`make up`) and the issuer seeded first; the root `make seed` runs issuer-jpos
+# before gateway-go. See cmd/seed for what it writes.
 seed:
-	@echo "acquirer seed arrives with MCN-303"
+	@set -a; [ -f ../.env ] && . ../.env; set +a; \
+	DATABASE_URL="postgres://acquirer:$${ACQUIRER_DB_PASSWORD:-lab-acquirer}@localhost:$${POSTGRES_HOST_PORT:-5432}/acquirer" \
+	CGO_ENABLED=0 go run ./cmd/seed # pure Go; avoids a host C toolchain dependency
 
 run:
 	go run ./cmd/gateway

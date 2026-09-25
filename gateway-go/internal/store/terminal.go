@@ -36,3 +36,37 @@ func (r *TerminalRepository) Merchant(ctx context.Context, tid string) (Merchant
 	}
 	return m, err
 }
+
+// FixtureTerminal is one contracts/fixtures/cards.json terminal with its merchant.
+type FixtureTerminal struct {
+	TerminalID   string
+	MerchantID   string
+	MerchantName string
+	MCC          string
+}
+
+// UpsertFromFixture makes the merchant and terminal tables match the fixture: rows are added, and
+// an existing merchant's name and MCC follow the fixture. Rows the fixture no longer lists stay,
+// since tran_log references them.
+func (r *TerminalRepository) UpsertFromFixture(ctx context.Context, terminals []FixtureTerminal) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	for _, t := range terminals {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO merchant (mid, name, mcc) VALUES ($1, $2, $3)
+			 ON CONFLICT (mid) DO UPDATE SET name = EXCLUDED.name, mcc = EXCLUDED.mcc`,
+			t.MerchantID, t.MerchantName, t.MCC); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO terminal (tid, mid) VALUES ($1, $2) ON CONFLICT (tid) DO UPDATE SET mid = EXCLUDED.mid`,
+			t.TerminalID, t.MerchantID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}

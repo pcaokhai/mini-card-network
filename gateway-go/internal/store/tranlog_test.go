@@ -136,6 +136,41 @@ func TestTranLogRepository_listStateHistory__MCN_304_AC2(t *testing.T) {
 	require.Equal(t, statusApproved, history[1].ToStatus)
 }
 
+func TestTranLogRepository_backdateMovesTheRowAndItsHistoryTogether__MCN_002(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewTranLogRepository(pool)
+	ctx := context.Background()
+
+	id, err := repo.Insert(ctx, TranLogRow{RRN: "626514000601", Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID})
+	require.NoError(t, err)
+	require.NoError(t, repo.RecordStateTransition(ctx, id, "CREATED", "SENT"))
+	require.NoError(t, repo.RecordStateTransition(ctx, id, "SENT", "APPROVED"))
+	before, err := repo.ListStateHistory(ctx, id)
+	require.NoError(t, err)
+	target := time.Now().UTC().Add(-26 * time.Hour).Truncate(time.Microsecond)
+
+	require.NoError(t, repo.Backdate(ctx, "626514000601", target))
+
+	row, err := repo.Get(ctx, "626514000601")
+	require.NoError(t, err)
+	require.True(t, row.CreatedAt.Equal(target), "created_at %s, want %s", row.CreatedAt, target)
+	after, err := repo.ListStateHistory(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, after, len(before))
+	shift := after[0].At.Sub(before[0].At)
+	require.InDelta(t, -26*time.Hour, shift, float64(time.Minute))
+	for i := range after {
+		require.Equal(t, before[i].At.Add(shift), after[i].At, "history row %d keeps its spacing", i)
+	}
+}
+
+func TestTranLogRepository_backdateUnknownRRN__MCN_002(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+
+	err := repo.Backdate(context.Background(), "000000000000", time.Now())
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
 func TestTranLogRepository_roundTripsTheFieldsAReversalNeeds__MCN_401(t *testing.T) {
 	repo := NewTranLogRepository(newTestPool(t))
 	ctx := context.Background()
