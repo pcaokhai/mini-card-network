@@ -100,7 +100,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// traffic, only chaos scenarios.
 		logger.Error("disable chaos toxics at boot", "error", err.Error())
 	}
-	chaosRunner := chaos.NewRunner(purchaseService, safRepo, tranLogRepo, chaos.NewIssuerAdminClient(cfg.IssuerAdminURL), purchase.DefaultCardTokens().Seeds(), hub)
+	chaosRunner := chaos.NewRunner(purchaseService, safRepo, tranLogRepo, chaos.NewIssuerAdminClient(cfg.IssuerAdminURL), purchase.DefaultCardTokens().Seeds(), hub,
+		chaos.WithLogger(logger), chaos.WithMaxRunDuration(cfg.ChaosRunMaxDuration))
 	purchaseService.SetChaosDuplicateHook(newChaosDuplicateHook(ctx, toxiproxyClient))
 
 	health := api.NewHealth()
@@ -142,6 +143,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	g.Go(func() error { return serve(metricsServer, metricsLn) })
 	g.Go(func() error { return supervisor.Run(gctx) })
 	g.Go(func() error { return safWorker.Run(gctx) })
+	g.Go(func() error { return chaosRunner.Serve(gctx) })
 	if fakeIssuer != nil {
 		g.Go(func() error { return fakeIssuer.Serve(gctx) })
 	}

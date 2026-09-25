@@ -186,25 +186,25 @@ Mock (dev:mock, `mocks/pages/chaos.ts`): `{ "id": "SLOW_NETWORK", "enabled": tru
 
 | Header | Required | Notes |
 | --- | --- | --- |
-| `Idempotency-Key` | ✓ | a fresh UUID per click; a missing header gives 400. Not stored: a retried POST starts a second run (CHA-G5) |
+| `Idempotency-Key` | ✓ | a UUID, fresh per click; missing or not a UUID → 400 `insufficient-idempotency-key`. A retry with the same key and body **replays the first 202 body, the RUNNING snapshot**, so clients follow the run by polling `GET /v1/chaos/runs/{runId}`; the same key with a different body → 422 (#118) |
 | `Content-Type` | ✓ | `application/json` |
 
 | Body field | Type | Required | Constraints | Notes |
 | --- | --- | --- | --- | --- |
-| `transactions` | integer | ✓ | contract 1–10000; the provider enforces only ≥ 1 (CHA-G5) | the page always sends `100` |
+| `transactions` | integer | ✓ | 1–10000, else 400 `validation-error` | the page always sends `100` |
 
-**Response.** `202 Accepted`, `ChaosRun` (fields in §4.4), with `status: RUNNING`, all counts 0, `openingBalanceTotal` set, `closingBalanceTotal` and `ledgerDiscrepancy` 0. The client writes this body into the run's cache entry and starts polling §4.4.
+**Response.** `202 Accepted`, `ChaosRun` (fields in §4.4), with `status: RUNNING`, `seq: 0`, `startedAt` set, all counts and totals 0 (the opening read happens after the 202). The client writes this body into the run's cache entry and starts polling §4.4.
 
-**Provider rules.**
-1. `runId` is `run-` + 16 lowercase hex characters (random).
-2. `openingBalanceTotal` is the sum of the seed-card **fixture** balances (`purchase.DefaultCardTokens().Seeds()`), not a live read of the issuer's accounts.
-3. The run calls `purchase.Service.CreatePurchase` directly (not over HTTP), **sequentially**. Each purchase uses a random seed card, terminal `00000042`, entry mode `CHIP_PIN`, amount 10000 minor units in currency `704`, and idempotency key `chaos-{runId}-{i}`.
-4. Outcome tally per purchase: `APPROVED` → `approved`; `DECLINED` (including RC 91 while the link is down) → `declined`; `TIMED_OUT` / `REVERSAL_PENDING` → reversal candidate. `completed` goes up by one either way, then `chaos.run.progress` is broadcast.
-5. Any error returned by the purchase service (for example a send failure other than a timeout) ends the run at once as `FAILED`, with `closingBalanceTotal` 0 and `ledgerDiscrepancy` 0 (CHA-G3).
-6. After the last purchase, the run waits for the SAF queue to drain (poll every 500 ms, up to 65 s; it continues silently on timeout). It then counts the candidates whose `tran_log` status is `REVERSED` into `reversed`.
-7. `closingBalanceTotal = opening − Σ approved amounts + Σ reversed amounts`, and `ledgerDiscrepancy` is computed from that same equation. It is therefore always 0 and the status always `PASSED` (CHA-G1).
-8. The final state is broadcast as `chaos.changed` (not `chaos.run.progress`) carrying the `ChaosRun` (CHA-G2).
-9. Several runs may execute concurrently; nothing prevents a second run while one is going.
+**Provider rules.** (as of #118)
+1. `runId` is `run-` + 16 lowercase hex characters (random). One run at a time: a second POST while one is RUNNING/VERIFYING → 409 `conflict`.
+2. **The run assumes no other traffic on the seed cards while it runs.** A POS purchase or a stray reversal on those cards moves the issuer balances and shows up as `LEDGER_MISMATCH`; the mismatch's `failureDetail` says so.
+3. Before the opening read, the run waits for the SAF queue to be empty (up to 65 s), so reversals left from earlier traffic can't land mid-run. Still pending → `FAILED`, `RUN_ERROR`, "SAF not drained before the run (N pending)".
+4. `openingBalanceTotal` is the sum of the six seed cards' `ledgerBalance` from the Issuer Admin API (`GET {ISSUER_ADMIN_URL}/v1/cards/{cardRef}`, with the W3C `traceparent`). Cards in different currencies can't be summed → `RUN_ERROR`.
+5. The run calls `purchase.Service.CreatePurchase` directly (not over HTTP), **sequentially**. Each purchase uses a random seed card, terminal `00000042`, entry mode `CHIP_PIN`, amount 10000 minor units in currency `704`, and idempotency key `chaos-{runId}-{i}`.
+6. Outcome tally per purchase: `APPROVED` → `approved`; `DECLINED` (including RC 91 while the link is down) → `declined`; `TIMED_OUT` / `REVERSAL_PENDING`, and `DECLINED` with RC 96 (a response MAC failure, which the gateway reverses) → reversal candidate. `completed` goes up by one either way, and every snapshot goes out as `chaos.run.progress` with an increasing `seq`.
+7. After the last purchase the run is `VERIFYING`: it waits for the SAF queue to drain (up to 65 s), counts the candidates whose `tran_log` status is `REVERSED` into `reversed`, and reads the closing balances. A drain timeout or an unreadable queue → `RUN_ERROR` "SAF not drained after the run …", never a ledger verdict.
+8. `ledgerDiscrepancy = (closing − opening) − (−Σ approved)`. Zero → `PASSED`; otherwise `FAILED` with `LEDGER_MISMATCH`.
+9. Any other failure (a purchase-service error, an issuer or database read failure, a panic, shutdown, or the wall-clock cap `CHAOS_RUN_MAX_DURATION`, default 10 min) ends the run `FAILED` with `RUN_ERROR` and a generic `failureDetail`; the raw error is logged, PAN-masked, with the run id and trace id.
 
 **Errors.**
 
@@ -263,21 +263,21 @@ The real provider returns the same shape with `runId` like `run-3f9a21c07be45d18
 
 **Provider rules.**
 1. Runs live in gateway memory: never evicted, and lost on restart (then 404).
-2. `status` goes `RUNNING` → `PASSED` or `FAILED`. `VERIFYING` is never set by the real provider (the SAF-drain wait is reported as `RUNNING`); only dev:mock shows it.
-3. During `RUNNING`, `approved`, `declined` and `completed` grow. `reversed` stays 0 until the end (§4.3 rule 6), and `closingBalanceTotal` and `ledgerDiscrepancy` stay 0.
+2. `status` goes `RUNNING` → `VERIFYING` → `PASSED` or `FAILED` (a `RUN_ERROR` can end it from `RUNNING`). `seq` increases with every snapshot; a client drops a snapshot older than one it holds.
+3. During `RUNNING`, `approved`, `declined` and `completed` grow. `reversed`, `closingBalanceTotal` and `ledgerDiscrepancy` are set during `VERIFYING` (§4.3 rule 7).
 4. Amounts are integer minor units, currency `704` implied (the client formats with `704`).
 
 **Errors.**
 
 | HTTP status | problem `type` | When | UI behaviour |
 | --- | --- | --- | --- |
-| 404 | `chaos-run-not-found` | unknown id, or the gateway restarted | query error; polling continues every 2 s with retries, and the panel keeps the last snapshot (CHA-G7) |
+| 404 | `not-found` | unknown id, or the gateway restarted | query error; polling continues every 2 s with retries, and the panel keeps the last snapshot (CHA-G7) |
 | 502 | BFF `upstream-unavailable` | gateway unreachable | same |
 
 **Example.** Real error, local stack, 2026-09-25:
 
 ```json
-{ "type": "chaos-run-not-found", "title": "chaos-run-not-found", "status": 404, "detail": "no such chaos run" }
+{ "type": "not-found", "title": "not-found", "status": 404, "detail": "no such chaos run" }
 ```
 
 Mock success (dev:mock, `DROP_RESPONSE` on, after 3.8 s):
@@ -313,7 +313,7 @@ Socket and client rules as in [network-page.md](network-page.md) §5: `NEXT_PUBL
 
 | Event | `data` schema (contract) | Emitted by (real) | UI effect | Ordering / dedupe |
 | --- | --- | --- | --- | --- |
-| `chaos.changed` | `ChaosScenario` | (a) `PUT /v1/chaos/scenarios/{id}` after a successful change; (b) **the end of every run, with a `ChaosRun` payload** (CHA-G2) | invalidates `["chaos","scenarios"]` whatever the payload. A run-end event therefore does not update the money panel; the 2 s poll picks up the final state | refetch, so no dedupe needed |
+| `chaos.changed` | `ChaosScenario` | `PUT /v1/chaos/scenarios/{id}` after a successful change. Since #118 a run's final state goes out as `chaos.run.progress` instead (CHA-G2) | invalidates `["chaos","scenarios"]` | refetch, so no dedupe needed |
 | `chaos.run.progress` | `ChaosRun` | the runner, after each purchase (not "every 500 ms" as docs/04 §5 says; it names a `ChaosRunProgress` schema that doesn't exist) | if `data.runId` equals the page's current run, `setQueryData(["chaos","run", runId], data)`; other runs are ignored | no sequence number. A late event can overwrite a newer polled snapshot until the next poll (at most 2 s) |
 
 ## 6. Security and compliance
@@ -325,7 +325,7 @@ Socket and client rules as in [network-page.md](network-page.md) §5: `NEXT_PUBL
 | Destructive actions | Every scenario toggle acts on the one issuer proxy of the shared stack, and a run posts 100 real purchases (10000 minor units each) against the seed cards. Those change issuer balances, write `tran_log` rows, may queue reversals, and show up on every other screen. Safeguards today: none. No confirmation, no role check (v1 has no end-user auth), no guard against concurrent runs. The gateway clears all scenarios at boot. |
 | Ledger integrity | Runs go through the normal purchase path, so double entry, SAF and idempotency apply (engineering rules 4 and 5). The run's verdict is not an independent check (CHA-G1). |
 | Audit trail | Scenario toggles and run starts are not audited and not written to `network_event`. The BFF forwards no `X-Actor`. |
-| Idempotency | Presence of `Idempotency-Key` is enforced, but keys are not stored: a retried PUT re-applies the same state (harmless); a retried POST starts a second run (CHA-G5). |
+| Idempotency | `Idempotency-Key` must be a UUID. A retried PUT re-applies the same state (harmless, not stored). A retried POST with the same key and body replays the first 202, the RUNNING snapshot, and starts nothing; poll `GET /v1/chaos/runs/{runId}` for progress. Keys live in gateway memory (#118). |
 
 ## 7. Non-functional requirements
 
@@ -369,10 +369,11 @@ Polling load while a run is active: §4.4 every 2 s, §4.5 every 5 s, §4.6 ever
 | CHA-G11 | `DROP_RESPONSE` can't be enabled on a default stack: 501 unless `CHAOS_FAKE_ISSUER_ADDR` is set (MCN-407). The card offers it anyway, and the click ends in the generic alert. | `toxiproxy_client.go` `SetScenario`; `gateway-go/compose.yaml` | GW + WEB | **Fixed** in #118: `PUT` answers 501 `scenario-unavailable`, and `GET /v1/chaos/scenarios` reports `available: false` for `DROP_RESPONSE` when `CHAOS_FAKE_ISSUER_ADDR` is unset (contract #116). WEB still has to disable the card |
 | CHA-G12 | Problem types are bare slugs (`idempotency-key-required`, `chaos-set-failed`…), not docs/04 URIs, and `idempotency-key-required` differs from the catalogue's `insufficient-idempotency-key`. | `internal/api/chaos.go` | GW | **Fixed** in #118 for slugs: `insufficient-idempotency-key`, `not-found`, `conflict`, `validation-error`, `scenario-unavailable`, `idempotency-key-mismatch`, `internal`. The URI form of `type` stays with LAB-G4 / P-1 |
 | CHA-G13 | `chaos.run.progress` carries no sequence number, so a delayed WS event can briefly regress the panel below a newer polled snapshot. | `runner.go`; `ChaosLabScreen.tsx` `setQueryData` | GW + WEB | **Fixed** in #118 (provider): `seq` increases with every snapshot. WEB still has to drop older snapshots |
+| CHA-G14 | The chaos runner's cardToken → cardRef map (`chaos.fixtureCardRefs`) duplicates `contracts/fixtures/cards.json`, which `internal/purchase/gen` already generates from. A sync test guards it. | `gateway-go/internal/chaos/runner.go`; `TestFixtureCardRefs_matchContractFixtures__CHA_G1` | GW | Add `CardRef` to the generated `purchase.CardFixture` after #117 (which owns the generator) and drop the map |
 
 ## 10. Change log
 
 | Version | Date | Change |
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack (GET only) |
-| 1.1 | 2026-09-25 | CHA-G1–G6, G8, G11, G12 and G13 fixed on the provider side (#118) |
+| 1.1 | 2026-09-25 | CHA-G1–G6, G8, G11, G12 and G13 fixed on the provider side (#118); §4.3/§4.4 provider rules rewritten for the issuer-verified run; CHA-G14 added |

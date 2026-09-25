@@ -125,7 +125,7 @@ func TestGetChaosRun_returns404WhenUnknown__MCN_404_AC2(t *testing.T) {
 }
 
 const (
-	testKey    = "3f1c9e0a-6b2d-4c8e-9a7f-1d2e3f4a5b6c" // a random UUID, not a secret #gitleaks:allow
+	testKey    = "11111111-1111-1111-1111-111111111111"
 	runRunning = "RUNNING"
 	testRunID  = "run-1"
 )

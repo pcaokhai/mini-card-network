@@ -147,3 +147,18 @@ func TestLoad_issuerAdminURL__CHA_G1(t *testing.T) {
 		require.ErrorContains(t, err, "ISSUER_ADMIN_URL", bad)
 	}
 }
+
+func TestLoad_chaosRunMaxDuration__CHA_N2(t *testing.T) {
+	cfg, err := Load(env(withLMK(nil)))
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Minute, cfg.ChaosRunMaxDuration)
+
+	cfg, err = Load(env(withLMK(map[string]string{"CHAOS_RUN_MAX_DURATION": "90s"})))
+	require.NoError(t, err)
+	require.Equal(t, 90*time.Second, cfg.ChaosRunMaxDuration)
+
+	for _, bad := range []string{"soon", "0s", "-1m"} {
+		_, err = Load(env(withLMK(map[string]string{"CHAOS_RUN_MAX_DURATION": bad})))
+		require.ErrorContains(t, err, "CHAOS_RUN_MAX_DURATION", bad)
+	}
+}

@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"sync"
 	"time"
 
-	"github.com/mcn/gateway-go/internal/obs"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -31,13 +33,18 @@ const (
 	currency         = "704"
 	terminalID       = "00000042" // migration 00002's terminal, always present even before `make seed`
 
-	safDrainPollInterval = 500 * time.Millisecond
-	safDrainTimeout      = 65 * time.Second // SAF's own backoff cap (60s) plus margin
+	safDrainPollInterval   = 500 * time.Millisecond
+	defaultSafDrainTimeout = 65 * time.Second // SAF's own backoff cap (60s) plus margin
+	defaultMaxRunDuration  = 10 * time.Minute
 )
 
-// ErrRunInProgress is returned by Start while another run is RUNNING or VERIFYING: two runs at
-// once would move the same seed cards and make each run's money check meaningless.
-var ErrRunInProgress = errors.New("a chaos run is already in progress")
+var (
+	// ErrRunInProgress is returned by Start while another run is RUNNING or VERIFYING: two runs
+	// at once would move the same seed cards and make each run's money check meaningless.
+	ErrRunInProgress = errors.New("a chaos run is already in progress")
+	// ErrNotServing is returned by Start before Serve runs or once shutdown began.
+	ErrNotServing = errors.New("chaos runner is not serving")
+)
 
 // fixtureCardRefs maps each seed cardToken to the issuer's cardRef (contracts/fixtures/cards.json;
 // a test keeps the two in sync). The gateway only knows tokens; the Issuer Admin API only refs.
@@ -73,7 +80,7 @@ type TranLogGetter interface {
 // BalanceReader reads a card's ledger balance from the issuer, the independent side of the
 // money check (CHA-G1). *IssuerAdminClient satisfies it.
 type BalanceReader interface {
-	LedgerBalance(ctx context.Context, cardRef string) (int64, error)
+	LedgerBalance(ctx context.Context, cardRef string) (amountMinor int64, currency string, err error)
 }
 
 // HubPort broadcasts chaos events. *ws.Hub (extended with BroadcastChaos) satisfies it.
@@ -112,24 +119,73 @@ type Runner struct {
 	seedCards []purchase.CardFixture
 	hub       HubPort
 
+	log             *slog.Logger
+	maxRunDuration  time.Duration
+	safDrainTimeout time.Duration
+
 	mu     sync.Mutex
 	runs   map[string]*ChaosRun
-	order  []string // run ids, oldest first
-	active string   // id of the RUNNING/VERIFYING run, "" when idle
+	order  []string        // run ids, oldest first
+	active string          // id of the RUNNING/VERIFYING run, "" when idle
+	base   context.Context // Serve's context; nil when not serving
+	wg     sync.WaitGroup
 }
 
+// Option configures optional Runner behaviour.
+type Option func(*Runner)
+
+// WithLogger sets where a failed run's raw error is logged (slog.Default otherwise).
+func WithLogger(l *slog.Logger) Option { return func(r *Runner) { r.log = l } }
+
+// WithMaxRunDuration caps a run's wall-clock time; past it the run ends RUN_ERROR (default 10 min).
+func WithMaxRunDuration(d time.Duration) Option { return func(r *Runner) { r.maxRunDuration = d } }
+
+// WithSafDrainTimeout sets how long a run waits for the SAF queue to empty (default 65 s).
+func WithSafDrainTimeout(d time.Duration) Option { return func(r *Runner) { r.safDrainTimeout = d } }
+
 // NewRunner builds a Runner. seedCards are the cards synthetic purchases are drawn from
-// (purchase.DefaultCardTokens().Seeds() in production).
-func NewRunner(purchases PurchaseCreator, saf SafDepthPort, tranLog TranLogGetter, balances BalanceReader, seedCards []purchase.CardFixture, hub HubPort) *Runner {
-	return &Runner{purchases: purchases, saf: saf, tranLog: tranLog, balances: balances, seedCards: seedCards, hub: hub, runs: map[string]*ChaosRun{}}
+// (purchase.DefaultCardTokens().Seeds() in production). Runs start only while Serve runs.
+func NewRunner(purchases PurchaseCreator, saf SafDepthPort, tranLog TranLogGetter, balances BalanceReader, seedCards []purchase.CardFixture, hub HubPort, opts ...Option) *Runner {
+	r := &Runner{
+		purchases: purchases, saf: saf, tranLog: tranLog, balances: balances, seedCards: seedCards, hub: hub,
+		log: slog.Default(), maxRunDuration: defaultMaxRunDuration, safDrainTimeout: defaultSafDrainTimeout,
+		runs: map[string]*ChaosRun{},
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
+
+// Serve owns the run goroutines (root CLAUDE.md §6 rule 9): it accepts Start calls until ctx is
+// cancelled, which also cancels a running run, and returns once that run has stopped.
+func (r *Runner) Serve(ctx context.Context) error {
+	r.mu.Lock()
+	r.base = ctx
+	r.mu.Unlock()
+	<-ctx.Done()
+	r.mu.Lock()
+	r.base = nil // no Start after this point, so wg.Add never races wg.Wait
+	r.mu.Unlock()
+	r.wg.Wait()
+	return nil
+}
+
+func (r *Runner) serving() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.base != nil
 }
 
 // Start kicks off requested synthetic purchases against a random seed card each, and returns
 // immediately with status RUNNING; the run continues in the background. Poll Get or listen for
 // chaos.run.progress to observe completion. Returns ErrRunInProgress while another run is active.
-func (r *Runner) Start(_ context.Context, requested int) (*ChaosRun, error) {
+func (r *Runner) Start(ctx context.Context, requested int) (*ChaosRun, error) { //nolint:contextcheck // the run deliberately uses Serve's context, not the request's (see body)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.base == nil {
+		return nil, ErrNotServing
+	}
 	if r.active != "" {
 		return nil, ErrRunInProgress
 	}
@@ -141,11 +197,16 @@ func (r *Runner) Start(_ context.Context, requested int) (*ChaosRun, error) {
 	// pointer from a different goroutine once it can take r.mu.
 	snapshot := *run
 
-	// ponytail: run.Start's own caller context (an HTTP request) is cancelled once the response
-	// is written, so the background work deliberately uses a fresh, independent context rather
-	// than the caller's - a run must keep going after the 202 response ships.
-	//nolint:contextcheck,gosec // intentional new root context - see comment above.
-	go r.drive(context.Background(), run.RunID, requested)
+	// The run outlives the request (cancelled once the 202 is written), so it runs under Serve's
+	// context, capped at maxRunDuration, and keeps only the request's trace for its logs and the
+	// issuer calls.
+	runCtx, cancel := context.WithTimeout(trace.ContextWithSpanContext(r.base, trace.SpanContextFromContext(ctx)), r.maxRunDuration)
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		defer cancel()
+		r.drive(runCtx, run.RunID, requested)
+	}()
 
 	return &snapshot, nil
 }
@@ -174,32 +235,47 @@ func (r *Runner) List(limit int) []ChaosRun {
 	return out
 }
 
+// drive runs one run to its verdict. Whatever stops it early - an error, the time cap, shutdown
+// or a panic - ends it FAILED with RUN_ERROR and frees the slot for the next run.
 func (r *Runner) drive(ctx context.Context, runID string, requested int) {
+	defer func() {
+		if p := recover(); p != nil {
+			r.failRun(ctx, runID, &runError{detail: "the run stopped on an internal error", cause: fmt.Errorf("panic: %v", p)})
+		}
+	}()
+	if err := r.execute(ctx, runID, requested); err != nil {
+		r.failRun(ctx, runID, err)
+	}
+}
+
+func (r *Runner) execute(ctx context.Context, runID string, requested int) error {
+	if err := r.waitForSafDrain(ctx, "before the run"); err != nil {
+		return err
+	}
 	opening, err := r.balanceTotal(ctx)
 	if err != nil {
-		r.failRun(runID, fmt.Errorf("read opening balances: %w", err))
-		return
+		return runErr("could not read the seed cards' opening balances from the issuer", err)
 	}
 	r.update(runID, func(rn *ChaosRun) { rn.OpeningBalanceTotal = opening })
 
 	approvedTotal, reversalRRNs, err := r.fire(ctx, runID, requested)
 	if err != nil {
-		r.failRun(runID, err)
-		return
+		return runErr("a purchase could not be processed", err)
 	}
 
 	r.update(runID, func(rn *ChaosRun) { rn.Status = statusVerifying })
-	r.waitForSafDrain(ctx)
+	if err := r.waitForSafDrain(ctx, "after the run"); err != nil {
+		return err
+	}
 	if err := r.countReversed(ctx, runID, reversalRRNs); err != nil {
-		r.failRun(runID, err)
-		return
+		return runErr("could not read the transaction log", err)
 	}
 	closing, err := r.balanceTotal(ctx)
 	if err != nil {
-		r.failRun(runID, fmt.Errorf("read closing balances: %w", err))
-		return
+		return runErr("could not read the seed cards' closing balances from the issuer", err)
 	}
 	r.verify(runID, opening, closing, approvedTotal)
+	return nil
 }
 
 // fire sends the run's purchases and returns the approved amount and the RRNs left to a reversal.
@@ -214,7 +290,7 @@ func (r *Runner) fire(ctx context.Context, runID string, requested int) (int64, 
 		if txn.Status == "APPROVED" {
 			approvedTotal += txn.Amount.Amount
 		}
-		if txn.Status == "TIMED_OUT" || txn.Status == "REVERSAL_PENDING" {
+		if reversalQueued(txn) {
 			reversalRRNs = append(reversalRRNs, txn.RRN)
 		}
 		r.update(runID, func(rn *ChaosRun) {
@@ -228,75 +304,6 @@ func (r *Runner) fire(ctx context.Context, runID string, requested int) (int64, 
 		})
 	}
 	return approvedTotal, reversalRRNs, nil
-}
-
-func (r *Runner) countReversed(ctx context.Context, runID string, rrns []string) error {
-	for _, rrn := range rrns {
-		row, err := r.tranLog.Get(ctx, rrn)
-		if err != nil {
-			return fmt.Errorf("read tran_log rrn=%s: %w", rrn, err)
-		}
-		if row.Status == statusReversed {
-			r.update(runID, func(rn *ChaosRun) { rn.Reversed++ })
-		}
-	}
-	return nil
-}
-
-// verify compares the issuer's balance movement with what the run's outcomes say it should be.
-// Only approvals move money: a timed-out purchase is either never booked or booked and reversed,
-// so it nets to 0 once SAF drains - and if its reversal never landed, that is exactly the
-// mismatch this check exists to catch.
-func (r *Runner) verify(runID string, opening, closing, approvedTotal int64) {
-	expected := -approvedTotal
-	discrepancy := (closing - opening) - expected
-	r.update(runID, func(rn *ChaosRun) {
-		rn.ClosingBalanceTotal = closing
-		rn.LedgerDiscrepancy = discrepancy
-		rn.Status = statusPassed
-		if discrepancy != 0 {
-			rn.Status = statusFailed
-			rn.FailureKind = ptr(failureLedgerMismatch)
-			rn.FailureDetail = ptr(fmt.Sprintf("issuer balances moved by %d, run outcomes expect %d", closing-opening, expected))
-		}
-	})
-}
-
-// failRun ends the run on an infrastructure error: not a money verdict (CHA-G3). The detail goes
-// out in API responses, so it is PAN-masked like any log line.
-func (r *Runner) failRun(runID string, err error) {
-	r.update(runID, func(rn *ChaosRun) {
-		rn.Status = statusFailed
-		rn.FailureKind = ptr(failureRunError)
-		rn.FailureDetail = ptr(obs.MaskPAN(err.Error()))
-	})
-}
-
-func (r *Runner) balanceTotal(ctx context.Context) (int64, error) {
-	var total int64
-	for _, c := range r.seedCards {
-		ref, ok := fixtureCardRefs[c.CardToken]
-		if !ok {
-			return 0, fmt.Errorf("no cardRef for seed card %s", c.CardToken)
-		}
-		balance, err := r.balances.LedgerBalance(ctx, ref)
-		if err != nil {
-			return 0, fmt.Errorf("card %s: %w", ref, err)
-		}
-		total += balance
-	}
-	return total, nil
-}
-
-func (r *Runner) waitForSafDrain(ctx context.Context) {
-	deadline := time.Now().Add(safDrainTimeout)
-	for time.Now().Before(deadline) {
-		_, depth, err := r.saf.ListPending(ctx)
-		if err == nil && depth == 0 {
-			return
-		}
-		time.Sleep(safDrainPollInterval)
-	}
 }
 
 // update applies mutate, bumps seq and broadcasts the new snapshot. Only the run's own drive

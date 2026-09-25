@@ -1,10 +1,13 @@
 package chaos
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,19 +18,26 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
-const vnd = "704"
+const (
+	vnd         = "704"
+	txnDeclined = "DECLINED"
+)
 
 type fakePurchases struct {
 	mu       sync.Mutex
 	outcomes []purchase.Transaction
 	err      error
-	release  chan struct{} // when set, every call blocks until it is closed
+	release  chan struct{} // when set, every call blocks until it is closed or ctx ends
 	calls    int
 }
 
-func (f *fakePurchases) CreatePurchase(context.Context, purchase.PurchaseRequest, string) (purchase.Transaction, error) {
+func (f *fakePurchases) CreatePurchase(ctx context.Context, _ purchase.PurchaseRequest, _ string) (purchase.Transaction, error) {
 	if f.release != nil {
-		<-f.release
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return purchase.Transaction{}, ctx.Err()
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -39,11 +49,25 @@ func (f *fakePurchases) CreatePurchase(context.Context, purchase.PurchaseRequest
 	return txn, nil
 }
 
-type fakeSafDepth struct{ depth int }
+// fakeSafDepth answers depths call by call first, then err if set, else depth.
+type fakeSafDepth struct {
+	mu     sync.Mutex
+	depth  int
+	depths []int
+	err    error
+}
 
 func (f *fakeSafDepth) ListPending(context.Context) ([]store.SafRow, int, error) {
-	rows := make([]store.SafRow, f.depth)
-	return rows, f.depth, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d := f.depth
+	switch {
+	case len(f.depths) > 0:
+		d, f.depths = f.depths[0], f.depths[1:]
+	case f.err != nil:
+		return nil, 0, f.err
+	}
+	return make([]store.SafRow, d), d, nil
 }
 
 type fakeTranLogGetter struct {
@@ -57,22 +81,27 @@ func (f *fakeTranLogGetter) Get(_ context.Context, rrn string) (store.TranLogRow
 // fakeBalances answers each LedgerBalance call with the next value in turn (opening reads first,
 // then closing reads), or err once the values run out.
 type fakeBalances struct {
-	mu     sync.Mutex
-	values []int64
-	refs   []string
-	err    error
+	mu         sync.Mutex
+	values     []int64
+	currencies []string // per call, "704" when unset
+	refs       []string
+	err        error
 }
 
-func (f *fakeBalances) LedgerBalance(_ context.Context, cardRef string) (int64, error) {
+func (f *fakeBalances) LedgerBalance(_ context.Context, cardRef string) (int64, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.refs = append(f.refs, cardRef)
 	if len(f.values) == 0 {
-		return 0, f.err
+		return 0, "", f.err
 	}
 	v := f.values[0]
 	f.values = f.values[1:]
-	return v, nil
+	cur := vnd
+	if len(f.currencies) > 0 {
+		cur, f.currencies = f.currencies[0], f.currencies[1:]
+	}
+	return v, cur, nil
 }
 
 type fakeHub struct {
@@ -101,13 +130,26 @@ var normalCard = []purchase.CardFixture{{CardToken: "tok_normal", Balance: 50000
 func approvedDeclinedTimedOut() *fakePurchases {
 	return &fakePurchases{outcomes: []purchase.Transaction{
 		{RRN: "r1", Status: "APPROVED", Amount: purchase.Money{Amount: 10000, Currency: vnd}},
-		{RRN: "r2", Status: "DECLINED", Amount: purchase.Money{Amount: 5000, Currency: vnd}},
+		{RRN: "r2", Status: txnDeclined, Amount: purchase.Money{Amount: 5000, Currency: vnd}},
 		{RRN: "r3", Status: "REVERSAL_PENDING", Amount: purchase.Money{Amount: 2000, Currency: vnd}},
 	}}
 }
 
 func reversedR3() *fakeTranLogGetter {
 	return &fakeTranLogGetter{byRRN: map[string]store.TranLogRow{"r3": {RRN: "r3", Status: "REVERSED", Amount: 2000, Currency: vnd}}}
+}
+
+// newServed builds a Runner under a running Serve that stops when the test ends.
+func newServed(t *testing.T, purchases PurchaseCreator, saf SafDepthPort, tranLog TranLogGetter, balances BalanceReader, cards []purchase.CardFixture, hub HubPort, opts ...Option) *Runner {
+	t.Helper()
+	opts = append([]Option{WithSafDrainTimeout(200 * time.Millisecond)}, opts...)
+	runner := NewRunner(purchases, saf, tranLog, balances, cards, hub, opts...)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Serve(ctx) }()
+	require.Eventually(t, runner.serving, time.Second, 5*time.Millisecond)
+	t.Cleanup(func() { cancel(); <-done })
+	return runner
 }
 
 func waitFinished(t *testing.T, runner *Runner, runID string) ChaosRun {
@@ -122,7 +164,7 @@ func waitFinished(t *testing.T, runner *Runner, runID string) ChaosRun {
 
 func TestRunner_verifiesMoneyAgainstIssuerBalances__MCN_404_AC2_CHA_G1(t *testing.T) {
 	balances := &fakeBalances{values: []int64{5000000, 4990000}} // issuer moved by exactly the one approval
-	runner := NewRunner(approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), balances, normalCard, &fakeHub{})
+	runner := newServed(t, approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), balances, normalCard, &fakeHub{})
 
 	run, err := runner.Start(context.Background(), 3)
 	require.NoError(t, err)
@@ -144,7 +186,7 @@ func TestRunner_verifiesMoneyAgainstIssuerBalances__MCN_404_AC2_CHA_G1(t *testin
 func TestRunner_issuerBalanceDriftIsLedgerMismatch__CHA_G1(t *testing.T) {
 	// The reversal never reached the issuer's ledger: 2000 more left the card than the run approved.
 	balances := &fakeBalances{values: []int64{5000000, 4988000}}
-	runner := NewRunner(approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), balances, normalCard, &fakeHub{})
+	runner := newServed(t, approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), balances, normalCard, &fakeHub{})
 
 	run, err := runner.Start(context.Background(), 3)
 	require.NoError(t, err)
@@ -166,7 +208,7 @@ func TestRunner_serviceErrorIsRunErrorNotLedgerMismatch__CHA_G3(t *testing.T) {
 		"closing balance fails": {approvedDeclinedTimedOut(), &fakeBalances{values: []int64{5000000}, err: errors.New("issuer admin down")}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			runner := NewRunner(deps.purchases, &fakeSafDepth{}, reversedR3(), deps.balances, normalCard, &fakeHub{})
+			runner := newServed(t, deps.purchases, &fakeSafDepth{}, reversedR3(), deps.balances, normalCard, &fakeHub{})
 			run, err := runner.Start(context.Background(), 3)
 			require.NoError(t, err)
 
@@ -180,20 +222,145 @@ func TestRunner_serviceErrorIsRunErrorNotLedgerMismatch__CHA_G3(t *testing.T) {
 	}
 }
 
-func TestRunner_runErrorDetailMasksPAN__CHA_G3(t *testing.T) {
-	purchases := &fakePurchases{err: errors.New("card 9704360000004417 lookup failed")}
-	runner := NewRunner(purchases, &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{1}}, normalCard, &fakeHub{})
+func TestRunner_runErrorDetailIsGenericAndTheLogMasksPAN__CHA_G3_N3(t *testing.T) {
+	var logs bytes.Buffer
+	purchases := &fakePurchases{err: errors.New("card 9704360000004417 lookup failed: pq: relation missing")}
+	runner := newServed(t, purchases, &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{1}}, normalCard, &fakeHub{},
+		WithLogger(slog.New(slog.NewJSONHandler(&logs, nil))))
 	run, err := runner.Start(context.Background(), 1)
 	require.NoError(t, err)
 
 	final := waitFinished(t, runner, run.RunID)
-	require.NotContains(t, *final.FailureDetail, "9704360000004417")
-	require.Contains(t, *final.FailureDetail, "970436******4417")
+	require.Equal(t, "a purchase could not be processed", *final.FailureDetail)
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "970436******4417") }, time.Second, 5*time.Millisecond)
+	require.NotContains(t, logs.String(), "9704360000004417")
+	require.Contains(t, logs.String(), run.RunID)
+}
+
+func TestRunner_safNotDrainedAfterTheRunIsRunErrorNotMismatch__CHA_S1(t *testing.T) {
+	for name, saf := range map[string]*fakeSafDepth{
+		"still pending": {depths: []int{0}, depth: 2},
+		"read error":    {depths: []int{0}, err: errors.New("db down")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			balances := &fakeBalances{values: []int64{5000000, 4988000}}
+			runner := newServed(t, approvedDeclinedTimedOut(), saf, reversedR3(), balances, normalCard, &fakeHub{})
+			run, err := runner.Start(context.Background(), 3)
+			require.NoError(t, err)
+
+			final := waitFinished(t, runner, run.RunID)
+			require.Equal(t, "RUN_ERROR", *final.FailureKind)
+			require.Contains(t, *final.FailureDetail, "SAF not drained")
+			require.Equal(t, int64(0), final.LedgerDiscrepancy)
+		})
+	}
+}
+
+func TestRunner_waitsForAnEmptySAFBeforeTheOpeningRead__CHA_S2(t *testing.T) {
+	balances := &fakeBalances{values: []int64{5000000, 4990000}}
+	saf := &fakeSafDepth{depths: []int{3, 1, 0}}
+	runner := newServed(t, approvedDeclinedTimedOut(), saf, reversedR3(), balances, normalCard, &fakeHub{})
+	run, err := runner.Start(context.Background(), 3)
+	require.NoError(t, err)
+	require.Equal(t, statusPassed, waitFinished(t, runner, run.RunID).Status)
+
+	stuck := &fakeBalances{values: []int64{5000000}}
+	runner = newServed(t, approvedDeclinedTimedOut(), &fakeSafDepth{depth: 4}, reversedR3(), stuck, normalCard, &fakeHub{})
+	run, err = runner.Start(context.Background(), 3)
+	require.NoError(t, err)
+	final := waitFinished(t, runner, run.RunID)
+	require.Equal(t, "RUN_ERROR", *final.FailureKind)
+	require.Equal(t, "SAF not drained before the run (4 pending)", *final.FailureDetail)
+	require.Empty(t, stuck.refs, "no opening read while earlier reversals are still owed")
+}
+
+func TestRunner_ledgerMismatchDetailStatesTheNoOtherTrafficAssumption__CHA_S2(t *testing.T) {
+	runner := newServed(t, approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{5000000, 4988000}}, normalCard, &fakeHub{})
+	run, err := runner.Start(context.Background(), 3)
+	require.NoError(t, err)
+	require.Contains(t, *waitFinished(t, runner, run.RunID).FailureDetail, "no other traffic on the seed cards")
+}
+
+func TestRunner_countsMACFailureReversals__CHA_N1(t *testing.T) {
+	purchases := &fakePurchases{outcomes: []purchase.Transaction{
+		{RRN: "r1", Status: txnDeclined, ResponseCode: "96", Amount: purchase.Money{Amount: 10000, Currency: vnd}},
+	}}
+	tranLog := &fakeTranLogGetter{byRRN: map[string]store.TranLogRow{"r1": {RRN: "r1", Status: "REVERSED", Amount: 10000}}}
+	runner := newServed(t, purchases, &fakeSafDepth{}, tranLog, &fakeBalances{values: []int64{100, 100}}, normalCard, &fakeHub{})
+	run, err := runner.Start(context.Background(), 1)
+	require.NoError(t, err)
+
+	final := waitFinished(t, runner, run.RunID)
+	require.Equal(t, 1, final.Reversed)
+	require.Equal(t, statusPassed, final.Status)
+}
+
+// panickyPurchases panics on the first call, standing in for a bug in a dependency.
+type panickyPurchases struct{}
+
+func (panickyPurchases) CreatePurchase(context.Context, purchase.PurchaseRequest, string) (purchase.Transaction, error) {
+	panic("boom")
+}
+
+func TestRunner_aPanicEndsTheRunAndFreesTheSlot__CHA_N2(t *testing.T) {
+	runner := newServed(t, panickyPurchases{}, &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{1, 1}}, normalCard, &fakeHub{})
+	run, err := runner.Start(context.Background(), 1)
+	require.NoError(t, err)
+
+	final := waitFinished(t, runner, run.RunID)
+	require.Equal(t, "RUN_ERROR", *final.FailureKind)
+	_, err = runner.Start(context.Background(), 1)
+	require.NotErrorIs(t, err, ErrRunInProgress)
+}
+
+func TestRunner_wallClockCapEndsTheRun__CHA_N2(t *testing.T) {
+	purchases := &fakePurchases{outcomes: []purchase.Transaction{{RRN: "r1", Status: txnDeclined}}, release: make(chan struct{})}
+	defer close(purchases.release)
+	runner := newServed(t, purchases, &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{1, 1}}, normalCard, &fakeHub{},
+		WithMaxRunDuration(50*time.Millisecond))
+	run, err := runner.Start(context.Background(), 1)
+	require.NoError(t, err)
+
+	final := waitFinished(t, runner, run.RunID)
+	require.Equal(t, "RUN_ERROR", *final.FailureKind)
+	require.Contains(t, *final.FailureDetail, "time limit")
+}
+
+func TestRunner_shutdownEndsARunningRun__CHA_N2(t *testing.T) {
+	purchases := &fakePurchases{outcomes: []purchase.Transaction{{RRN: "r1", Status: txnDeclined}}, release: make(chan struct{})}
+	defer close(purchases.release)
+	runner := NewRunner(purchases, &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{1, 1}}, normalCard, &fakeHub{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Serve(ctx) }()
+	require.Eventually(t, runner.serving, time.Second, 5*time.Millisecond)
+	run, err := runner.Start(context.Background(), 1)
+	require.NoError(t, err)
+
+	cancel()
+	require.NoError(t, <-done, "Serve returns once the run goroutine has stopped")
+	final, _ := runner.Get(run.RunID)
+	require.Equal(t, statusFailed, final.Status)
+	require.Contains(t, *final.FailureDetail, "shut down")
+	_, err = runner.Start(context.Background(), 1)
+	require.ErrorIs(t, err, ErrNotServing)
+}
+
+func TestRunner_mixedCurrenciesAreRunError__CHA_N4(t *testing.T) {
+	balances := &fakeBalances{values: []int64{1, 2}, currencies: []string{"704", "840"}}
+	cards := []purchase.CardFixture{{CardToken: "tok_normal"}, {CardToken: "tok_low"}}
+	runner := newServed(t, approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), balances, cards, &fakeHub{})
+	run, err := runner.Start(context.Background(), 3)
+	require.NoError(t, err)
+
+	final := waitFinished(t, runner, run.RunID)
+	require.Equal(t, "RUN_ERROR", *final.FailureKind)
+	require.Contains(t, *final.FailureDetail, "currencies")
 }
 
 func TestRunner_broadcastsEveryStateAsProgressWithIncreasingSeq__CHA_G2_G8_G13(t *testing.T) {
 	hub := &fakeHub{}
-	runner := NewRunner(approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{5000000, 4990000}}, normalCard, hub)
+	runner := newServed(t, approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{5000000, 4990000}}, normalCard, hub)
 	run, err := runner.Start(context.Background(), 3)
 	require.NoError(t, err)
 	final := waitFinished(t, runner, run.RunID)
@@ -213,9 +380,9 @@ func TestRunner_broadcastsEveryStateAsProgressWithIncreasingSeq__CHA_G2_G8_G13(t
 }
 
 func TestRunner_rejectsASecondRunWhileOneIsInProgress__CHA_G5(t *testing.T) {
-	declined := purchase.Transaction{RRN: "r1", Status: "DECLINED"}
+	declined := purchase.Transaction{RRN: "r1", Status: txnDeclined}
 	purchases := &fakePurchases{outcomes: []purchase.Transaction{declined, declined}, release: make(chan struct{})}
-	runner := NewRunner(purchases, &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{1, 1, 1, 1}}, normalCard, &fakeHub{})
+	runner := newServed(t, purchases, &fakeSafDepth{}, reversedR3(), &fakeBalances{values: []int64{1, 1, 1, 1}}, normalCard, &fakeHub{})
 
 	first, err := runner.Start(context.Background(), 1)
 	require.NoError(t, err)
@@ -230,7 +397,7 @@ func TestRunner_rejectsASecondRunWhileOneIsInProgress__CHA_G5(t *testing.T) {
 }
 
 func TestRunner_listsRunsNewestFirst__CHA_G6(t *testing.T) {
-	runner := NewRunner(&fakePurchases{err: errors.New("x")}, &fakeSafDepth{}, reversedR3(), &fakeBalances{err: errors.New("x")}, normalCard, &fakeHub{})
+	runner := newServed(t, &fakePurchases{err: errors.New("x")}, &fakeSafDepth{}, reversedR3(), &fakeBalances{err: errors.New("x")}, normalCard, &fakeHub{})
 	var ids []string
 	for range 3 {
 		run, err := runner.Start(context.Background(), 1)
@@ -247,7 +414,7 @@ func TestRunner_listsRunsNewestFirst__CHA_G6(t *testing.T) {
 }
 
 func TestRunner_getUnknownRunReturnsNotOK__MCN_404_AC2(t *testing.T) {
-	runner := NewRunner(&fakePurchases{}, &fakeSafDepth{}, &fakeTranLogGetter{byRRN: map[string]store.TranLogRow{}}, &fakeBalances{}, nil, &fakeHub{})
+	runner := newServed(t, &fakePurchases{}, &fakeSafDepth{}, &fakeTranLogGetter{byRRN: map[string]store.TranLogRow{}}, &fakeBalances{}, nil, &fakeHub{})
 
 	_, ok := runner.Get("does-not-exist")
 	require.False(t, ok)
