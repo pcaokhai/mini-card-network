@@ -254,6 +254,21 @@
   line-height: 1.5;
 }
 
+.net-more {
+  align-self: flex-start;
+  height: 36px;
+  margin-top: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--net-line);
+  border-radius: 9px;
+  background: var(--color-surface);
+  font-size: 13px;
+  font-weight: 600;
+}
+.net-more:hover {
+  background: var(--color-canvas);
+}
+
 /* ---- Breaker and SAF ---------------------------------------------------------------------- */
 .net-pill {
   display: inline-flex;

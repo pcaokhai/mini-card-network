@@ -92,3 +92,17 @@ export function todaysEvents(events: NetworkEvent[], now: number): NetworkEvent[
     .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt))
     .slice(0, MAX_EVENTS);
 }
+
+// Every easyText gateway-go emits (internal/isonet/supervisor.go, internal/purchase/service.go), keyed
+// to network.events.known copy. The gateway writes English; unknown text renders as sent.
+const GATEWAY_EVENT_KEYS: Record<string, string> = {
+  "Link to issuer is up": "linkUp",
+  "Link to issuer is down": "linkDown",
+  "Signed on again: the issuer had the link signed off": "signedOnAgain",
+  "Issuer still holds the link signed off": "stillSignedOff",
+  "A response arrived too late for a transaction": "lateResponse",
+};
+
+export function gatewayEventKey(easyText: string): string | undefined {
+  return GATEWAY_EVENT_KEYS[easyText];
+}

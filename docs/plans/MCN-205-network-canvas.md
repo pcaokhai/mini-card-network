@@ -18,10 +18,11 @@ Stories: MCN-205 (topology, links table, event timeline, header pill), MCN-804 (
 ## Tests
 
 - `network-model.test.ts`: tone per status; echo age buckets and "no reply" after a failed echo; topology marks only the switch→issuer segment down when issuer links are DOWN; direct gateway→issuer link (real stack) drives both acquirer segments; switch node is `unavailable` without a switch status; events sorted newest first, today only, capped at 30.
+- `network-model.test.ts`: `gatewayEventKey` maps all five gateway texts, unknown → undefined.
 - `NetworkScreen.test.tsx` (MSW with `networkHandlers`):
   - `MCN-205-AC1` topology shows four nodes and flowing segments in Easy copy.
   - `MCN-205-AC2` links table rows, latency, echo age, "Kiểm tra ngay" echoes and shows "Vừa xong".
-  - `MCN-205-AC3` event log newest first, and a WS `network.event` refetches it.
+  - `MCN-205-AC3` event log newest first, a WS `network.event` refetches it, gateway texts in Vietnamese with raw fallback, five rows + "Xem thêm".
   - `MCN-804-AC1` breaker pills, STIP limit/count and SAF empty state; Expert copy (`SIGNED_ON`, `p99`, `SAF queue`, `depth 0 · dead 0 · oldest —`).
   - `MCN-804-AC2` "Mô phỏng ngân hàng phát hành sập" sets ISSUER_DOWN; the screen shows DOWN rows, OPEN circuit, 37 STIP, three SAF items, the red dashed segment; "Khôi phục" restores and logs the recovery.
   - Real-mode gap: `/v1/network/switch` and `/v1/terminals` 404 → designed unavailable states, no error.
@@ -35,7 +36,7 @@ Stories: MCN-205 (topology, links table, event timeline, header pill), MCN-804 (
 4. **POS node** counts `/v1/terminals` as "máy đã đăng ký" / "terminals registered": the API has no online flag, so the canvas's "đang trực tuyến" / "TLS" would be invented. Without the endpoint (real gateway 404) the node shows an unavailable state.
 5. **Switch and STIP on the real stack**: `/v1/network/switch` is 404 (MCN-802 not built). The switch node, breaker pills and STIP tiles show a neutral "chưa có dữ liệu" state; the acquirer→issuer link then colours both segments, since the real gateway talks to the issuer directly.
 6. **Motion on transform/opacity only** (docs/02 §7.9): the flowing link translates a striped layer instead of animating `background-position`; tone changes swap colours without the canvas's background-color transitions. Node shake, dot beat and row fade-up are kept.
-7. **Event texts come from the gateway**, which writes them in English today; the screen renders them as given (no client-side translation table).
+7. **Event texts come from the gateway in English.** The five texts gateway-go emits (`isonet/supervisor.go`, `purchase/service.go`) map to vi/en copy through `gatewayEventKey`; unknown text renders as sent, and Expert shows the gateway's `technicalText` unchanged. The log shows the canvas's five newest rows with a "Xem thêm N sự kiện" button for the rest (max 30).
 8. **Header pill** (shared `Header.tsx`, not this lane's file) still reads "Mất kết nối"/"Đã kết nối" from links; the canvas's amber "Đang duyệt thay…" pill during STIP needs a Header change — left for a follow-up.
 9. **Layout below 1400px**: the canvas's fixed 400px rail leaves the links table no room at 1280px, so the two columns stack there (same breakpoint as Overview).
 10. **Breaker pill ink**: the canvas's inactive pill (#6B6D75 on #F0EEE8) is 4.4:1 and fails the axe story test; it uses the muted ink (#5E6068) instead.

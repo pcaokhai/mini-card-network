@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTopology, echoAge, endpointName, linkTone, todaysEvents } from "./network-model";
+import { buildTopology, echoAge, endpointName, gatewayEventKey, linkTone, todaysEvents } from "./network-model";
 import type { Link, NetworkEvent, SwitchStatus } from "@/shared/api/network-client";
 
 const NOW = Date.parse("2026-09-21T14:41:10");
@@ -84,5 +84,16 @@ describe("todaysEvents", () => {
     expect(rows).toHaveLength(30);
     expect(rows[0]?.id).toBe("t0");
     expect(rows.some((r) => r.id === "old")).toBe(false);
+  });
+});
+
+describe("gatewayEventKey", () => {
+  it("MCN-205-AC3: maps every text gateway-go emits to a copy key and leaves unknown text alone", () => {
+    expect(gatewayEventKey("Link to issuer is up")).toBe("linkUp");
+    expect(gatewayEventKey("Link to issuer is down")).toBe("linkDown");
+    expect(gatewayEventKey("Signed on again: the issuer had the link signed off")).toBe("signedOnAgain");
+    expect(gatewayEventKey("Issuer still holds the link signed off")).toBe("stillSignedOff");
+    expect(gatewayEventKey("A response arrived too late for a transaction")).toBe("lateResponse");
+    expect(gatewayEventKey("Something new")).toBeUndefined();
   });
 });

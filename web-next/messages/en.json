@@ -364,7 +364,15 @@
     "events": {
       "heading": "Today's event log",
       "ariaLabel": "Event log",
-      "empty": "No network events today."
+      "empty": "No network events today.",
+      "showMore": "Show {count} more events",
+      "known": {
+        "linkUp": "Link to the issuing bank is up",
+        "linkDown": "Link to the issuing bank is down, reconnecting",
+        "signedOnAgain": "Signed on again: the issuing bank had signed the link off",
+        "stillSignedOff": "The issuing bank still holds the link signed off",
+        "lateResponse": "A response arrived too late for a transaction"
+      }
     },
     "breaker": {
       "ariaLabel": "Circuit breaker and stand-in",

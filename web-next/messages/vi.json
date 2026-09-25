@@ -364,7 +364,15 @@
     "events": {
       "heading": "Nhật ký sự kiện hôm nay",
       "ariaLabel": "Nhật ký sự kiện",
-      "empty": "Hôm nay chưa có sự kiện mạng nào."
+      "empty": "Hôm nay chưa có sự kiện mạng nào.",
+      "showMore": "Xem thêm {count} sự kiện",
+      "known": {
+        "linkUp": "Đường kết nối tới ngân hàng phát hành đã hoạt động",
+        "linkDown": "Mất kết nối tới ngân hàng phát hành, đang thử kết nối lại",
+        "signedOnAgain": "Đã đăng nhập lại: ngân hàng phát hành đã đăng xuất đường kết nối",
+        "stillSignedOff": "Ngân hàng phát hành vẫn đang giữ đường kết nối ở trạng thái đăng xuất",
+        "lateResponse": "Có câu trả lời đến quá muộn cho một giao dịch"
+      }
     },
     "breaker": {
       "ariaLabel": "Ngắt mạch và duyệt thay",

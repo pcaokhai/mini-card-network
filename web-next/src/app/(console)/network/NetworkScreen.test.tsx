@@ -85,6 +85,44 @@ describe("NetworkScreen", () => {
     expect(await screen.findByText("Đường tới issuer chậm")).toBeInTheDocument();
   });
 
+  it("MCN-205-AC3: gateway event texts show in Vietnamese; unknown text and Expert keep the raw gateway text", async () => {
+    const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    server.use(
+      http.get("*/v1/network/events", () =>
+        HttpResponse.json({
+          items: [
+            { id: "2", occurredAt: at(1), severity: "INFO", easyText: "Link to issuer is up", technicalText: "signed on" },
+            { id: "1", occurredAt: at(2), severity: "WARN", easyText: "Brand new gateway text", technicalText: "new" },
+          ],
+          nextCursor: null,
+        }),
+      ),
+    );
+    renderScreen();
+    expect(await screen.findByText("Đường kết nối tới ngân hàng phát hành đã hoạt động")).toBeInTheDocument();
+    expect(screen.getByText("Brand new gateway text")).toBeInTheDocument();
+    useDisplayMode.setState({ mode: "expert" });
+    expect(await screen.findByText("signed on")).toBeInTheDocument();
+  });
+
+  it("MCN-205-AC3: the log shows the newest five rows and Xem thêm reveals the rest", async () => {
+    const items = Array.from({ length: 8 }, (_, i) => ({
+      id: String(i),
+      occurredAt: new Date(Date.now() - i * 60_000).toISOString(),
+      severity: "INFO",
+      easyText: `Sự kiện ${i}`,
+      technicalText: `event ${i}`,
+    }));
+    server.use(http.get("*/v1/network/events", () => HttpResponse.json({ items, nextCursor: null })));
+    renderScreen();
+    const log = section("Nhật ký sự kiện");
+    expect(await within(log).findAllByRole("listitem")).toHaveLength(5);
+    expect(within(log).getByText("Sự kiện 0")).toBeInTheDocument();
+    await userEvent.click(within(log).getByRole("button", { name: "Xem thêm 3 sự kiện" }));
+    expect(within(log).getAllByRole("listitem")).toHaveLength(8);
+    expect(within(log).queryByRole("button", { name: /Xem thêm/ })).not.toBeInTheDocument();
+  });
+
   it("MCN-804-AC1: breaker pills, STIP tiles and an empty SAF queue in Easy copy", async () => {
     renderScreen();
     const breaker = section("Ngắt mạch và duyệt thay");
