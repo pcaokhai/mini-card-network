@@ -21,10 +21,7 @@ func (s *Service) CreateCompletion(ctx context.Context, rrn string, req Completi
 	if err != nil {
 		return Transaction{}, fmt.Errorf("look up pre-authorization %s: %w", rrn, err)
 	}
-	stan, ok := s.mux.NextSTAN()
-	if !ok {
-		return Transaction{}, fmt.Errorf("advtxn: no STAN available")
-	}
+	stan, linkUp := s.nextSTAN()
 	now := time.Now().UTC()
 	completionRRN := purchase.BuildRRN(now, stan)
 
@@ -40,8 +37,9 @@ func (s *Service) CreateCompletion(ctx context.Context, rrn string, req Completi
 
 	return s.send(ctx, sendParams{
 		mti: "0220", txnType: tranTypeCompletion, route: routeCompletion, fields: fields,
-		rrn: completionRRN, stan: stan, originalRRN: rrn,
+		rrn: completionRRN, stan: stan, linkUp: linkUp, sentAt: now, originalRRN: rrn,
 		terminalID: preAuth.TerminalID, maskedPAN: preAuth.MaskedPAN,
+		cardToken: preAuth.CardToken, posEntryMode: preAuth.POSEntryMode,
 		requestedAmt: req.Amount, idempotencyKey: idempotencyKey, requestHash: hashRequest(req),
 	})
 }

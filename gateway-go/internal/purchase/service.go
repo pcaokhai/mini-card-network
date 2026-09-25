@@ -14,6 +14,7 @@ import (
 
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/iso8583"
+	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -41,10 +42,6 @@ const (
 
 	rcMacFailure = "96" // docs/03 §11: MAC verification failed
 	responseMTI  = "0210"
-
-	// dualKeyWindow is MCN-504-AC2's grace period: a ZAK retired by a rotation is still accepted
-	// for this long after retirement (docs/03 §9 "Reversal grace for new key (DE 70 = 161)").
-	dualKeyWindow = 5 * time.Minute
 )
 
 // MerchantResolver maps a terminal to the merchant it belongs to (contracts/fixtures/cards.json
@@ -111,12 +108,6 @@ type Transaction struct {
 	TraceID      string    `json:"traceId"`
 }
 
-// RetiredKeyFinder looks up a recently-retired key, backing MAC dual-key acceptance during a
-// rotation's grace window (MCN-504-AC2). *store.KeyStoreRepository satisfies it.
-type RetiredKeyFinder interface {
-	FindRecentlyRetired(ctx context.Context, keyType, ownerRef string, within time.Duration) (*store.KeyRow, error)
-}
-
 // MuxSender sends a request on the acquirer's live issuer connection. *isonet.Supervisor
 // satisfies it (it shares MCN-202/204's one connection rather than opening a second one).
 type MuxSender interface {
@@ -177,8 +168,7 @@ type Service struct {
 	reversal      ReversalQueuer
 	hsm           hsm.Module
 	zak           []byte
-	keyStore      RetiredKeyFinder
-	ownerRef      string
+	mac           MACVerifier
 	duplicateHook func() bool
 }
 
@@ -201,7 +191,7 @@ func NewService(mux interface {
 	TranLogPort
 	TranLogGetter
 }, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder) *Service {
-	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, keyStore: keyStore}
+	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, mac: NewMACVerifier(hsmModule, zak, keyStore)}
 }
 
 // CreatePurchase builds a 0200, sends it through the live issuer connection, persists every
@@ -286,7 +276,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 
 	row := store.TranLogRow{
 		RRN: rrn, Type: tranTypePurchase, Status: statusCreated, Amount: req.Amount.Amount, Currency: req.Amount.Currency,
-		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: merchant.MID, NetworkSTAN: stan,
+		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: merchant.MID, NetworkSTAN: stan, MTI: "0200",
 		ProcessingCode: fields[3], POSEntryMode: fields[22], SentAt: &now, CardToken: req.CardToken,
 	}
 	id, err := s.tranLog.Insert(ctx, row)
@@ -310,11 +300,11 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	defer cancel()
 	resp, err := s.mux.Send(sendCtx, "0200", fields)
 
+	// The request may already be at the issuer: whatever happened to the caller's request, the
+	// outcome must be recorded, so nothing after the send may be cancelled with it.
+	ctx = context.WithoutCancel(ctx)
 	txn := s.baseTransaction(req, merchant, rrn, stan, maskedPAN)
-	macFailed, err := s.mapSendOutcome(ctx, &txn, resp, err)
-	if err != nil {
-		return Transaction{}, err
-	}
+	macFailed := s.mapSendOutcome(ctx, &txn, resp, err)
 
 	finalized, err := s.finalizeSendResult(ctx, id, row, txn, now)
 	if err != nil {
@@ -329,16 +319,13 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 }
 
 // mapSendOutcome maps mux.Send's (resp, sendErr) onto txn's Status/ResponseCode/AuthCode -
-// a timeout, a hard send error, or a normal response (with its incoming MAC verified, and on
-// mismatch overridden to RC 96 / DECLINED, mcn_mac_failure_total incremented) - and reports
-// whether the incoming MAC failed.
-func (s *Service) mapSendOutcome(ctx context.Context, txn *Transaction, resp map[int]string, sendErr error) (macFailed bool, err error) {
-	switch {
-	case errors.Is(sendErr, context.DeadlineExceeded):
-		txn.Status = statusTimedOut
-		return false, nil
-	case sendErr != nil:
-		return false, fmt.Errorf("send purchase: %w", sendErr)
+// a failed send (see SendFailureStatus), or a normal response (with its incoming MAC verified,
+// and on mismatch overridden to RC 96 / DECLINED, mcn_mac_failure_total incremented) - and
+// reports whether the incoming MAC failed.
+func (s *Service) mapSendOutcome(ctx context.Context, txn *Transaction, resp map[int]string, sendErr error) (macFailed bool) {
+	if sendErr != nil {
+		txn.Status, txn.ResponseCode = SendFailureStatus(sendErr)
+		return false
 	}
 
 	txn.ResponseCode = resp[39]
@@ -348,13 +335,24 @@ func (s *Service) mapSendOutcome(ctx context.Context, txn *Transaction, resp map
 	} else {
 		txn.Status = statusDeclined
 	}
-	if s.verifyIncomingMAC(ctx, resp) {
-		return false, nil
+	if s.mac.Verify(ctx, responseMTI, resp) {
+		return false
 	}
 	txn.Status = statusDeclined
 	txn.ResponseCode = rcMacFailure
 	obs.MacFailureTotal.Inc()
-	return true, nil
+	return true
+}
+
+// SendFailureStatus is what a transaction becomes when mux.Send fails. Only a link that was down
+// before the write guarantees nothing left the gateway: that is a DECLINED RC 91. Every other
+// failure (timeout, broken connection, cancelled request) is an unknown outcome, so the row goes
+// TIMED_OUT and the caller queues a reversal (root CLAUDE.md §6.4); it never resends.
+func SendFailureStatus(sendErr error) (status, responseCode string) {
+	if errors.Is(sendErr, isonet.ErrNotSignedOn) {
+		return statusDeclined, rcLinkDown
+	}
+	return statusTimedOut, ""
 }
 
 // queueMacFailureReversal queues the DE 39 "06" reversal for a purchase whose incoming MAC
@@ -386,75 +384,6 @@ func (s *Service) attachMAC(fields map[int]string) error {
 	return nil
 }
 
-// verifyIncomingMAC recomputes the Retail MAC over resp (excluding its own DE 64/128) and
-// compares it to the MAC resp carried. On a mismatch against the current ZAK, it retries once
-// against the most recently retired ZAK (if any, within dualKeyWindow) - MCN-504-AC2's dual-key
-// acceptance so an in-flight transaction MAC'd under the old ZAK still verifies during a
-// rotation's grace window (Ruling 2). A response with no MAC field at all fails verification.
-func (s *Service) verifyIncomingMAC(ctx context.Context, resp map[int]string) bool {
-	macHex, macField, ok := macFieldOf(resp)
-	if !ok {
-		return false
-	}
-	respWithoutMAC := make(map[int]string, len(resp))
-	for n, v := range resp {
-		if n == macField {
-			continue
-		}
-		respWithoutMAC[n] = v
-	}
-	packed, err := iso8583.Pack(responseMTI, respWithoutMAC)
-	if err != nil {
-		return false
-	}
-	if s.macMatches(packed, macHex, s.zak) {
-		return true
-	}
-	return s.macMatchesRecentlyRetiredZAK(ctx, packed, macHex)
-}
-
-// macMatchesRecentlyRetiredZAK retries verification against the most recently retired ZAK, if
-// one retired within dualKeyWindow (MCN-504-AC2). s.keyStore is nil in tests that don't wire
-// dual-key acceptance; a nil keyStore or no recently-retired row simply skips the retry.
-func (s *Service) macMatchesRecentlyRetiredZAK(ctx context.Context, packed, macHex string) bool {
-	if s.keyStore == nil {
-		return false
-	}
-	retired, err := s.keyStore.FindRecentlyRetired(ctx, "ZAK", s.ownerRef, dualKeyWindow)
-	if err != nil || retired == nil {
-		return false
-	}
-	keyUnderLMK, err := hex.DecodeString(retired.KeyUnderLMKHex)
-	if err != nil {
-		return false
-	}
-	oldZAK, err := s.hsm.Unwrap(keyUnderLMK)
-	if err != nil {
-		return false
-	}
-	return s.macMatches(packed, macHex, oldZAK)
-}
-
-func (s *Service) macMatches(packed, macHex string, zak []byte) bool {
-	expected, err := s.hsm.ComputeMAC([]byte(packed), zak)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(macHex, hex.EncodeToString(expected))
-}
-
-// macFieldOf returns whichever of DE 64/DE 128 is present in fields (MCN-502's Ruling 2: DE 128
-// only when a secondary bitmap is present).
-func macFieldOf(fields map[int]string) (macHex string, fieldNum int, ok bool) {
-	if v, present := fields[64]; present {
-		return v, 64, true
-	}
-	if v, present := fields[128]; present {
-		return v, 128, true
-	}
-	return "", 0, false
-}
-
 // sendDuplicateIfActive fires a blocking duplicate with the same STAN/DE37 before the "real"
 // send in sendPurchase, when the MCN-404 chaos DUPLICATE_REQUEST scenario is active: the
 // issuer's Deduplicate participant should recognize the repeat and never double-post the ledger
@@ -471,9 +400,8 @@ func (s *Service) sendDuplicateIfActive(ctx context.Context, fields map[int]stri
 
 // finalizeSendResult persists the post-send status and, on a timeout, queues the reversal -
 // unknown outcome -> reversal (root CLAUDE.md §6.4): never resend the 0200, queue a 0420 in SAF
-// instead. The reversal->REVERSAL_PENDING transition happens inside Queue, so txn.Status here
-// stays TIMED_OUT for this response (the caller sees the queue-time state, not the tran_log row
-// after Queue).
+// instead. Queue moves the row to REVERSAL_PENDING, and the response reports that real status
+// (docs/04 §4).
 func (s *Service) finalizeSendResult(ctx context.Context, id int64, row store.TranLogRow, txn Transaction, now time.Time) (Transaction, error) {
 	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
 		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
@@ -490,6 +418,7 @@ func (s *Service) finalizeSendResult(ctx context.Context, id int64, row store.Tr
 	if err := s.reversal.Queue(ctx, reversalRow, reasonTimeout); err != nil {
 		return Transaction{}, fmt.Errorf("queue reversal for timeout: %w", err)
 	}
+	txn.Status = statusReversalPending
 	return txn, nil
 }
 

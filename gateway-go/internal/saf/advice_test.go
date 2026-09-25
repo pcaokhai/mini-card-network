@@ -57,3 +57,17 @@ func TestReversalAdvice_refusesATransactionThatWasNeverSent__MCN_401(t *testing.
 	_, err = reversalAdvice(noStan, "17")
 	require.Error(t, err)
 }
+
+func TestReversalAdvice_de90NamesTheOriginalMTI__POS_G4(t *testing.T) {
+	preAuth := goldenOriginal()
+	preAuth.MTI = "0100"
+
+	adv, err := reversalAdvice(preAuth, "68")
+
+	require.NoError(t, err)
+	require.Equal(t, "0100", adv.Fields[90][:4])
+
+	legacy, err := reversalAdvice(goldenOriginal(), "68")
+	require.NoError(t, err)
+	require.Equal(t, "0200", legacy.Fields[90][:4], "rows logged before tran_log.mti was written are purchases")
+}

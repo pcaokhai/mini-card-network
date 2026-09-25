@@ -10,7 +10,7 @@ import (
 const (
 	statusReversalPending = "REVERSAL_PENDING"
 
-	// mtiPurchase is the only original MTI that reverses in v1 (docs/03 §7.3).
+	// mtiPurchase is DE 90's original MTI for a row that doesn't record its own (docs/03 §7.3).
 	mtiPurchase = "0200"
 
 	// forwardingInstitutionID is right-justified, zero-filled per docs/03 §7.3's DE 90 layout;

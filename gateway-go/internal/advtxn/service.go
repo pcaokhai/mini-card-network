@@ -22,6 +22,7 @@ import (
 
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/iso8583"
+	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -31,7 +32,22 @@ const (
 	requestTimeout = 30 * time.Second
 
 	rcPartialApproval = "10" // docs/03 C1: partial approval, DE 4 carries the approved amount
+	rcLinkDown        = "91" // docs/03 §8: issuer or switch inoperative
+	rcMacFailure      = "96" // docs/03 §11: MAC verification failed
 
+	reasonTimeout    = "68" // docs/03 §7.3 DE 39 of the 0420: no response / timeout
+	reasonMacFailure = "06" // docs/03 §7.3 DE 39 of the 0420: error (a bad incoming MAC)
+
+	statusCreated         = "CREATED"
+	statusSent            = "SENT"
+	statusApproved        = "APPROVED"
+	statusDeclined        = "DECLINED"
+	statusTimedOut        = "TIMED_OUT"
+	statusReversalPending = "REVERSAL_PENDING"
+
+	// noSTAN names a request that never got a network STAN because the link was down, as
+	// purchase.Service does (docs/03 §5 RRN format).
+	noSTAN = "000000"
 )
 
 // Money mirrors contracts/openapi.yaml's Money schema; reused directly from purchase per DRY
@@ -94,13 +110,16 @@ type Transaction struct {
 type MuxSender interface {
 	NextSTAN() (stan string, ok bool)
 	Send(ctx context.Context, mti string, fields map[int]string) (map[int]string, error)
+	IsSignedOn() bool
 }
 
-// TranLogPort persists tran_log rows; *store.TranLogRepository satisfies it.
+// TranLogPort persists tran_log rows and their state history; *store.TranLogRepository
+// satisfies it.
 type TranLogPort interface {
 	Insert(ctx context.Context, row store.TranLogRow) (int64, error)
 	Get(ctx context.Context, rrn string) (store.TranLogRow, error)
 	UpdateStatus(ctx context.Context, id int64, status, responseCode, authCode string) error
+	RecordStateTransition(ctx context.Context, id int64, fromStatus, toStatus string) error
 }
 
 // IdempotencyPort persists idempotency_record; *store.IdempotencyRepository satisfies it.
@@ -123,15 +142,20 @@ type Service struct {
 	tranLog     TranLogPort
 	idempotency IdempotencyPort
 	hub         HubPort
+	reversal    purchase.ReversalQueuer
 	hsm         hsm.Module
 	zak         []byte
+	mac         purchase.MACVerifier
 }
 
-// NewService builds a Service, reusing the same dependency shapes purchase.NewService takes
-// (mux, cardTokens, tranLog, idempotency, hub, hsmModule, zak) - Ruling 2: a sibling service,
-// not a re-derivation of purchase.Service's already-proven wiring.
-func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency IdempotencyPort, hub HubPort, hsmModule hsm.Module, zak []byte) *Service {
-	return &Service{mux: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, idempotency: idempotency, hub: hub, hsm: hsmModule, zak: zak}
+// NewService builds a Service, reusing the same dependency shapes purchase.NewService takes -
+// Ruling 2: a sibling service, not a re-derivation of purchase.Service's already-proven wiring.
+// reversal and keyStore are the same SAF queue and dual-key MAC lookup purchases use.
+func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency IdempotencyPort, hub HubPort, reversal purchase.ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore purchase.RetiredKeyFinder) *Service {
+	return &Service{
+		mux: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, idempotency: idempotency, hub: hub,
+		reversal: reversal, hsm: hsmModule, zak: zak, mac: purchase.NewMACVerifier(hsmModule, zak, keyStore),
+	}
 }
 
 // sendParams carries what each flow-specific Create* method fills in before calling send.
@@ -141,12 +165,26 @@ type sendParams struct {
 	route          string
 	fields         map[int]string
 	rrn, stan      string
+	linkUp         bool
+	sentAt         time.Time // the moment DE 7 was built from
 	maskedPAN      string
+	cardToken      string
+	posEntryMode   string
 	terminalID     string
 	requestedAmt   Money
 	originalRRN    string
 	idempotencyKey string
 	requestHash    string
+}
+
+// nextSTAN allocates the network STAN. linkUp is false when the issuer link can't carry the
+// request; the flow then records a DECLINED RC 91 under noSTAN without sending (MCN-303-AC4).
+func (s *Service) nextSTAN() (stan string, linkUp bool) {
+	stan, ok := s.mux.NextSTAN()
+	if !ok || !s.mux.IsSignedOn() {
+		return noSTAN, false
+	}
+	return stan, true
 }
 
 // finalizeFields attributes the message to the terminal's merchant, then MACs it: DE 42 is
@@ -185,43 +223,134 @@ func (s *Service) send(ctx context.Context, p sendParams) (Transaction, error) {
 		return Transaction{}, err
 	}
 
+	var txn Transaction
+	if p.linkUp {
+		txn, err = s.sendAndRecord(ctx, p, merchant)
+	} else {
+		txn, err = s.recordLinkDown(ctx, p, merchant)
+	}
+	if err != nil {
+		return Transaction{}, err
+	}
+	// The outcome is already recorded; a caller that went away must not stop it being replayable.
+	return txn, s.publish(context.WithoutCancel(ctx), p, txn)
+}
+
+// sendAndRecord logs the row as SENT, sends it, and records the outcome. Every failure after the
+// write is an unknown outcome: the row goes TIMED_OUT and a 0420 is queued, never a resend (root
+// CLAUDE.md §6.4); a bad incoming MAC is DECLINED RC 96 with a reason-06 reversal (MCN-502-AC3).
+func (s *Service) sendAndRecord(ctx context.Context, p sendParams, merchant store.Merchant) (Transaction, error) {
 	row := store.TranLogRow{
-		RRN: p.rrn, Type: p.txnType, Status: "SENT", Amount: p.requestedAmt.Amount, Currency: p.requestedAmt.Currency,
-		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: merchant.MID, NetworkSTAN: p.stan,
+		RRN: p.rrn, Type: p.txnType, Status: statusCreated, Amount: p.requestedAmt.Amount, Currency: p.requestedAmt.Currency,
+		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: merchant.MID, NetworkSTAN: p.stan, MTI: p.mti,
+		ProcessingCode: p.fields[3], POSEntryMode: p.posEntryMode, SentAt: &p.sentAt, CardToken: p.cardToken,
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {
 		return Transaction{}, fmt.Errorf("insert tran_log: %w", err)
 	}
+	if err := s.transition(ctx, id, statusCreated, statusSent, "", ""); err != nil {
+		return Transaction{}, err
+	}
 
 	sendCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	resp, err := s.mux.Send(sendCtx, p.mti, p.fields)
-	if err != nil {
-		return Transaction{}, fmt.Errorf("send %s: %w", p.mti, err)
-	}
+	resp, sendErr := s.mux.Send(sendCtx, p.mti, p.fields)
+	// The request may already be at the issuer: the outcome must be recorded whatever happened to
+	// the caller's request.
+	ctx = context.WithoutCancel(ctx)
 
-	txn := mapResponseToTransaction(p.txnType, p.requestedAmt, resp)
+	txn, macFailed := s.outcome(ctx, p, resp, sendErr)
+	txn = s.describe(txn, p, merchant)
+	if err := s.transition(ctx, id, statusSent, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
+		return Transaction{}, err
+	}
+	row.ID, row.Status = id, txn.Status
+	switch {
+	case txn.Status == statusTimedOut:
+		// The response reports the row's real status (POS-G9).
+		txn.Status = statusReversalPending
+		return txn, s.queueReversal(ctx, row, reasonTimeout)
+	case macFailed:
+		// Stays DECLINED RC 96 for the POS, as a purchase does; the row moves on to REVERSAL_PENDING.
+		return txn, s.queueReversal(ctx, row, reasonMacFailure)
+	}
+	return txn, nil
+}
+
+// outcome maps mux.Send's result onto a Transaction, verifying the response's MAC.
+func (s *Service) outcome(ctx context.Context, p sendParams, resp map[int]string, sendErr error) (txn Transaction, macFailed bool) {
+	if sendErr != nil {
+		txn = Transaction{Type: p.txnType, Amount: p.requestedAmt}
+		txn.Status, txn.ResponseCode = purchase.SendFailureStatus(sendErr)
+		return txn, false
+	}
+	txn = mapResponseToTransaction(p.txnType, p.requestedAmt, resp)
+	if s.mac.Verify(ctx, responseMTI(p.mti), resp) {
+		return txn, false
+	}
+	obs.MacFailureTotal.Inc()
+	return Transaction{Type: p.txnType, Amount: p.requestedAmt, Status: statusDeclined, ResponseCode: rcMacFailure}, true
+}
+
+// queueReversal moves row to REVERSAL_PENDING with its 0420 queued, in one DB transaction.
+func (s *Service) queueReversal(ctx context.Context, row store.TranLogRow, reason string) error {
+	if err := s.reversal.Queue(ctx, row, reason); err != nil {
+		return fmt.Errorf("queue reversal %s for %s: %w", reason, row.RRN, err)
+	}
+	return nil
+}
+
+// recordLinkDown logs a request the link could not carry as DECLINED RC 91: nothing was sent, so
+// there is nothing to reverse (MCN-303-AC4).
+func (s *Service) recordLinkDown(ctx context.Context, p sendParams, merchant store.Merchant) (Transaction, error) {
+	txn := s.describe(Transaction{Type: p.txnType, Amount: p.requestedAmt, Status: statusDeclined, ResponseCode: rcLinkDown}, p, merchant)
+	row := store.TranLogRow{
+		RRN: p.rrn, Type: p.txnType, Status: statusDeclined, Amount: p.requestedAmt.Amount, Currency: p.requestedAmt.Currency,
+		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: merchant.MID, ResponseCode: rcLinkDown, MTI: p.mti,
+	}
+	if _, err := s.tranLog.Insert(ctx, row); err != nil {
+		return Transaction{}, fmt.Errorf("insert tran_log for link-down decline: %w", err)
+	}
+	return txn, nil
+}
+
+func (s *Service) transition(ctx context.Context, id int64, from, to, responseCode, authCode string) error {
+	if err := s.tranLog.UpdateStatus(ctx, id, to, responseCode, authCode); err != nil {
+		return fmt.Errorf("update tran_log to %s: %w", to, err)
+	}
+	if err := s.tranLog.RecordStateTransition(ctx, id, from, to); err != nil {
+		return fmt.Errorf("record %s->%s: %w", from, to, err)
+	}
+	return nil
+}
+
+// describe fills the fields every response carries, whatever the outcome.
+func (s *Service) describe(txn Transaction, p sendParams, merchant store.Merchant) Transaction {
 	txn.RRN, txn.STAN, txn.MaskedPAN, txn.TerminalID, txn.OriginalRRN = p.rrn, p.stan, p.maskedPAN, p.terminalID, p.originalRRN
 	txn.MerchantName = merchant.Name
 	now := time.Now().UTC()
 	txn.CreatedAt = now
 	txn.BusinessDate = now.Format("2006-01-02")
+	return txn
+}
 
-	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
-		return Transaction{}, fmt.Errorf("update tran_log: %w", err)
-	}
-
+// publish broadcasts txn and stores it as the idempotent response.
+func (s *Service) publish(ctx context.Context, p sendParams, txn Transaction) error {
 	s.hub.BroadcastTransaction("transaction.created", txn)
-
 	body, err := json.Marshal(txn)
 	if err != nil {
-		return Transaction{}, fmt.Errorf("encode transaction for idempotency store: %w", err)
+		return fmt.Errorf("encode transaction for idempotency store: %w", err)
 	}
 	if err := s.idempotency.Store(ctx, p.idempotencyKey, p.route, p.requestHash, 201, body); err != nil {
-		return Transaction{}, fmt.Errorf("store idempotent response: %w", err)
+		return fmt.Errorf("store idempotent response: %w", err)
 	}
-	return txn, nil
+	return nil
+}
+
+// responseMTI is the response to request mti: the function digit plus one (0100 -> 0110).
+func responseMTI(mti string) string {
+	return mti[:2] + string(mti[2]+1) + mti[3:]
 }
 
 // mapResponseToTransaction reads DE 39 (RC) and DE 4 (amount) from resp - the single shared
@@ -231,11 +360,11 @@ func mapResponseToTransaction(txnType string, requestedAmount Money, resp map[in
 	txn := Transaction{Type: txnType, Amount: requestedAmount, ResponseCode: resp[39], AuthCode: resp[38]}
 	switch txn.ResponseCode {
 	case "00":
-		txn.Status = "APPROVED"
+		txn.Status = statusApproved
 	case rcPartialApproval:
-		txn.Status = "APPROVED"
+		txn.Status = statusApproved
 	default:
-		txn.Status = "DECLINED"
+		txn.Status = statusDeclined
 	}
 	if txn.ResponseCode == rcPartialApproval {
 		if amt, ok := parseDE4(resp[4]); ok {

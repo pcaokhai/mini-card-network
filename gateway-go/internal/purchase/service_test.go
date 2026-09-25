@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
@@ -224,8 +228,48 @@ func TestCreatePurchase_timeoutQueuesReversalWithReasonSixtyEight__MCN_401_AC1(t
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-timeout")
 
 	require.NoError(t, err)
-	require.Equal(t, "TIMED_OUT", txn.Status)
+	require.Equal(t, "REVERSAL_PENDING", txn.Status, "POS-G9: the response reports the row's real status")
 	require.Equal(t, []string{reasonTimeout}, reversal.calls)
+}
+
+func TestCreatePurchase_everyPostSendFailureQueuesReversal__POS_G4(t *testing.T) {
+	failures := map[string]error{
+		"timeout":           context.DeadlineExceeded,
+		"request cancelled": context.Canceled,
+		"broken pipe":       fmt.Errorf("write request: %w", syscall.EPIPE),
+		"connection closed": io.EOF,
+	}
+	for name, sendErr := range failures {
+		t.Run(name, func(t *testing.T) {
+			mux := &fakeMux{linkSignedOn: true, err: sendErr}
+			reversal := &fakeReversal{}
+			tranLog := &fakeTranLog{}
+			svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+			txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-"+name)
+
+			require.NoError(t, err, "an unknown outcome is not an HTTP error")
+			require.Equal(t, "REVERSAL_PENDING", txn.Status)
+			require.Equal(t, []string{reasonTimeout}, reversal.calls)
+			require.Equal(t, "TIMED_OUT", reversal.queued[0].Status, "queued from the state the row holds")
+			require.Equal(t, "TIMED_OUT", tranLog.rows[0].Status)
+		})
+	}
+}
+
+func TestCreatePurchase_linkDroppedBeforeSendDeclinesRc91WithoutReversal__POS_G4(t *testing.T) {
+	mux := &fakeMux{linkSignedOn: true, err: isonet.ErrNotSignedOn}
+	reversal := &fakeReversal{}
+	tranLog := &fakeTranLog{}
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-link-dropped")
+
+	require.NoError(t, err)
+	require.Equal(t, "DECLINED", txn.Status)
+	require.Equal(t, "91", txn.ResponseCode)
+	require.Empty(t, reversal.calls, "nothing left the gateway, so nothing to reverse")
+	require.Equal(t, "DECLINED", tranLog.rows[0].Status)
 }
 
 func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC1(t *testing.T) {
@@ -458,6 +502,7 @@ func TestCreatePurchase_recordsWhatA0420MustRepeat__MCN_401(t *testing.T) {
 	require.NoError(t, err)
 	row := tranLog.rows[0]
 	require.Equal(t, "tok_normal", row.CardToken)
+	require.Equal(t, "0200", row.MTI)
 	require.Equal(t, mux.lastFields[3], row.ProcessingCode)
 	require.Equal(t, mux.lastFields[22], row.POSEntryMode)
 	require.NotNil(t, row.SentAt)
