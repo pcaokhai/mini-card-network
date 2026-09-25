@@ -56,6 +56,15 @@ func (r *KeyStoreRepository) EnsureActive(ctx context.Context, keyType, keyUnder
 	return tag.RowsAffected() == 1, nil
 }
 
+// ActiveKCV returns the KCV of the ACTIVE global key of keyType.
+func (r *KeyStoreRepository) ActiveKCV(ctx context.Context, keyType string) (string, error) {
+	var kcv string
+	err := r.pool.QueryRow(ctx,
+		`SELECT kcv FROM key_store WHERE key_type = $1 AND owner_ref IS NULL AND status = 'ACTIVE'`,
+		keyType).Scan(&kcv)
+	return kcv, err
+}
+
 // Activate marks id ACTIVE and retires the prior ACTIVE row for the same (key_type, owner_ref)
 // pair, in one transaction (mirrors the issuer's KeyStoreRepository.activate).
 func (r *KeyStoreRepository) Activate(ctx context.Context, id int64) error {

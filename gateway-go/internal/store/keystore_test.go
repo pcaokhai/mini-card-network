@@ -73,4 +73,8 @@ func TestKeyStore_ensureActiveInsertsOnlyWhenNoneActive__MCN_002(t *testing.T) {
 	require.Equal(t, "ABC123", rows[0].KCV)
 	require.Equal(t, "AAAAAAAA", rows[0].KeyUnderLMKHex)
 	require.NotNil(t, rows[0].ActivatedAt)
+
+	active, err := repo.ActiveKCV(ctx, "ZAK")
+	require.NoError(t, err)
+	require.Equal(t, "ABC123", active)
 }

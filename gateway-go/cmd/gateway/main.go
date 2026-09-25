@@ -75,7 +75,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
 	keyStoreRepo := store.NewKeyStoreRepository(pool)
-	zak := loadActiveZAK(ctx, keyStoreRepo, hsmModule, cfg, logger)
+	zak, err := loadActiveZAK(ctx, keyStoreRepo, hsmModule, cfg, logger)
+	if err != nil {
+		return err
+	}
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	terminalRepo := store.NewTerminalRepository(pool)
@@ -169,30 +172,34 @@ func provisionInitialKeys(ctx context.Context, repo *store.KeyStoreRepository, h
 		keyType string
 		clear   []byte
 	}{{"ZAK", cfg.InitialZAK}, {"ZPK", cfg.InitialZPK}} {
-		inserted, kcv, err := rotation.ProvisionInitialKey(ctx, repo, hsmModule, k.keyType, k.clear)
+		got, err := rotation.ProvisionInitialKey(ctx, repo, hsmModule, k.keyType, k.clear)
 		if err != nil {
 			return err
 		}
-		if inserted {
-			logger.Info("registered initial working key", "key_type", k.keyType, "kcv", kcv)
+		switch {
+		case got.Inserted:
+			logger.Info("registered initial working key", "key_type", k.keyType, "kcv", got.KCV)
+		case got.ActiveKCV != got.KCV:
+			logger.Warn("configured working key differs from the ACTIVE one; MACs fail unless the issuer uses the ACTIVE key",
+				"key_type", k.keyType, "configured_kcv", got.KCV, "active_kcv", got.ActiveKCV)
 		}
 	}
 	return nil
 }
 
-// loadActiveZAK registers the initial working keys if needed, then looks up the ACTIVE ZAK,
-// logging and continuing with a nil key on failure.
+// loadActiveZAK registers the initial working keys if needed, then looks up the ACTIVE ZAK.
+// Failing to register a configured key stops startup (config fails fast, CLAUDE.md §6.11).
 // A nil key only happens when ZAK_HEX is unset and no rotation has run: MAC then fails per
 // purchase instead of blocking startup, which keeps the unit-level run tests key-free.
-func loadActiveZAK(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, cfg config.Config, logger *slog.Logger) []byte {
+func loadActiveZAK(ctx context.Context, repo *store.KeyStoreRepository, hsmModule hsm.Module, cfg config.Config, logger *slog.Logger) ([]byte, error) {
 	if err := provisionInitialKeys(ctx, repo, hsmModule, cfg, logger); err != nil {
-		logger.Error("register initial working keys", "error", err.Error())
+		return nil, fmt.Errorf("register initial working keys: %w", err)
 	}
 	zak, err := activeClearKey(ctx, repo, hsmModule, "ZAK")
 	if err != nil {
 		logger.Warn("no active ZAK found, MAC on purchases will fail until one is provisioned", "error", err.Error())
 	}
-	return zak
+	return zak, nil
 }
 
 // activeClearKey looks up the ACTIVE key_store row of keyType and unwraps it under the LMK
