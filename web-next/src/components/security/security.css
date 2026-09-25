@@ -1,5 +1,359 @@
-/* MCN-505: same compositor-friendly transform-only bar as cards.css's .usage-bar-fill. */
-.key-lifetime-fill {
+/* Security and keys, from the design canvas (Security.dc.html). Motion animates transform/opacity
+   only; the global prefers-reduced-motion rule in globals.css collapses every duration and delay. */
+.security-root {
+  /* The canvas sets no line-height (browser "normal"); preflight's 1.5 would make every row taller. */
+  line-height: normal;
+  --security-line: #d6d3ca;
+  --security-divider: #f0eee8;
+  --security-track: #efede6;
+  --security-head: #6b6d75;
+  --security-bar-low: #b7791f;
+}
+
+.security-root [data-tone="ok"] { --tone-fg: var(--color-ok); --tone-bg: var(--color-ok-soft); }
+.security-root [data-tone="warn"] { --tone-fg: var(--color-warn); --tone-bg: var(--color-warn-soft); }
+.security-root [data-tone="info"] { --tone-fg: var(--color-muted); --tone-bg: var(--security-track); }
+
+.security-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+}
+.security-panel__heading {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.security-note {
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.security-error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-bad);
+}
+.security-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--tone-bg);
+  color: var(--tone-fg);
+}
+.security-button {
+  height: 40px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.security-button:hover:not(:disabled) {
+  background: #08545a;
+}
+.security-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.security-button[data-variant="outline"] {
+  border: 1px solid var(--security-line);
+  background: var(--color-surface);
+  color: var(--color-ink);
+}
+.security-button[data-variant="outline"]:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface);
+}
+
+/* ---- Key list -------------------------------------------------------------------------------- */
+.security-keys {
+  gap: 4px;
+}
+.security-keys__title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+/* A real table for assistive tech, laid out as the canvas's grid rows. */
+.security-keys__table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-collapse: collapse;
+}
+.security-keys__table thead,
+.security-keys__table tbody {
+  display: contents;
+}
+.security-keys__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 110px minmax(0, 1fr) 130px 150px;
+  gap: 16px;
+  align-items: center;
+}
+.security-keys__grid > * {
+  padding: 0;
+  text-align: left;
+}
+.security-keys__head {
+  padding-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--security-head);
+}
+.security-keys__row {
+  padding: 12px 0;
+  border-top: 1px solid var(--security-divider);
+}
+.security-keys__key,
+.security-keys__life {
+  display: flex;
+  flex-direction: column;
+}
+.security-keys__key {
+  gap: 2px;
+}
+.security-keys__life {
+  gap: 6px;
+}
+.security-keys__name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.security-kcv {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.security-kcv[data-flip] {
+  color: var(--color-ok);
+  font-weight: 600;
+  animation: security-flip 0.5s var(--ease-out-design) both;
+}
+.security-bar {
+  display: block;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--security-track);
+}
+.security-bar__fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--color-accent);
   transform-origin: left;
-  transition: transform 200ms ease-out;
+  transition: transform 0.5s var(--ease-out-design);
+}
+.security-bar[data-tone="warn"] .security-bar__fill {
+  background: var(--security-bar-low);
+}
+
+/* ---- Lower row: rotation, PIN block, PCI ----------------------------------------------------- */
+.security-columns {
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr) 320px;
+  gap: 20px;
+  align-items: start;
+}
+/* Below the canvas width the PIN rows no longer fit beside two fixed columns; PCI drops underneath. */
+@media (max-width: 1399px) {
+  .security-columns {
+    grid-template-columns: 360px minmax(0, 1fr);
+  }
+  .security-pci {
+    grid-column: 1 / -1;
+  }
+}
+.security-intro {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+.security-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.security-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--security-divider);
+}
+.security-step__dot {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--color-muted);
+  box-shadow: 0 0 0 4px var(--security-track);
+  opacity: 0.5;
+}
+.security-step[data-status="DONE"] .security-step__dot {
+  background: var(--color-ok);
+  box-shadow: 0 0 0 4px var(--color-ok-soft);
+  opacity: 1;
+  animation: security-pop 0.4s var(--ease-out-design) both;
+}
+.security-step[data-status="FAILED"] .security-step__dot {
+  background: var(--color-bad);
+  box-shadow: 0 0 0 4px var(--color-bad-soft);
+  opacity: 1;
+}
+.security-step__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.security-step__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--security-head);
+}
+.security-step:not([data-status="PENDING"]) .security-step__title {
+  color: var(--color-ink);
+}
+.security-step__detail {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-muted);
+}
+.security-rotation__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.security-pin__form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.security-pin__field {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.security-pin__field input {
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--security-line);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 400;
+}
+.security-pin .security-button {
+  height: 42px;
+}
+.security-pin > .security-note {
+  margin: 0;
+}
+.security-pin__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.security-pin__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-canvas);
+  animation: mcn-fade-up 0.34s var(--ease-out-design) both;
+}
+.security-pin__row[data-row="clear"] {
+  background: var(--color-accent-soft);
+}
+.security-pin__row[data-row="underTpk"],
+.security-pin__row[data-row="underZpk"] {
+  background: var(--color-rev-soft);
+}
+.security-pin__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.security-pin__name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.security-pin__value {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.security-pin__footnote {
+  line-height: 1.5;
+}
+
+.security-pci {
+  gap: 10px;
+}
+.security-pci__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.security-pci__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.security-pci__check {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-ok-soft);
+  color: var(--color-ok);
+}
+
+@keyframes security-flip {
+  from { opacity: 0; transform: perspective(300px) rotateX(90deg); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes security-pop {
+  0% { opacity: 0; transform: scale(0.6); }
+  60% { opacity: 1; transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
 }

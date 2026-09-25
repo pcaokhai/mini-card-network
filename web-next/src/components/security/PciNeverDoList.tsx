@@ -1,21 +1,26 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import type { DisplayMode } from "@/shared/state/display-mode";
 
-const NEVER_DO_ITEM_KEYS = ["logPan", "logKey", "persistPinBlock", "panInUrl"] as const;
+const PCI_ITEMS = ["panStorage", "cvv", "pinBlock", "keys", "logs", "audit"] as const;
 
-export function PciNeverDoList({ mode }: { mode: DisplayMode }) {
-  const t = useTranslations("security.pciNeverDo");
+/** PCI DSS rules the system keeps, in plain words (Easy) or as the mechanism that enforces them (Expert). */
+export function PciNeverDoList({ expert }: { expert: boolean }) {
+  const t = useTranslations("security.pci");
 
   return (
-    <section aria-labelledby="pci-never-do-heading" className="space-y-2">
-      <h3 id="pci-never-do-heading" className="text-sm font-semibold">
-        {t("heading")}
-      </h3>
-      <ul className="list-inside list-disc space-y-1 text-sm">
-        {NEVER_DO_ITEM_KEYS.map((key) => (
-          <li key={key}>{t(`${key}.${mode}`)}</li>
+    <section aria-label={t("region")} className="security-panel security-pci">
+      <h2 className="security-panel__heading">{t("heading")}</h2>
+      <ul className="security-pci__list">
+        {PCI_ITEMS.map((item) => (
+          <li key={item} className="security-pci__item">
+            <span className="security-pci__check" aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12l5 5 9-10" />
+              </svg>
+            </span>
+            <span>{t(`items.${item}.${expert ? "expert" : "easy"}`)}</span>
+          </li>
         ))}
       </ul>
     </section>

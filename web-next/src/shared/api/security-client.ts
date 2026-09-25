@@ -14,7 +14,6 @@ const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 const liveFetch = (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args);
 
 const ACQUIRER_KEYS_KEY = ["security", "keys", "acquirer"] as const;
-const ISSUER_KEYS_KEY = ["security", "keys", "issuer"] as const;
 const rotationKey = (rotationId: string) => ["security", "rotations", rotationId] as const;
 
 export function useAcquirerKeys() {
@@ -22,17 +21,6 @@ export function useAcquirerKeys() {
     queryKey: ACQUIRER_KEYS_KEY,
     queryFn: async (): Promise<KeyInfo[]> => {
       const { data, error } = await client.GET("/v1/keys/acquirer", { fetch: liveFetch });
-      if (error) throw error;
-      return data;
-    },
-  });
-}
-
-export function useIssuerKeys() {
-  return useQuery({
-    queryKey: ISSUER_KEYS_KEY,
-    queryFn: async (): Promise<KeyInfo[]> => {
-      const { data, error } = await client.GET("/v1/keys/issuer", { fetch: liveFetch });
       if (error) throw error;
       return data;
     },
@@ -51,11 +39,12 @@ export function useStartRotation() {
       if (error) throw error;
       return data;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ACQUIRER_KEYS_KEY }),
+    onSuccess: (rotation) => queryClient.setQueryData(rotationKey(rotation.rotationId), rotation),
   });
 }
 
 export function useRotation(rotationId: string | null) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: rotationKey(rotationId ?? "none"),
     enabled: rotationId !== null,
@@ -66,6 +55,8 @@ export function useRotation(rotationId: string | null) {
         fetch: liveFetch,
       });
       if (error) throw error;
+      // The new key's KCV is only in the key list once the rotation has activated it.
+      if (data.status === "COMPLETED") void queryClient.invalidateQueries({ queryKey: ACQUIRER_KEYS_KEY });
       return data;
     },
   });
