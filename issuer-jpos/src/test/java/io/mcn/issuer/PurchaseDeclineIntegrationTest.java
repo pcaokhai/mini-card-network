@@ -550,7 +550,7 @@ class PurchaseDeclineIntegrationTest {
   @Test
   @Order(99)
   @DisplayName(
-      "POS-G18: after purchases, reversals, refunds and refund reversals, every account's balance"
+      "POS-G19: after purchases, reversals, refunds and refund reversals, every account's balance"
           + " = opening + Σ credits − Σ debits of its postings")
   void everyAccountBalanceEqualsOpeningPlusItsPostings() throws Exception {
     var fixture =
