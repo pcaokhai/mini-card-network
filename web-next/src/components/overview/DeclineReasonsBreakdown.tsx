@@ -1,7 +1,13 @@
 import { useTranslations } from "next-intl";
 import type { Overview } from "@/shared/api/overview-client";
 
-export function DeclineReasonsBreakdown({ declineReasons }: { declineReasons: Overview["declineReasons"] }) {
+interface DeclineReasonsBreakdownProps {
+  declineReasons: Overview["declineReasons"];
+  expert?: boolean;
+}
+
+/** MCN-306-AC3: Expert mode appends the ISO 8583 response code to each reason. */
+export function DeclineReasonsBreakdown({ declineReasons, expert = false }: DeclineReasonsBreakdownProps) {
   const t = useTranslations("overview.declineReasons");
   const sorted = [...declineReasons].sort((a, b) => b.share - a.share);
 
@@ -17,9 +23,9 @@ export function DeclineReasonsBreakdown({ declineReasons }: { declineReasons: Ov
         className="flex flex-col gap-3"
       >
         {sorted.map((reason) => (
-          <div key={reason.responseCode} className="flex flex-col gap-1.5">
+          <div key={`${reason.responseCode}-${reason.label}`} className="flex flex-col gap-1.5">
             <div className="flex justify-between text-[13px]">
-              <span>{reason.label}</span>
+              <span>{expert && reason.responseCode ? `${reason.label} · RC ${reason.responseCode}` : reason.label}</span>
               <span className="font-semibold tabular-nums">{Math.round(reason.share * 100)}%</span>
             </div>
             <div className="h-2 rounded-full bg-[#EFEDE6]">

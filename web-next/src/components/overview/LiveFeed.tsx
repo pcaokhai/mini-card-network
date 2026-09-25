@@ -16,13 +16,29 @@ const BATCH_WINDOW_MS = 500;
 
 const EVENT_TYPES = ["transaction.created", "transaction.updated"];
 
-const STATUS_CLASSES: Record<string, string> = {
-  APPROVED: "bg-ok-soft text-ok",
-  DECLINED: "bg-bad-soft text-bad",
-  REVERSED: "bg-rev-soft text-rev",
-  TIMEOUT: "bg-warn-soft text-warn",
-  PENDING: "bg-canvas text-muted",
+const TONE_CLASSES = {
+  ok: "bg-ok-soft text-ok",
+  bad: "bg-bad-soft text-bad",
+  warn: "bg-warn-soft text-warn",
+  rev: "bg-rev-soft text-rev",
+} as const;
+
+const STATUS_TONE: Record<TransactionSummary["status"], keyof typeof TONE_CLASSES> = {
+  CREATED: "warn",
+  SENT: "warn",
+  TIMED_OUT: "warn",
+  REVERSAL_PENDING: "warn",
+  APPROVED: "ok",
+  DECLINED: "bad",
+  FAILED: "bad",
+  REVERSED: "rev",
 };
+
+/** MCN-306-AC3: Expert mode shows the ISO 8583 response code beside the plain-language result. */
+function statusText(row: TransactionSummary, expert: boolean): string {
+  const label = row.responseLabel ?? row.status;
+  return expert && row.responseCode ? `${label} · RC ${row.responseCode}` : label;
+}
 
 function last4(maskedPan: string | undefined): string {
   return maskedPan === undefined ? "" : maskedPan.slice(-4);
@@ -108,7 +124,7 @@ export function LiveFeed({
         <ThroughputChart throughput={throughput} />
       </div>
 
-      <div className={`${rowClass} border-b border-[#EFEDE6] pb-2 text-xs text-muted`}>
+      <div className={`${rowClass} whitespace-nowrap border-b border-border pb-1 text-xs font-semibold text-[#6B6D75]`}>
         <span>{t("time")}</span>
         <span>{t("merchant")}</span>
         <span>{t("card")}</span>
@@ -122,7 +138,7 @@ export function LiveFeed({
         {visibleRows.map((row, index) => (
           <li
             key={`${row.rrn}-${index}`}
-            className={`feed-row--flash ${rowClass} border-b border-[#F2F0EA] py-3 text-sm last:border-b-0`}
+            className={`feed-row--flash ${rowClass} border-b border-[#F0EEE8] py-2.5 text-sm last:border-b-0`}
           >
             <span className="font-mono text-[13px] text-muted">{timeOf(row.createdAt)}</span>
             <span className="truncate font-medium">{row.merchantName}</span>
@@ -139,7 +155,7 @@ export function LiveFeed({
               href={`/transactions/${row.rrn}`}
               className={
                 expertMode
-                  ? "font-mono text-xs text-muted underline"
+                  ? "font-mono text-xs text-muted hover:underline"
                   : "sr-only"
               }
             >
@@ -147,12 +163,13 @@ export function LiveFeed({
             </Link>
             <span>
               <span
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                  STATUS_CLASSES[row.status] ?? STATUS_CLASSES.PENDING
+                data-testid="feed-status"
+                className={`inline-flex h-6.5 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-xs font-semibold ${
+                  TONE_CLASSES[STATUS_TONE[row.status] ?? "warn"]
                 }`}
               >
                 <span aria-hidden className="size-1.5 rounded-full bg-current" />
-                {row.responseLabel ?? row.status}
+                {statusText(row, expertMode)}
               </span>
             </span>
           </li>

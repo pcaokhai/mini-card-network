@@ -55,4 +55,20 @@ describe("LiveFeed", () => {
     });
     expect(screen.getByText("burst9")).toBeInTheDocument();
   });
+
+  it("MCN-306-AC3: Expert mode shows the RC code beside the result; Easy mode does not", () => {
+    const declined = {
+      type: "transaction.created",
+      data: { rrn: "626514000122", status: "DECLINED", responseCode: "51", responseLabel: "Không đủ tiền" },
+      occurredAt: "now",
+    };
+    const { unmount } = renderWithIntl(<LiveFeed expertMode />);
+    act(() => emit(declined));
+    expect(screen.getByTestId("feed-status")).toHaveTextContent("Không đủ tiền · RC 51");
+    unmount();
+
+    renderWithIntl(<LiveFeed />);
+    act(() => emit(declined));
+    expect(screen.getByTestId("feed-status")).toHaveTextContent(/^Không đủ tiền$/);
+  });
 });

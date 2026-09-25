@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useOverview } from "@/shared/api/overview-client";
-import { useLinks } from "@/shared/api/network-client";
+import { useLinks, useSafQueue, useSwitchStatus } from "@/shared/api/network-client";
+import { useAcquirerKeys } from "@/shared/api/security-client";
 import { useDisplayMode } from "@/shared/state/display-mode";
 import { KpiCards } from "@/components/overview/KpiCards";
 import { DeclineReasonsBreakdown } from "@/components/overview/DeclineReasonsBreakdown";
@@ -27,6 +28,9 @@ export function OverviewScreen() {
   const t = useTranslations("overview");
   const overviewQuery = useOverview();
   const linksQuery = useLinks();
+  const safQuery = useSafQueue();
+  const switchQuery = useSwitchStatus();
+  const keysQuery = useAcquirerKeys();
   const expertMode = useDisplayMode((s) => s.mode === "expert");
   if (!overviewQuery.data) return null;
 
@@ -63,8 +67,14 @@ export function OverviewScreen() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
         <LiveFeed expertMode={expertMode} throughput={overviewQuery.data.throughput} />
         <div className="flex flex-col gap-5">
-          <SystemHealthList overview={overviewQuery.data} links={linksQuery.data ?? []} />
-          <DeclineReasonsBreakdown declineReasons={overviewQuery.data.declineReasons} />
+          <SystemHealthList
+            links={linksQuery.data ?? []}
+            saf={safQuery.data}
+            switchStatus={switchQuery.data}
+            acquirerKeys={keysQuery.data}
+            expert={expertMode}
+          />
+          <DeclineReasonsBreakdown declineReasons={overviewQuery.data.declineReasons} expert={expertMode} />
           <CutoverCountdown />
         </div>
       </div>

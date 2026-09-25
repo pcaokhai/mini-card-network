@@ -131,7 +131,8 @@
       "transactionsTech": "Peak TPS {peak} at {at}",
       "approvalTech": "RC 00 / total 0100 + 0200",
       "latencyTech": "p99 end-to-end",
-      "ledgerTech": "Σ ledger = Σ tran_log · 0 variance"
+      "ledgerTech": "Σ ledger = Σ tran_log · 0 variance",
+      "ledgerTechMismatch": "Σ ledger ≠ Σ tran_log · reconcile"
     },
     "throughput": {
       "heading": "Transaction volume over the last 60 minutes"
@@ -141,16 +142,28 @@
     },
     "health": {
       "heading": "System health",
-      "ledger": "Ledger",
       "issuerLink": "Issuer link",
-      "ledgerOk": "Matched, no discrepancies",
-      "ledgerMismatch": "Discrepancy needs reconciling"
+      "linkEasyUp": "Stable · checked {seconds} seconds ago",
+      "linkEasyDown": "Disconnected, retrying",
+      "linkTech": "{status} · echo 0800/301 {seconds}s ago",
+      "saf": "Store-and-forward queue",
+      "safEasyEmpty": "Empty, nothing waiting",
+      "safEasyPending": "{depth} messages waiting to resend",
+      "safTech": "SAF depth {depth} · {dead} dead",
+      "stip": "Stand-in processing",
+      "stipEasyOff": "Off because the issuer is healthy",
+      "stipEasyOn": "On, approving small transactions for the issuer",
+      "stipTech": "STIP {stip} · circuit {circuit}",
+      "key": "Security keys",
+      "keyEasyValid": "Valid, rotates in {days} days",
+      "keyEasyExpired": "Expired, rotate now",
+      "keyTech": "ZPK KCV {kcv} · rotate T-{days}d"
     },
     "cutover": {
       "heading": "Next cutover",
       "label": "Next cutover in",
       "remaining": "{hours}h {minutes}m remaining",
-      "body": "The system closes the books, reconciles with the acquirer bank and exports the clearing file.",
+      "body": "The system closes the books for {date}, reconciles with the acquirer bank and exports the clearing file.",
       "openSettlement": "Open settlement"
     },
     "liveFeed": {

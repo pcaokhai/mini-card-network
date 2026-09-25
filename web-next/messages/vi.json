@@ -131,7 +131,8 @@
       "transactionsTech": "TPS đỉnh {peak} lúc {at}",
       "approvalTech": "RC 00 / tổng 0100 + 0200",
       "latencyTech": "p99 end-to-end",
-      "ledgerTech": "Σ ledger = Σ tran_log · lệch 0 ₫"
+      "ledgerTech": "Σ ledger = Σ tran_log · lệch 0 ₫",
+      "ledgerTechMismatch": "Σ ledger ≠ Σ tran_log · cần đối soát"
     },
     "throughput": {
       "heading": "Lượng giao dịch trong 60 phút qua"
@@ -141,16 +142,28 @@
     },
     "health": {
       "heading": "Sức khỏe hệ thống",
-      "ledger": "Tiền khớp sổ",
       "issuerLink": "Kết nối tới ngân hàng phát hành",
-      "ledgerOk": "Khớp, không có chênh lệch",
-      "ledgerMismatch": "Có chênh lệch cần đối soát"
+      "linkEasyUp": "Ổn định · kiểm tra {seconds} giây trước",
+      "linkEasyDown": "Mất kết nối, đang thử kết nối lại",
+      "linkTech": "{status} · echo 0800/301 {seconds}s trước",
+      "saf": "Hàng đợi gửi lại",
+      "safEasyEmpty": "Trống, không có lệnh nào chờ",
+      "safEasyPending": "{depth} lệnh đang chờ gửi lại",
+      "safTech": "SAF depth {depth} · {dead} dead",
+      "stip": "Chế độ duyệt thay",
+      "stipEasyOff": "Đang tắt vì hệ thống chính hoạt động tốt",
+      "stipEasyOn": "Đang bật, tự duyệt giao dịch nhỏ thay ngân hàng",
+      "stipTech": "STIP {stip} · circuit {circuit}",
+      "key": "Khóa bảo mật",
+      "keyEasyValid": "Còn hiệu lực, đổi khóa sau {days} ngày",
+      "keyEasyExpired": "Đã hết hạn, cần đổi khóa ngay",
+      "keyTech": "ZPK KCV {kcv} · rotate T-{days}d"
     },
     "cutover": {
       "heading": "Chốt ngày tiếp theo",
       "label": "Cutover tiếp theo sau",
       "remaining": "Còn {hours} giờ {minutes} phút",
-      "body": "Hệ thống sẽ khóa sổ, đối chiếu với ngân hàng thanh toán và xuất file quyết toán.",
+      "body": "Hệ thống sẽ khóa sổ ngày {date}, đối chiếu với ngân hàng thanh toán và xuất file quyết toán.",
       "openSettlement": "Mở trình chốt ngày"
     },
     "liveFeed": {

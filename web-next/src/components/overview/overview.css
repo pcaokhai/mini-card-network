@@ -11,12 +11,13 @@
   flex: 1;
   height: 100%;
   transform-origin: bottom;
-  background: #a9c4c5;
-  border-radius: 3px 3px 0 0;
+  background: var(--color-accent);
+  opacity: 0.45;
+  border-radius: 4px 4px 0 0;
 }
 
 .throughput-bar--latest {
-  background: var(--color-accent);
+  opacity: 1;
 }
 
 /* Columns follow the design canvas's live-feed table; expert mode inserts the RRN. */
@@ -28,7 +29,7 @@
 }
 
 .feed-row--expert {
-  grid-template-columns: 82px minmax(0, 1.5fr) 96px 120px 124px 170px;
+  grid-template-columns: 72px minmax(96px, 1fr) 76px 104px 100px 156px;
 }
 
 @keyframes feed-row-flash {

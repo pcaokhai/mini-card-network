@@ -11,7 +11,7 @@ export function BusinessDateCard() {
       <span className="text-xs text-muted">{t("businessDate")}</span>
       {/* The business day is the viewer's local day; the server has no timezone to match it. */}
       <span className="text-[15px] font-semibold" suppressHydrationWarning>
-        {new Intl.DateTimeFormat("vi-VN").format(new Date())}
+        {new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date())}
       </span>
       <span className="text-xs text-muted">{t("cutoverAt", { time: CUTOVER_LABEL })}</span>
     </div>
