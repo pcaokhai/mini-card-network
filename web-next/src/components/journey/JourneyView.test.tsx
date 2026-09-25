@@ -6,11 +6,12 @@ import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import en from "../../../messages/en.json";
 import { journeyHandlers } from "@/mocks/journey-handlers";
+import { cardsHandlers } from "@/mocks/pages/cards";
 import { APPROVED_JOURNEY, AUTO_REVERSED_JOURNEY, DECLINED_JOURNEY } from "@/mocks/journey-fixtures";
 import { useDisplayMode } from "@/shared/state/display-mode";
 import { AUTOPLAY_INTERVAL_MS, JourneyView } from "./JourneyView";
 
-const server = setupServer(...journeyHandlers);
+const server = setupServer(...journeyHandlers, ...cardsHandlers);
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => {
   server.resetHandlers();

@@ -6,6 +6,7 @@ import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import en from "../../../../messages/en.json";
 import { journeyHandlers } from "@/mocks/journey-handlers";
+import { cardsHandlers } from "@/mocks/pages/cards";
 import { JourneyIndexScreen } from "./JourneyIndexScreen";
 
 const replace = vi.fn();
@@ -15,7 +16,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => search,
 }));
 
-const server = setupServer(...journeyHandlers);
+const server = setupServer(...journeyHandlers, ...cardsHandlers);
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
