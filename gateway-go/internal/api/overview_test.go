@@ -83,3 +83,29 @@ func TestGetOverview_emptyDeclineReasonsHasNoShareDivideByZero__MCN_306(t *testi
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `"declineReasons":[]`)
 }
+
+func TestGetOverview_exposesP50AndDeltaWhenKnown__MCN_306(t *testing.T) {
+	delta := 0.12
+	r := chi.NewRouter()
+	MountOverview(r, &fakeOverviewReader{stats: store.OverviewStats{P50LatencyMs: 96, P99LatencyMs: 212, TransactionsDeltaPct: &delta}})
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/metrics/overview", nil))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.InDelta(t, 96, body["p50LatencyMs"], 0.001)
+	require.InDelta(t, 0.12, body["transactionsDeltaPct"], 0.001)
+}
+
+func TestGetOverview_omitsDeltaWithoutBaseline__MCN_306(t *testing.T) {
+	r := chi.NewRouter()
+	MountOverview(r, &fakeOverviewReader{stats: store.OverviewStats{}})
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/metrics/overview", nil))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.NotContains(t, body, "transactionsDeltaPct")
+}
