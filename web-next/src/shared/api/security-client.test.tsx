@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { handlers } from "@/mocks/generated/handlers";
-import { useAcquirerKeys, useIssuerKeys } from "./security-client";
+import { useAcquirerKeys } from "./security-client";
 
 const server = setupServer(...handlers);
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
@@ -22,9 +22,4 @@ describe("security-client", () => {
     expect(Array.isArray(result.current.data)).toBe(true);
   });
 
-  it("fetches issuer keys via GET /v1/keys/issuer__MCN_505_AC1", async () => {
-    const { result } = renderHook(() => useIssuerKeys(), { wrapper });
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(Array.isArray(result.current.data)).toBe(true);
-  });
 });

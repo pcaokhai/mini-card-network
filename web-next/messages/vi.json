@@ -740,56 +740,173 @@
   },
   "security": {
     "title": "Bảo mật và khóa",
+    "subtitle": "Các khóa mã hóa bảo vệ mã PIN và message. Khóa thật chỉ nằm trong HSM; ở đây bạn chỉ thấy mã kiểm tra của chúng.",
+    "loadFailed": "Không tải được danh sách khóa. Thử tải lại trang.",
     "keys": {
-      "heading": "Khóa",
-      "keyType": "Loại khóa",
-      "counterparty": "Đối tác",
-      "kcv": "KCV",
-      "status": "Trạng thái",
-      "lifetime": "Vòng đời",
-      "expiryWarning": "Hết hạn sau {days} ngày — nên xoay khóa sớm",
-      "status_PENDING": "Đang chờ",
-      "status_ACTIVE": "Đang dùng",
-      "status_RETIRED": "Đã thu hồi",
-      "source_acquirer": "Bên chấp nhận",
-      "source_issuer": "Bên phát hành"
+      "region": "Danh sách khóa",
+      "heading": "Khóa đang sử dụng",
+      "note": {
+        "easy": "Mã kiểm tra giúp hai bên so khóa mà không lộ khóa",
+        "expert": "Hiển thị KCV · key material không rời HSM"
+      },
+      "columns": {
+        "key": "Khóa",
+        "kcv": "Mã kiểm tra",
+        "lifetime": "Thời hạn còn lại",
+        "status": "Trạng thái",
+        "action": "Thao tác"
+      },
+      "daysLeft": "Còn {days} ngày",
+      "expertNote": "under LMK · {days} ngày/chu kỳ",
+      "rotateNow": "Xoay khóa ngay",
+      "status": {
+        "easy": {
+          "active": "Đang dùng",
+          "rotateSoon": "Sắp đến hạn",
+          "pending": "Đang chờ",
+          "retired": "Đã thu hồi"
+        },
+        "expert": {
+          "active": "ACTIVE",
+          "rotateSoon": "ROTATE SOON",
+          "pending": "PENDING",
+          "retired": "RETIRED"
+        }
+      },
+      "types": {
+        "ZMK": {
+          "name": "Khóa chủ giữa hai ngân hàng",
+          "note": "Bọc các khóa khác khi trao đổi"
+        },
+        "ZPK": {
+          "name": "Khóa mã hóa PIN giữa hai ngân hàng",
+          "note": "Bảo vệ PIN trên đường truyền liên ngân hàng"
+        },
+        "ZAK": {
+          "name": "Khóa ký chống giả mạo",
+          "note": "Tính chữ ký MAC cho field 64"
+        },
+        "TPK": {
+          "name": "Khóa mã hóa PIN tại máy POS",
+          "note": "Dùng chung cho các máy POS"
+        },
+        "TAK": {
+          "name": "Khóa ký message tại máy POS",
+          "note": "Tính chữ ký MAC cho message từ máy POS"
+        },
+        "CVK": {
+          "name": "Khóa kiểm tra mã CVV",
+          "note": "Tính lại CVV để so, không lưu CVV"
+        },
+        "PVK": {
+          "name": "Khóa xác thực PIN",
+          "note": "Tạo và kiểm tra giá trị PVV"
+        }
+      }
     },
     "rotation": {
+      "region": "Xoay khóa",
       "heading": "Xoay khóa mã hóa PIN",
-      "rotate": "Xoay khóa",
-      "rotating": "Đang xoay…",
-      "step_GENERATE": "Tạo khóa",
-      "step_SEND_0800_161": "Gửi cho đối tác",
-      "step_PARTNER_CONFIRM": "Đối tác xác nhận",
-      "step_ACTIVATE": "Kích hoạt",
-      "stepStatus_PENDING": "Đang chờ",
-      "stepStatus_DONE": "Xong",
-      "stepStatus_FAILED": "Thất bại"
+      "intro": "Đổi khóa định kỳ để nếu khóa cũ bị lộ, thiệt hại cũng chỉ giới hạn trong một khoảng thời gian ngắn.",
+      "start": "Bắt đầu xoay khóa ZPK",
+      "running": "Đang xoay…",
+      "done": "Hoàn tất · làm lại",
+      "failed": "Không bắt đầu xoay khóa được. Thử lại sau.",
+      "stepFailed": "Xoay khóa dừng ở bước này. Khóa cũ vẫn đang dùng.",
+      "steps": {
+        "GENERATE": {
+          "title": "HSM tạo khóa mới",
+          "easy": "Khóa mới sinh ra ngay trong HSM và không bao giờ ra ngoài ở dạng rõ.",
+          "expert": "GenerateKey ZPK under LMK · KCV {kcv}"
+        },
+        "SEND_0800_161": {
+          "title": "Gửi khóa mới cho đối tác",
+          "easy": "Khóa mới được bọc bằng khóa chủ trước khi gửi qua mạng.",
+          "expert": "0800 · field 70 = 161 · ZPK under ZMK"
+        },
+        "PARTNER_CONFIRM": {
+          "title": "Đối tác xác nhận",
+          "easy": "Hai bên so mã kiểm tra khóa để chắc chắn đang dùng cùng một khóa.",
+          "expert": "0810 RC 00 · KCV match {kcv}"
+        },
+        "ACTIVATE": {
+          "title": "Kích hoạt khóa mới",
+          "easy": "Khóa cũ vẫn được chấp nhận thêm 5 phút để giao dịch đang bay không bị lỗi.",
+          "expert": "PENDING → ACTIVE · khóa cũ → RETIRED (grace 5 phút)"
+        }
+      },
+      "stepStatus": {
+        "PENDING": "Đang chờ",
+        "DONE": "Xong",
+        "FAILED": "Thất bại"
+      },
+      "lost": "Không theo dõi được lần xoay khóa này. Tải lại trang để xem khóa đang dùng."
     },
     "pinBlock": {
-      "heading": "Khối PIN (chỉ minh họa — không phải mã hóa thật)",
-      "pinLabel": "PIN",
-      "pinError": "PIN phải có từ 4 đến 12 chữ số",
-      "testCard": "Thẻ thử nghiệm: {maskedPan}",
-      "breakdown": "Nibble độ dài PIN, các chữ số PIN, đệm F, XOR với PAN"
+      "region": "Mô phỏng PIN block",
+      "heading": "Mã PIN được bảo vệ thế nào",
+      "pinLabel": "Nhập thử một mã PIN",
+      "pinPlaceholder": "4 đến 12 chữ số",
+      "build": "Tạo PIN block",
+      "pinError": "Mã PIN gồm 4 đến 12 chữ số, không có chữ cái.",
+      "card": "Số thẻ minh họa dùng để tính: {maskedPan}",
+      "footnote": "Hai dòng cuối là giá trị minh họa, không phải kết quả mã hóa 3DES/AES thật. Ngân hàng phát hành không bao giờ thấy lại mã PIN gốc: việc so khớp diễn ra bên trong HSM.",
+      "rows": {
+        "pinField": {
+          "easy": "Mã PIN kèm độ dài",
+          "expert": "PIN field · ISO format 0",
+          "hint": "Số 0, độ dài, mã PIN, rồi chèn F cho đủ 16 ký tự"
+        },
+        "panField": {
+          "easy": "Một phần số thẻ",
+          "expert": "PAN field",
+          "hint": "12 chữ số cuối, bỏ chữ số kiểm tra"
+        },
+        "clear": {
+          "easy": "Trộn hai dòng trên",
+          "expert": "Clear PIN block = PIN ⊕ PAN",
+          "hint": "Cùng mã PIN nhưng khác thẻ sẽ ra kết quả khác"
+        },
+        "underTpk": {
+          "easy": "Mã hóa ngay tại máy POS",
+          "expert": "Encrypted under TPK",
+          "hint": "Từ đây trở đi không ai đọc được PIN"
+        },
+        "underZpk": {
+          "easy": "HSM đổi khóa rồi gửi đi",
+          "expert": "Translated TPK → ZPK",
+          "hint": "Đổi khóa bên trong HSM, PIN không lộ ra ngoài"
+        }
+      }
     },
-    "pciNeverDo": {
-      "heading": "Không bao giờ làm điều này",
-      "logPan": {
-        "easy": "Không bao giờ ghi lại hoặc hiển thị đầy đủ số thẻ của khách hàng.",
-        "expert": "Không bao giờ ghi log hoặc lưu trữ toàn bộ PAN."
-      },
-      "logKey": {
-        "easy": "Không bao giờ ghi lại khóa bí mật dưới dạng văn bản thô.",
-        "expert": "Không bao giờ ghi log hoặc lưu trữ khóa ở dạng rõ."
-      },
-      "persistPinBlock": {
-        "easy": "Không bao giờ lưu PIN của khách hàng ở bất kỳ đâu.",
-        "expert": "Không bao giờ lưu trữ khối PIN ở dạng rõ."
-      },
-      "panInUrl": {
-        "easy": "Không bao giờ đưa số thẻ vào địa chỉ web.",
-        "expert": "Không bao giờ đặt PAN trong URL."
+    "pci": {
+      "region": "Tuân thủ PCI DSS",
+      "heading": "Những điều hệ thống không bao giờ làm",
+      "items": {
+        "panStorage": {
+          "easy": "Số thẻ chỉ lưu dạng mã hóa, màn hình chỉ hiện 4 số cuối.",
+          "expert": "pan_enc (AES-GCM) + pan_hash (HMAC) + masked_pan"
+        },
+        "cvv": {
+          "easy": "Không bao giờ lưu mã CVV in sau thẻ.",
+          "expert": "CVV tính lại bằng CVK, không có cột lưu"
+        },
+        "pinBlock": {
+          "easy": "Không lưu mã PIN hay PIN block sau khi xác thực xong.",
+          "expert": "field 52 bị xóa khỏi context sau participant Security"
+        },
+        "keys": {
+          "easy": "Khóa thật chỉ nằm trong HSM, ra ngoài luôn ở dạng đã bọc.",
+          "expert": "key_under_lmk + KCV, không có key rõ"
+        },
+        "logs": {
+          "easy": "Log tự động che dữ liệu thẻ trước khi ghi.",
+          "expert": "Log masker cho field 2, 35, 45, 52, 55"
+        },
+        "audit": {
+          "easy": "Mọi thao tác với khóa đều được ghi nhật ký, cần hai người duyệt.",
+          "expert": "audit_log append-only · dual control"
+        }
       }
     }
   },

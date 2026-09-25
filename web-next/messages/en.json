@@ -740,56 +740,173 @@
   },
   "security": {
     "title": "Security and keys",
+    "subtitle": "Cryptographic keys protect PINs and messages. Real keys live only inside the HSM; here you only see their check values.",
+    "loadFailed": "Couldn't load the keys. Try reloading the page.",
     "keys": {
-      "heading": "Keys",
-      "keyType": "Key type",
-      "counterparty": "Counterparty",
-      "kcv": "KCV",
-      "status": "Status",
-      "lifetime": "Lifetime",
-      "expiryWarning": "Expires in {days} days — rotate soon",
-      "status_PENDING": "Pending",
-      "status_ACTIVE": "Active",
-      "status_RETIRED": "Retired",
-      "source_acquirer": "Acquirer",
-      "source_issuer": "Issuer"
+      "region": "Key list",
+      "heading": "Keys in use",
+      "note": {
+        "easy": "A check value lets both sides compare keys without revealing them",
+        "expert": "Showing KCV · key material never leaves the HSM"
+      },
+      "columns": {
+        "key": "Key",
+        "kcv": "Check value",
+        "lifetime": "Time left",
+        "status": "Status",
+        "action": "Action"
+      },
+      "daysLeft": "{days} days left",
+      "expertNote": "under LMK · {days}-day cycle",
+      "rotateNow": "Rotate now",
+      "status": {
+        "easy": {
+          "active": "In use",
+          "rotateSoon": "Due soon",
+          "pending": "Pending",
+          "retired": "Retired"
+        },
+        "expert": {
+          "active": "ACTIVE",
+          "rotateSoon": "ROTATE SOON",
+          "pending": "PENDING",
+          "retired": "RETIRED"
+        }
+      },
+      "types": {
+        "ZMK": {
+          "name": "Master key between the two banks",
+          "note": "Wraps the other keys when they are exchanged"
+        },
+        "ZPK": {
+          "name": "PIN key between the two banks",
+          "note": "Protects PINs on the interbank link"
+        },
+        "ZAK": {
+          "name": "Anti-forgery signing key",
+          "note": "Computes the MAC for field 64"
+        },
+        "TPK": {
+          "name": "PIN key at the POS terminal",
+          "note": "Shared by the POS terminals"
+        },
+        "TAK": {
+          "name": "Message signing key at the POS",
+          "note": "Computes the MAC for messages from the POS"
+        },
+        "CVK": {
+          "name": "CVV check key",
+          "note": "Recomputes the CVV to compare; the CVV is never stored"
+        },
+        "PVK": {
+          "name": "PIN verification key",
+          "note": "Creates and checks the PVV"
+        }
+      }
     },
     "rotation": {
-      "heading": "Rotate key",
-      "rotate": "Rotate key",
-      "rotating": "Rotating…",
-      "step_GENERATE": "Generate",
-      "step_SEND_0800_161": "Send to partner",
-      "step_PARTNER_CONFIRM": "Partner confirms",
-      "step_ACTIVATE": "Activate",
-      "stepStatus_PENDING": "Pending",
-      "stepStatus_DONE": "Done",
-      "stepStatus_FAILED": "Failed"
+      "region": "Key rotation",
+      "heading": "Rotate the PIN encryption key",
+      "intro": "Change keys regularly so that if an old key leaks, the damage is limited to a short window.",
+      "start": "Start ZPK rotation",
+      "running": "Rotating…",
+      "done": "Done · start over",
+      "failed": "Couldn't start the rotation. Try again later.",
+      "stepFailed": "The rotation stopped at this step. The old key is still in use.",
+      "steps": {
+        "GENERATE": {
+          "title": "HSM generates a new key",
+          "easy": "The new key is created inside the HSM and never leaves it in the clear.",
+          "expert": "GenerateKey ZPK under LMK · KCV {kcv}"
+        },
+        "SEND_0800_161": {
+          "title": "Send the new key to the partner",
+          "easy": "The new key is wrapped with the master key before it crosses the network.",
+          "expert": "0800 · field 70 = 161 · ZPK under ZMK"
+        },
+        "PARTNER_CONFIRM": {
+          "title": "Partner confirms",
+          "easy": "Both sides compare key check values to be sure they use the same key.",
+          "expert": "0810 RC 00 · KCV match {kcv}"
+        },
+        "ACTIVATE": {
+          "title": "Activate the new key",
+          "easy": "The old key is still accepted for 5 more minutes so in-flight transactions don't fail.",
+          "expert": "PENDING → ACTIVE · old key → RETIRED (5-minute grace)"
+        }
+      },
+      "stepStatus": {
+        "PENDING": "Pending",
+        "DONE": "Done",
+        "FAILED": "Failed"
+      },
+      "lost": "Lost track of this rotation. Reload the page to see the keys in use."
     },
     "pinBlock": {
-      "heading": "PIN block (illustration only — not real encryption)",
-      "pinLabel": "PIN",
-      "pinError": "PIN must be 4 to 12 digits",
-      "testCard": "Test card: {maskedPan}",
-      "breakdown": "PIN-length nibble, PIN digits, F padding, XOR'd with PAN"
+      "region": "PIN block simulation",
+      "heading": "How a PIN is protected",
+      "pinLabel": "Try a PIN",
+      "pinPlaceholder": "4 to 12 digits",
+      "build": "Build PIN block",
+      "pinError": "A PIN is 4 to 12 digits, with no letters.",
+      "card": "Illustration card used for the calculation: {maskedPan}",
+      "footnote": "The last two rows are illustrative values, not real 3DES/AES output. The issuer never sees the original PIN again: matching happens inside the HSM.",
+      "rows": {
+        "pinField": {
+          "easy": "PIN with its length",
+          "expert": "PIN field · ISO format 0",
+          "hint": "A 0, the length, the PIN, then F padding to 16 characters"
+        },
+        "panField": {
+          "easy": "Part of the card number",
+          "expert": "PAN field",
+          "hint": "The last 12 digits, without the check digit"
+        },
+        "clear": {
+          "easy": "Mix the two rows above",
+          "expert": "Clear PIN block = PIN ⊕ PAN",
+          "hint": "The same PIN on another card gives a different result"
+        },
+        "underTpk": {
+          "easy": "Encrypted right at the POS",
+          "expert": "Encrypted under TPK",
+          "hint": "From here on nobody can read the PIN"
+        },
+        "underZpk": {
+          "easy": "The HSM re-encrypts and sends it on",
+          "expert": "Translated TPK → ZPK",
+          "hint": "The key swap happens inside the HSM; the PIN never comes out"
+        }
+      }
     },
-    "pciNeverDo": {
-      "heading": "Never do this",
-      "logPan": {
-        "easy": "Never write down or show a customer's full card number.",
-        "expert": "Never log or persist the full PAN."
-      },
-      "logKey": {
-        "easy": "Never write down a secret key in plain text.",
-        "expert": "Never log or persist clear key material."
-      },
-      "persistPinBlock": {
-        "easy": "Never save a customer's PIN anywhere.",
-        "expert": "Never persist a clear PIN block."
-      },
-      "panInUrl": {
-        "easy": "Never put a card number in a web address.",
-        "expert": "Never put a PAN in a URL."
+    "pci": {
+      "region": "PCI DSS compliance",
+      "heading": "Things the system never does",
+      "items": {
+        "panStorage": {
+          "easy": "Card numbers are stored only encrypted; screens show only the last 4 digits.",
+          "expert": "pan_enc (AES-GCM) + pan_hash (HMAC) + masked_pan"
+        },
+        "cvv": {
+          "easy": "The CVV printed on the back is never stored.",
+          "expert": "CVV recomputed with the CVK, no column stores it"
+        },
+        "pinBlock": {
+          "easy": "No PIN or PIN block is kept once verification is done.",
+          "expert": "field 52 removed from the context after the Security participant"
+        },
+        "keys": {
+          "easy": "Real keys live only in the HSM and always leave it wrapped.",
+          "expert": "key_under_lmk + KCV, no clear key"
+        },
+        "logs": {
+          "easy": "Logs mask card data automatically before writing.",
+          "expert": "Log masker for fields 2, 35, 45, 52, 55"
+        },
+        "audit": {
+          "easy": "Every key operation is logged and needs two people to approve.",
+          "expert": "audit_log append-only · dual control"
+        }
       }
     }
   },

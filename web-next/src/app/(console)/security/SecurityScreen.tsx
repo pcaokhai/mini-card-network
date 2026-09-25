@@ -1,48 +1,55 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { useDisplayMode } from "@/shared/state/display-mode";
 import { KeyTable } from "@/components/security/KeyTable";
-import { RotationStepper } from "@/components/security/RotationStepper";
-import { PinBlockVisualiser } from "@/components/security/PinBlockVisualiser";
 import { PciNeverDoList } from "@/components/security/PciNeverDoList";
+import { PinBlockVisualiser } from "@/components/security/PinBlockVisualiser";
+import { RotationPanel } from "@/components/security/RotationPanel";
+import { useZpkRotation } from "@/components/security/useZpkRotation";
+import { useAcquirerKeys } from "@/shared/api/security-client";
+import { useDisplayMode } from "@/shared/state/display-mode";
 import "@/components/security/security.css";
-
-const ROTATABLE_KEY_TYPES = ["ZPK", "ZAK"] as const;
 
 export function SecurityScreen() {
   const t = useTranslations("security");
-  const mode = useDisplayMode((s) => s.mode);
+  const expert = useDisplayMode((s) => s.mode === "expert");
+  const keys = useAcquirerKeys();
+  const rotation = useZpkRotation();
+  const zpkKcv = keys.data?.find((k) => k.keyType === "ZPK" && k.status === "ACTIVE")?.kcv ?? "";
+  const canRotate = rotation.phase === "idle" || rotation.phase === "failed";
 
   return (
-    <section aria-labelledby="security-heading" className="space-y-6">
-      <h1 id="security-heading" className="text-2xl font-bold">
-        {t("title")}
-      </h1>
-      <section aria-labelledby="security-keys-heading" className="rounded-card border border-border bg-surface p-5">
-        <h2 id="security-keys-heading" className="mb-3 text-base font-semibold">
-          {t("keys.heading")}
-        </h2>
-        <KeyTable />
-      </section>
-      <section
-        aria-labelledby="security-rotation-heading"
-        className="rounded-card border border-border bg-surface p-5"
-      >
-        <h2 id="security-rotation-heading" className="mb-3 text-base font-semibold">
-          {t("rotation.heading")}
-        </h2>
-        <div className="flex flex-wrap gap-4">
-          {ROTATABLE_KEY_TYPES.map((keyType) => (
-            <RotationStepper key={keyType} keyType={keyType} />
-          ))}
-        </div>
-      </section>
-      <div className="rounded-card border border-border bg-surface p-5">
-        <PinBlockVisualiser />
+    <section aria-labelledby="security-heading" className="security-root flex flex-col gap-5">
+      <div>
+        <h1 id="security-heading" className="text-[30px] font-bold tracking-[-0.01em]">
+          {t("title")}
+        </h1>
+        <p className="mt-1.5 text-[15px] text-muted">{t("subtitle")}</p>
       </div>
-      <div className="rounded-card border border-border bg-surface p-5">
-        <PciNeverDoList mode={mode} />
+      {keys.isError && (
+        <p role="alert" className="security-error">
+          {t("loadFailed")}
+        </p>
+      )}
+      <KeyTable
+        keys={keys.data ?? []}
+        expert={expert}
+        canRotate={canRotate}
+        onRotate={rotation.start}
+        newKcv={rotation.phase === "completed" ? (rotation.rotation?.newKcv ?? null) : null}
+      />
+      <div className="security-columns">
+        <RotationPanel
+          rotation={rotation.rotation}
+          phase={rotation.phase}
+          startFailed={rotation.startFailed}
+          lostTrack={rotation.lostTrack}
+          expert={expert}
+          onStart={rotation.start}
+          onReset={rotation.reset}
+        />
+        <PinBlockVisualiser expert={expert} zpkKcv={zpkKcv} />
+        <PciNeverDoList expert={expert} />
       </div>
     </section>
   );
