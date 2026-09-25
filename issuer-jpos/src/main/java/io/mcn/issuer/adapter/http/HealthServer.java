@@ -39,6 +39,8 @@ public final class HealthServer {
                 config -> {
                   config
                       .routes
+                      .before(ApiProblems::assignTraceId)
+                      .exception(Exception.class, ApiProblems::internal)
                       .get("/health/live", ctx -> ctx.contentType("application/json").result(UP))
                       .get(
                           "/health/ready",

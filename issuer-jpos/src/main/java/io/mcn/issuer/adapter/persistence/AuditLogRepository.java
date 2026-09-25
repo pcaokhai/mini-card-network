@@ -76,23 +76,51 @@ public class AuditLogRepository {
       stmt.setString(2, entityId);
       try (ResultSet rs = stmt.executeQuery()) {
         List<AuditLogEntry> entries = new ArrayList<>();
-        while (rs.next()) {
-          entries.add(
-              new AuditLogEntry(
-                  rs.getLong("id"),
-                  rs.getString("actor"),
-                  rs.getString("action"),
-                  rs.getString("entity_type"),
-                  rs.getString("entity_id"),
-                  rs.getString("before_state"),
-                  rs.getString("after_state"),
-                  rs.getTimestamp("created_at").toInstant()));
-        }
+        while (rs.next()) entries.add(toEntry(rs));
         return entries;
       }
     } catch (SQLException e) {
       throw new IllegalStateException("find audit_log by entity failed", e);
     }
+  }
+
+  /**
+   * One page of an entity's audit rows, newest first; {@code beforeId} is the previous page's last
+   * id (docs/04 §2 cursor convention), or null for the first page.
+   */
+  public List<AuditLogEntry> findPageByEntity(
+      String entityType, String entityId, int limit, Long beforeId) {
+    String sql =
+        "SELECT id, actor, action, entity_type, entity_id, before_state, after_state, created_at "
+            + "FROM audit_log WHERE entity_type = ? AND entity_id = ? AND (? IS NULL OR id < ?) "
+            + "ORDER BY id DESC LIMIT ?";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, entityType);
+      stmt.setString(2, entityId);
+      stmt.setObject(3, beforeId, java.sql.Types.BIGINT);
+      stmt.setObject(4, beforeId, java.sql.Types.BIGINT);
+      stmt.setInt(5, limit);
+      try (ResultSet rs = stmt.executeQuery()) {
+        List<AuditLogEntry> entries = new ArrayList<>();
+        while (rs.next()) entries.add(toEntry(rs));
+        return entries;
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException("find audit_log page failed", e);
+    }
+  }
+
+  private static AuditLogEntry toEntry(ResultSet rs) throws SQLException {
+    return new AuditLogEntry(
+        rs.getLong("id"),
+        rs.getString("actor"),
+        rs.getString("action"),
+        rs.getString("entity_type"),
+        rs.getString("entity_id"),
+        rs.getString("before_state"),
+        rs.getString("after_state"),
+        rs.getTimestamp("created_at").toInstant());
   }
 
   private static PGobject jsonb(String json) throws SQLException {

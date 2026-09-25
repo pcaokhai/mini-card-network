@@ -1,12 +1,14 @@
 package io.mcn.issuer.adapter.http;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
+import io.mcn.issuer.adapter.http.ApiProblems.FieldError;
 import io.mcn.issuer.adapter.persistence.AccountRepository;
 import io.mcn.issuer.adapter.persistence.AccountSummary;
+import io.mcn.issuer.adapter.persistence.AuditLogEntry;
 import io.mcn.issuer.adapter.persistence.AuditLogRepository;
+import io.mcn.issuer.adapter.persistence.BusinessDateRepository;
 import io.mcn.issuer.adapter.persistence.Card;
 import io.mcn.issuer.adapter.persistence.CardLimit;
 import io.mcn.issuer.adapter.persistence.CardLimitRepository;
@@ -15,25 +17,36 @@ import io.mcn.issuer.adapter.persistence.IdempotencyRecord;
 import io.mcn.issuer.adapter.persistence.IdempotencyRepository;
 import io.mcn.issuer.adapter.persistence.JournalEntryRow;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
+import io.mcn.issuer.domain.BlockReason;
+import io.mcn.issuer.domain.CardLifecycle;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.UUID;
+import java.util.regex.Pattern;
 import javax.sql.DataSource;
 
 /**
- * `/v1/cards*` Admin API (MCN-308): list/detail, block/unblock, limits (If-Match), ledger.
+ * `/v1/cards*` Admin API (MCN-308): list/detail, block/unblock, limits (If-Match), ledger, audit.
  * Registers into the caller's {@link RoutesConfig} rather than owning a Javalin instance - Javalin
  * 7 only exposes route registration inside {@code Javalin.create(config -> ...)}, so this shares
  * the one app/port the issuer Admin API already runs on (docs/04 §1: issuer:8081), same as {@link
  * HealthServer}.
+ *
+ * <p>Card ETags version the limits (that is what If-Match protects); balances and status are never
+ * served from a cache because every response here is {@code Cache-Control: no-store}.
  */
 public final class CardAdminController {
+  private static final Pattern CARD_REF = Pattern.compile("^crd_[A-Za-z0-9]{10,32}$");
+  private static final int DEFAULT_PAGE_SIZE = 50;
+  private static final int MAX_PAGE_SIZE = 200;
+
   private final DataSource dataSource;
   private final CardRepository cards;
   private final AccountRepository accounts;
@@ -41,7 +54,10 @@ public final class CardAdminController {
   private final AuditLogRepository auditLog;
   private final IdempotencyRepository idempotency;
   private final LedgerRepository ledger;
+  private final BusinessDateRepository businessDates;
   private final ObjectMapper mapper = new ObjectMapper();
+
+  private record Paging(int limit, Long cursor) {}
 
   public CardAdminController(
       DataSource dataSource,
@@ -50,7 +66,8 @@ public final class CardAdminController {
       CardLimitRepository cardLimits,
       AuditLogRepository auditLog,
       IdempotencyRepository idempotency,
-      LedgerRepository ledger) {
+      LedgerRepository ledger,
+      BusinessDateRepository businessDates) {
     this.dataSource = dataSource;
     this.cards = cards;
     this.accounts = accounts;
@@ -58,32 +75,50 @@ public final class CardAdminController {
     this.auditLog = auditLog;
     this.idempotency = idempotency;
     this.ledger = ledger;
+    this.businessDates = businessDates;
   }
 
   public void registerRoutes(RoutesConfig routes) {
     routes
+        .before("/v1/cards", CardAdminController::noStore)
+        .before("/v1/cards/*", CardAdminController::noStore)
+        .before("/v1/cards/{cardRef}", CardAdminController::rejectMalformedCardRef)
+        .before("/v1/cards/{cardRef}/{resource}", CardAdminController::rejectMalformedCardRef)
         .get("/v1/cards", this::listCards)
         .get("/v1/cards/{cardRef}", this::getCard)
         .post("/v1/cards/{cardRef}/blocks", ctx -> changeBlockStatus(ctx, true))
         .delete("/v1/cards/{cardRef}/blocks", ctx -> changeBlockStatus(ctx, false))
         .put("/v1/cards/{cardRef}/limits", this::updateLimits)
-        .get("/v1/cards/{cardRef}/ledger", this::getLedger);
+        .get("/v1/cards/{cardRef}/ledger", this::getLedger)
+        .get("/v1/cards/{cardRef}/audit", this::getAudit);
+  }
+
+  private static void noStore(Context ctx) {
+    ctx.header("Cache-Control", "no-store");
+  }
+
+  private static void rejectMalformedCardRef(Context ctx) {
+    if (CARD_REF.matcher(ctx.pathParam("cardRef")).matches()) return;
+    ApiProblems.validation(
+        ctx, List.of(new FieldError("cardRef", "must match " + CARD_REF.pattern())));
+    ctx.skipRemainingHandlers();
   }
 
   private void listCards(Context ctx) {
-    List<Map<String, Object>> summaries = cards.findAll().stream().map(this::cardSummary).toList();
-    ctx.json(summaries);
+    LocalDate businessDate = businessDates.current();
+    ctx.json(cards.findAll().stream().map(c -> cardSummary(c, businessDate)).toList());
   }
 
   private void getCard(Context ctx) {
     Optional<Card> card = cards.findByCardRef(ctx.pathParam("cardRef"));
     if (card.isEmpty()) {
-      notFound(ctx, "card");
+      notFound(ctx);
       return;
     }
     List<CardLimit> limits = cardLimits.findAllForCard(card.get().id());
-    ctx.header("ETag", etagFor(limits));
-    ctx.json(cardDetail(card.get(), limits));
+    Map<String, Object> body = cardDetail(card.get(), limits, businessDates.current());
+    ctx.header("ETag", etagFor(limits, body));
+    ctx.json(body);
   }
 
   /** Shared POST/DELETE .../blocks handler; {@code block} picks which state transition runs. */
@@ -95,65 +130,72 @@ public final class CardAdminController {
     }
     String route = ctx.method() + " " + ctx.path();
     String requestHash = sha256(ctx.body());
+    if (replayIfPresent(ctx, route, idempotencyKey, requestHash)) return;
 
-    Optional<IdempotencyRecord> replay = replayIfPresent(ctx, route, idempotencyKey, requestHash);
-    if (replay.isPresent()) return;
-
-    Optional<Card> maybeCard = cards.findByCardRef(ctx.pathParam("cardRef"));
-    if (maybeCard.isEmpty()) {
-      notFound(ctx, "card");
-      return;
-    }
-    Card card = maybeCard.get();
-    String newStatus = block ? "BLOCKED" : "ACTIVE";
-    String errorIfNot = block ? "ACTIVE" : "BLOCKED";
-    if (!card.status().equals(errorIfNot)) {
-      conflict(
+    Optional<BlockReason> reason = block ? blockReason(ctx.body()) : Optional.empty();
+    if (block && reason.isEmpty()) {
+      ApiProblems.validation(
           ctx,
-          "card "
-              + card.cardRef()
-              + " is "
-              + card.status()
-              + ", cannot "
-              + (block ? "block" : "unblock")
-              + " it");
+          List.of(
+              new FieldError(
+                  "reason", "must be one of CUSTOMER_REQUEST, LOST, STOLEN, FRAUD_SUSPECTED")));
       return;
     }
-    String action = block ? "CARD_BLOCKED" : "CARD_UNBLOCKED";
-    String actor = actor(ctx);
 
-    Map<String, Object> responseBody;
     try (Connection conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
-      cards.updateStatus(conn, card.id(), newStatus);
-      auditLog.record(
-          conn,
-          actor,
-          action,
-          "card",
-          card.cardRef(),
-          jsonOf(Map.of("status", card.status())),
-          jsonOf(Map.of("status", newStatus)));
-      // ponytail: build the updated Card in memory rather than re-reading it here - a re-read
-      // would use a fresh connection and, under READ COMMITTED, not see this transaction's own
-      // uncommitted UPDATE yet.
-      Card updated =
-          new Card(
-              card.id(),
-              card.accountId(),
-              card.bin(),
-              card.panLast4(),
-              card.expiryYymm(),
-              newStatus,
-              card.cardRef(),
-              card.holderName());
-      responseBody = cardDetail(updated, cardLimits.findAllForCard(updated.id()));
-      idempotency.store(conn, idempotencyKey, route, requestHash, 200, jsonOf(responseBody));
-      conn.commit();
-    } catch (java.sql.SQLException e) {
+      transitionUnderLock(ctx, conn, reason, idempotencyKey, route, requestHash);
+    } catch (SQLException e) {
       throw new IllegalStateException("block/unblock card failed", e);
     }
-    ctx.status(200).json(responseBody);
+  }
+
+  /**
+   * Checks and changes the status under the card's row lock, so two operators can't both pass the
+   * "is it ACTIVE?" check. An empty {@code reason} means unblock.
+   */
+  private void transitionUnderLock(
+      Context ctx,
+      Connection conn,
+      Optional<BlockReason> reason,
+      String idempotencyKey,
+      String route,
+      String requestHash)
+      throws SQLException {
+    Optional<Card> locked = cards.lockByCardRef(conn, ctx.pathParam("cardRef"));
+    if (locked.isEmpty()) {
+      conn.rollback();
+      notFound(ctx);
+      return;
+    }
+    Card card = locked.get();
+    LocalDate businessDate = businessDates.current();
+    String current = CardLifecycle.effectiveStatus(card.status(), card.expiryYymm(), businessDate);
+    boolean block = reason.isPresent();
+    if (!current.equals(block ? "ACTIVE" : "BLOCKED")) {
+      conn.rollback();
+      conflict(ctx, card.cardRef(), current, block);
+      return;
+    }
+    String newStatus = reason.map(BlockReason::cardStatus).orElse("ACTIVE");
+    Map<String, Object> after = new LinkedHashMap<>();
+    after.put("status", newStatus);
+    reason.ifPresent(r -> after.put("reason", r.name()));
+
+    cards.updateStatus(conn, card.id(), newStatus);
+    auditLog.record(
+        conn,
+        actor(ctx),
+        block ? "CARD_BLOCKED" : "CARD_UNBLOCKED",
+        "card",
+        card.cardRef(),
+        jsonOf(Map.of("status", current)),
+        jsonOf(after));
+    List<CardLimit> limits = cardLimits.findAllForCard(conn, card.id());
+    Map<String, Object> body = cardDetail(withStatus(card, newStatus), limits, businessDate);
+    idempotency.store(conn, idempotencyKey, route, requestHash, 200, jsonOf(body));
+    conn.commit();
+    ctx.status(200).json(body);
   }
 
   private void updateLimits(Context ctx) {
@@ -162,133 +204,198 @@ public final class CardAdminController {
       insufficientIdempotencyKey(ctx);
       return;
     }
-    Optional<Card> maybeCard = cards.findByCardRef(ctx.pathParam("cardRef"));
-    if (maybeCard.isEmpty()) {
-      notFound(ctx, "card");
+    // Replay before If-Match: a retried successful save carries the ETag it just made stale.
+    String route = ctx.method() + " " + ctx.path();
+    String requestHash = sha256(ctx.body());
+    if (replayIfPresent(ctx, route, idempotencyKey, requestHash)) return;
+
+    Optional<Card> card = cards.findByCardRef(ctx.pathParam("cardRef"));
+    if (card.isEmpty()) {
+      notFound(ctx);
       return;
     }
-    Card card = maybeCard.get();
-    List<CardLimit> currentLimits = cardLimits.findAllForCard(card.id());
-    String ifMatch = ctx.header("If-Match");
-    if (ifMatch == null || !ifMatch.equals(etagFor(currentLimits))) {
+    String currency = accounts.findById(card.get().accountId()).orElseThrow().currency();
+    switch (CardLimitsRequest.parse(ctx.body(), currency)) {
+      case CardLimitsRequest.Invalid invalid -> ApiProblems.validation(ctx, invalid.errors());
+      case CardLimitsRequest.Valid valid -> {
+        try (Connection conn = dataSource.getConnection()) {
+          conn.setAutoCommit(false);
+          saveLimitsUnderLock(ctx, conn, valid.request(), idempotencyKey, route, requestHash);
+        } catch (SQLException e) {
+          throw new IllegalStateException("update card limits failed", e);
+        }
+      }
+    }
+  }
+
+  /**
+   * Compares If-Match with the limits read under the card's row lock and upserts in the same
+   * transaction: of two concurrent PUTs carrying one ETag, the second sees the first's limits and
+   * gets 412 (CARDS-G6).
+   */
+  private void saveLimitsUnderLock(
+      Context ctx,
+      Connection conn,
+      CardLimitsRequest request,
+      String idempotencyKey,
+      String route,
+      String requestHash)
+      throws SQLException {
+    Card card = cards.lockByCardRef(conn, ctx.pathParam("cardRef")).orElseThrow();
+    List<CardLimit> currentLimits = cardLimits.findAllForCard(conn, card.id());
+    if (!ifMatchAccepts(ctx.header("If-Match"), currentLimits)) {
+      conn.rollback();
       preconditionFailed(ctx);
       return;
     }
-
-    JsonNode body;
-    try {
-      body = mapper.readTree(ctx.body());
-    } catch (Exception e) {
-      validationError(ctx, "body must be valid JSON");
-      return;
-    }
-    long perTxnAmount = body.path("perTransactionAmount").path("amount").asLong(-1);
-    long dailyAmount = body.path("dailyAmount").path("amount").asLong(-1);
-    Integer dailyCount =
-        body.path("dailyCount").isMissingNode() || body.path("dailyCount").isNull()
-            ? null
-            : body.path("dailyCount").asInt();
-    if (perTxnAmount <= 0 || dailyAmount <= 0) {
-      validationError(ctx, "dailyAmount.amount and perTransactionAmount.amount must be > 0");
-      return;
-    }
-
-    String route = ctx.method() + " " + ctx.path();
-    String requestHash = sha256(ctx.body());
-    Optional<IdempotencyRecord> replay = replayIfPresent(ctx, route, idempotencyKey, requestHash);
-    if (replay.isPresent()) return;
-
-    // ponytail: computed in memory instead of re-read post-upsert - a re-read would use a fresh
-    // connection and, under READ COMMITTED, not see this transaction's own uncommitted upsert yet.
+    cardLimits.upsertAllLimits(
+        conn,
+        card.id(),
+        request.perTransactionAmount(),
+        request.dailyAmount(),
+        request.dailyCount());
+    // ponytail: built in memory rather than re-read - the upsert above is what's now stored.
     List<CardLimit> newLimits =
         List.of(
-            new CardLimit("ALL", "PER_TXN", perTxnAmount, null),
-            new CardLimit("ALL", "DAILY", dailyAmount, dailyCount));
-
-    Map<String, Object> responseBody;
-    try (Connection conn = dataSource.getConnection()) {
-      conn.setAutoCommit(false);
-      cardLimits.upsertAllLimits(conn, card.id(), perTxnAmount, dailyAmount, dailyCount);
-      auditLog.record(
-          conn,
-          actor(ctx),
-          "CARD_LIMITS_UPDATED",
-          "card",
-          card.cardRef(),
-          jsonOf(limitsAsMap(currentLimits)),
-          jsonOf(limitsAsMap(newLimits)));
-      responseBody = cardDetail(card, newLimits);
-      idempotency.store(conn, idempotencyKey, route, requestHash, 200, jsonOf(responseBody));
-      conn.commit();
-    } catch (java.sql.SQLException e) {
-      throw new IllegalStateException("update card limits failed", e);
-    }
-    ctx.header("ETag", etagFor(newLimits));
-    ctx.status(200).json(responseBody);
+            new CardLimit("ALL", "PER_TXN", request.perTransactionAmount(), null),
+            new CardLimit("ALL", "DAILY", request.dailyAmount(), request.dailyCount()));
+    String currency = accounts.findById(card.accountId()).orElseThrow().currency();
+    auditLog.record(
+        conn,
+        actor(ctx),
+        "CARD_LIMITS_UPDATED",
+        "card",
+        card.cardRef(),
+        jsonOf(limitsAsMap(currentLimits, currency)),
+        jsonOf(limitsAsMap(newLimits, currency)));
+    Map<String, Object> body = cardDetail(card, newLimits, businessDates.current());
+    idempotency.store(conn, idempotencyKey, route, requestHash, 200, jsonOf(body));
+    conn.commit();
+    ctx.header("ETag", etagFor(newLimits, body));
+    ctx.status(200).json(body);
   }
 
   private void getLedger(Context ctx) {
-    Optional<Card> maybeCard = cards.findByCardRef(ctx.pathParam("cardRef"));
-    if (maybeCard.isEmpty()) {
-      notFound(ctx, "card");
+    Optional<Paging> paging = paging(ctx);
+    if (paging.isEmpty()) return;
+    Optional<Card> card = cards.findByCardRef(ctx.pathParam("cardRef"));
+    if (card.isEmpty()) {
+      notFound(ctx);
       return;
     }
-    Card card = maybeCard.get();
-    int limit = Optional.ofNullable(ctx.queryParam("limit")).map(Integer::parseInt).orElse(50);
-    Long cursor = Optional.ofNullable(ctx.queryParam("cursor")).map(Long::parseLong).orElse(null);
-
-    List<JournalEntryRow> rows = ledger.findByAccount(dataSource, card.accountId(), limit, cursor);
-    List<Map<String, Object>> items = rows.stream().map(this::journalEntry).toList();
+    int limit = paging.get().limit();
+    List<JournalEntryRow> rows =
+        ledger.findByAccount(dataSource, card.get().accountId(), limit, paging.get().cursor());
     String nextCursor =
         rows.size() == limit ? String.valueOf(rows.get(rows.size() - 1).journalId()) : null;
+    ctx.json(page(rows.stream().map(this::journalEntry).toList(), nextCursor));
+  }
 
-    Map<String, Object> body = new LinkedHashMap<>();
-    body.put("items", items);
-    body.put("nextCursor", nextCursor);
-    ctx.json(body);
+  private void getAudit(Context ctx) {
+    Optional<Paging> paging = paging(ctx);
+    if (paging.isEmpty()) return;
+    String cardRef = ctx.pathParam("cardRef");
+    if (cards.findByCardRef(cardRef).isEmpty()) {
+      notFound(ctx);
+      return;
+    }
+    int limit = paging.get().limit();
+    List<AuditLogEntry> rows =
+        auditLog.findPageByEntity("card", cardRef, limit, paging.get().cursor());
+    String nextCursor =
+        rows.size() == limit ? String.valueOf(rows.get(rows.size() - 1).id()) : null;
+    ctx.json(page(rows.stream().map(this::auditEntry).toList(), nextCursor));
+  }
+
+  /** {@code limit} 1-200 (default 50) and a positive integer {@code cursor} (CARDS-G8). */
+  private static Optional<Paging> paging(Context ctx) {
+    String rawLimit = ctx.queryParam("limit");
+    String rawCursor = ctx.queryParam("cursor");
+    Optional<Long> limit =
+        rawLimit == null ? Optional.of((long) DEFAULT_PAGE_SIZE) : positiveLong(rawLimit);
+    Optional<Long> cursor = rawCursor == null ? Optional.empty() : positiveLong(rawCursor);
+    List<FieldError> errors = new ArrayList<>();
+    if (limit.isEmpty() || limit.get() > MAX_PAGE_SIZE) {
+      errors.add(new FieldError("limit", "must be an integer from 1 to " + MAX_PAGE_SIZE));
+    }
+    if (rawCursor != null && cursor.isEmpty()) {
+      errors.add(new FieldError("cursor", "must be a nextCursor from a previous page"));
+    }
+    if (!errors.isEmpty()) {
+      ApiProblems.validation(ctx, errors);
+      return Optional.empty();
+    }
+    return Optional.of(new Paging(limit.get().intValue(), cursor.orElse(null)));
+  }
+
+  private static Optional<Long> positiveLong(String raw) {
+    try {
+      long value = Long.parseLong(raw);
+      return value > 0 ? Optional.of(value) : Optional.empty();
+    } catch (NumberFormatException e) {
+      return Optional.empty();
+    }
+  }
+
+  private Optional<BlockReason> blockReason(String body) {
+    try {
+      return BlockReason.parse(mapper.readTree(body).path("reason").asText(null));
+    } catch (Exception e) {
+      return Optional.empty();
+    }
   }
 
   // ---- replay / idempotency ----------------------------------------------------------------
 
-  private Optional<IdempotencyRecord> replayIfPresent(
-      Context ctx, String route, String key, String requestHash) {
+  /** Answers from the stored record (or 422 on a body mismatch); true when it answered. */
+  private boolean replayIfPresent(Context ctx, String route, String key, String requestHash) {
     Optional<IdempotencyRecord> stored = idempotency.find(key, route);
-    if (stored.isEmpty()) return Optional.empty();
+    if (stored.isEmpty()) return false;
     IdempotencyRecord record = stored.get();
     if (!record.requestHash().equals(requestHash)) {
       idempotencyKeyMismatch(ctx);
-      return stored;
+      return true;
     }
     ctx.status(record.status()).contentType("application/json").result(record.body());
-    return stored;
+    return true;
   }
 
   // ---- response shaping ----------------------------------------------------------------------
 
-  private Map<String, Object> cardSummary(Card card) {
+  private Map<String, Object> cardSummary(Card card, LocalDate businessDate) {
     Map<String, Object> m = new LinkedHashMap<>();
     m.put("cardRef", card.cardRef());
     m.put("maskedPan", maskedPan(card));
     m.put("holderName", card.holderName());
-    m.put("status", card.status());
+    m.put("status", CardLifecycle.effectiveStatus(card.status(), card.expiryYymm(), businessDate));
     m.put("expiry", expiryDisplay(card.expiryYymm()));
     return m;
   }
 
-  private Map<String, Object> cardDetail(Card card, List<CardLimit> limits) {
-    Map<String, Object> m = cardSummary(card);
+  private Map<String, Object> cardDetail(
+      Card card, List<CardLimit> limits, LocalDate businessDate) {
+    Map<String, Object> m = cardSummary(card, businessDate);
     AccountSummary account = accounts.findById(card.accountId()).orElseThrow();
     m.put("ledgerBalance", money(account.ledgerBalance(), account.currency()));
     m.put("availableBalance", money(account.availableBalance(), account.currency()));
     // ponytail: no PREAUTH flow ships yet (MCN-603), so auth_hold is always empty for now.
     m.put("holds", List.of());
     m.put("limits", limitsAsMap(limits, account.currency()));
-    m.put("usedToday", money(cardLimits.amountToday(card.id()), account.currency()));
+    long usedToday = cardLimits.amountToday(card.id(), businessDate);
+    m.put("usedToday", money(usedToday, account.currency()));
     return m;
   }
 
-  private Map<String, Object> limitsAsMap(List<CardLimit> limits) {
-    return limitsAsMap(limits, "704");
+  private static Card withStatus(Card card, String status) {
+    return new Card(
+        card.id(),
+        card.accountId(),
+        card.bin(),
+        card.panLast4(),
+        card.expiryYymm(),
+        status,
+        card.cardRef(),
+        card.holderName());
   }
 
   private Map<String, Object> limitsAsMap(List<CardLimit> limits, String currency) {
@@ -328,6 +435,24 @@ public final class CardAdminController {
     return m;
   }
 
+  private Map<String, Object> auditEntry(AuditLogEntry row) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("auditId", String.valueOf(row.id()));
+    m.put("occurredAt", row.createdAt().toString());
+    m.put("actor", row.actor());
+    m.put("action", row.action());
+    m.put("before", jsonTree(row.beforeState()));
+    m.put("after", jsonTree(row.afterState()));
+    return m;
+  }
+
+  private static Map<String, Object> page(List<Map<String, Object>> items, String nextCursor) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("items", items);
+    body.put("nextCursor", nextCursor);
+    return body;
+  }
+
   private static Map<String, Object> money(long amount, String currency) {
     Map<String, Object> m = new LinkedHashMap<>();
     m.put("amount", amount);
@@ -347,7 +472,25 @@ public final class CardAdminController {
     return yymm.substring(2, 4) + "/" + yymm.substring(0, 2);
   }
 
-  private String etagFor(List<CardLimit> limits) {
+  // ---- ETag: "<limits version>-<representation hash>" ------------------------------------------
+
+  /**
+   * The first part versions the limits and is all If-Match compares; the second covers the whole
+   * body, so a direct caller's If-None-Match never gets a 304 after a balance or status change.
+   */
+  private String etagFor(List<CardLimit> limits, Map<String, Object> body) {
+    return '"' + limitsVersion(limits) + '-' + sha256(jsonOf(body)).substring(0, 16) + '"';
+  }
+
+  private static boolean ifMatchAccepts(String ifMatch, List<CardLimit> currentLimits) {
+    if (ifMatch == null) return false;
+    String opaque = ifMatch.trim().replace("\"", "");
+    int dash = opaque.indexOf('-');
+    String version = dash < 0 ? opaque : opaque.substring(0, dash);
+    return version.equals(limitsVersion(currentLimits));
+  }
+
+  private static String limitsVersion(List<CardLimit> limits) {
     StringBuilder sb = new StringBuilder();
     limits.stream()
         .sorted((a, b) -> a.period().compareTo(b.period()))
@@ -359,7 +502,7 @@ public final class CardAdminController {
                     .append(':')
                     .append(l.maxCount())
                     .append(';'));
-    return '"' + sha256(sb.toString()) + '"';
+    return sha256(sb.toString());
   }
 
   private static String actor(Context ctx) {
@@ -375,6 +518,14 @@ public final class CardAdminController {
     }
   }
 
+  private Object jsonTree(String json) {
+    try {
+      return json == null ? null : mapper.readValue(json, Map.class);
+    } catch (Exception e) {
+      throw new IllegalStateException("parse audit json failed", e);
+    }
+  }
+
   private static String sha256(String input) {
     try {
       byte[] digest =
@@ -387,34 +538,24 @@ public final class CardAdminController {
     }
   }
 
-  // ---- RFC 9457 problem responses -------------------------------------------------------------
+  // ---- problems (shaped by ApiProblems) --------------------------------------------------------
 
-  private void problem(Context ctx, int status, String suffix, String title, String detail) {
-    Map<String, Object> body = new LinkedHashMap<>();
-    body.put("type", "https://mcn.local/problems/" + suffix);
-    body.put("title", title);
-    body.put("status", status);
-    body.put("detail", detail);
-    body.put("instance", ctx.path());
-    body.put("traceId", UUID.randomUUID().toString().replace("-", ""));
-    ctx.status(status).contentType("application/problem+json").json(body);
+  private static void notFound(Context ctx) {
+    ApiProblems.send(
+        ctx, 404, "not-found", "card not found", "card not found: " + ctx.pathParam("cardRef"));
   }
 
-  private void notFound(Context ctx, String entity) {
-    problem(
+  private static void conflict(Context ctx, String cardRef, String status, boolean block) {
+    ApiProblems.send(
         ctx,
-        404,
-        "not-found",
-        entity + " not found",
-        entity + " not found: " + ctx.pathParam("cardRef"));
+        409,
+        "conflict",
+        "State transition not allowed",
+        "card " + cardRef + " is " + status + ", cannot " + (block ? "block" : "unblock") + " it");
   }
 
-  private void conflict(Context ctx, String detail) {
-    problem(ctx, 409, "conflict", "State transition not allowed", detail);
-  }
-
-  private void insufficientIdempotencyKey(Context ctx) {
-    problem(
+  private static void insufficientIdempotencyKey(Context ctx) {
+    ApiProblems.send(
         ctx,
         400,
         "insufficient-idempotency-key",
@@ -422,8 +563,8 @@ public final class CardAdminController {
         ctx.method() + " " + ctx.path() + " requires Idempotency-Key.");
   }
 
-  private void idempotencyKeyMismatch(Context ctx) {
-    problem(
+  private static void idempotencyKeyMismatch(Context ctx) {
+    ApiProblems.send(
         ctx,
         422,
         "idempotency-key-mismatch",
@@ -431,16 +572,12 @@ public final class CardAdminController {
         "The same Idempotency-Key was used with a different request body.");
   }
 
-  private void preconditionFailed(Context ctx) {
-    problem(
+  private static void preconditionFailed(Context ctx) {
+    ApiProblems.send(
         ctx,
         412,
         "precondition-failed",
         "ETag mismatch",
-        "If-Match does not match the current ETag.");
-  }
-
-  private void validationError(Context ctx, String detail) {
-    problem(ctx, 400, "validation-error", "Request body invalid", detail);
+        "If-Match does not match the card's current limits version.");
   }
 }
