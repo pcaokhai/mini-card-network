@@ -22,6 +22,9 @@ public final class TxnContextKeys {
   public static final String TRAN_ID = "TRAN_ID";
   public static final String AUTH_CODE = "AUTH_CODE";
 
+  /** Available balance answered in DE 54 to a balance inquiry (docs/03 §4 C6). */
+  public static final String BALANCE = "BALANCE";
+
   // MCN-402: DE 90 (original data elements) decoded by ParseReversal.
   public static final String ORIGINAL_MTI = "ORIGINAL_MTI";
   public static final String ORIGINAL_STAN = "ORIGINAL_STAN";

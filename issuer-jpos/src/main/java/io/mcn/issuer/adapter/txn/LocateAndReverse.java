@@ -1,7 +1,7 @@
 package io.mcn.issuer.adapter.txn;
 
 import com.zaxxer.hikari.HikariDataSource;
-import io.mcn.issuer.adapter.persistence.CardRepository;
+import io.mcn.issuer.adapter.persistence.AccountLockRepository;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
 import io.mcn.issuer.adapter.persistence.OriginalTransactionRow;
 import io.mcn.issuer.adapter.persistence.ReversalWithoutOriginalRepository;
@@ -20,19 +20,21 @@ import org.jpos.util.Destroyable;
 
 /**
  * The domain core of a reversal (MCN-402): locates the original transaction by DE 90 (docs/03 §7.3)
- * and takes one of three branches - found and not yet reversed (posts the reversing journal, marks
- * {@code REVERSED}), found and already {@code REVERSED} (idempotent no-op, per docs/03 §7.3 "a
- * reversal of an already reversed transaction is acknowledged idempotently with no ledger effect"),
- * or not found ({@code reversal_without_original}, so a later-arriving original is declined RC 94
- * by {@code Deduplicate}). No branch sets {@code RESPONSE_CODE}; a failure (original still in
- * flight, DB error) aborts, and {@code RespondReversal} then answers 96 so the acquirer repeats.
+ * and takes one of three branches - found and not yet reversed (marks {@code REVERSED}, posts the
+ * mirror of the original's journal and moves the account balance by the same amount, all in one
+ * transaction: a purchase reversal gives the money back, a refund reversal takes it back), found
+ * and already {@code REVERSED} (idempotent no-op, per docs/03 §7.3 "a reversal of an already
+ * reversed transaction is acknowledged idempotently with no ledger effect"), or not found ({@code
+ * reversal_without_original}, so a later-arriving original is declined RC 94 by {@code
+ * Deduplicate}). No branch sets {@code RESPONSE_CODE}; a failure (original still in flight, DB
+ * error) aborts, and {@code RespondReversal} then answers 96 so the acquirer repeats.
  */
 public class LocateAndReverse implements TransactionParticipant, Configurable, Destroyable {
 
   private TranLogRepository tranLogRepository;
   private LedgerRepository ledgerRepository;
   private ReversalWithoutOriginalRepository reversalWithoutOriginalRepository;
-  private CardRepository cardRepository;
+  private AccountLockRepository accountLockRepository;
   private DataSource dataSource;
   private HikariDataSource ownedDataSource;
 
@@ -47,7 +49,7 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
         tranLogRepository,
         ledgerRepository,
         new ReversalWithoutOriginalRepository(dataSource),
-        new CardRepository(dataSource),
+        new AccountLockRepository(dataSource),
         dataSource);
   }
 
@@ -60,7 +62,7 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
         tranLogRepository,
         ledgerRepository,
         reversalWithoutOriginalRepository,
-        new CardRepository(dataSource),
+        new AccountLockRepository(dataSource),
         dataSource);
   }
 
@@ -68,12 +70,12 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
       TranLogRepository tranLogRepository,
       LedgerRepository ledgerRepository,
       ReversalWithoutOriginalRepository reversalWithoutOriginalRepository,
-      CardRepository cardRepository,
+      AccountLockRepository accountLockRepository,
       DataSource dataSource) {
     this.tranLogRepository = tranLogRepository;
     this.ledgerRepository = ledgerRepository;
     this.reversalWithoutOriginalRepository = reversalWithoutOriginalRepository;
-    this.cardRepository = cardRepository;
+    this.accountLockRepository = accountLockRepository;
     this.dataSource = dataSource;
   }
 
@@ -84,7 +86,7 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
     this.tranLogRepository = new TranLogRepository(ownedDataSource);
     this.ledgerRepository = new LedgerRepository();
     this.reversalWithoutOriginalRepository = new ReversalWithoutOriginalRepository(ownedDataSource);
-    this.cardRepository = new CardRepository(ownedDataSource);
+    this.accountLockRepository = new AccountLockRepository(ownedDataSource);
   }
 
   @Override
@@ -132,23 +134,13 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
       return PREPARED;
     }
 
-    long accountId =
-        cardRepository
-            .findById(original.cardId())
-            .orElseThrow(
-                () -> new IllegalStateException("card " + original.cardId() + " not found"))
-            .accountId();
-
     try (Connection conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
       if (tranLogRepository.markReversed(conn, original.id(), original.businessDate())) {
-        ledgerRepository.postReversal(
-            conn,
-            original.id(),
-            original.businessDate(),
-            accountId,
-            original.amount(),
-            original.currency());
+        // Balances change only with their journal, in its transaction (docs/10 §5).
+        ledgerRepository
+            .postReversalOf(conn, original.id(), original.businessDate())
+            .forEach((accountId, delta) -> accountLockRepository.adjust(conn, accountId, delta));
       }
       conn.commit();
     } catch (SQLException e) {

@@ -24,7 +24,7 @@ class LedgerRepositoryReversalTest {
           .withPassword("test");
 
   @Test
-  void postReversal_creditsAccountDebitsSuspense_MCN_402_AC1() throws Exception {
+  void postReversalOf_aPurchase_creditsAccountDebitsSuspense_MCN_402_AC1() throws Exception {
     var ds = TestDataSources.migrated(postgres);
     var accounts = new AccountRepository(ds);
     long accountId = accounts.insert("ACC-REV-1", "704", 0L);
@@ -36,8 +36,11 @@ class LedgerRepositoryReversalTest {
     long journalId;
     try (Connection conn = ds.getConnection()) {
       conn.setAutoCommit(false);
-      journalId = repo.postReversal(conn, tranId, LocalDate.now(), accountId, 10_000L, "704");
+      repo.postPurchase(conn, tranId, LocalDate.now(), accountId, 10_000L, "704");
+      var deltas = repo.postReversalOf(conn, tranId, LocalDate.now());
       conn.commit();
+      assertThat(deltas).containsExactly(java.util.Map.entry(accountId, 10_000L));
+      journalId = latestReversalJournal(conn);
     }
     try (Connection conn = ds.getConnection();
         PreparedStatement stmt =
@@ -64,8 +67,54 @@ class LedgerRepositoryReversalTest {
             new Posting(null, "SETTLEMENT_SUSPENSE", "D", 10_000L));
   }
 
+  @Test
+  @org.junit.jupiter.api.DisplayName("POS-G17: reversing a refund debits the account back")
+  void postReversalOf_aRefund_debitsAccountCreditsSuspense() throws Exception {
+    var ds = TestDataSources.migrated(postgres);
+    long accountId = new AccountRepository(ds).insert("ACC-REV-2", "704", 0L);
+    long tranId = seedTranLog(ds, LocalDate.now());
+    var repo = new LedgerRepository();
+
+    try (Connection conn = ds.getConnection()) {
+      conn.setAutoCommit(false);
+      repo.postRefund(conn, tranId, LocalDate.now(), accountId, 7_000L, "704");
+      var deltas = repo.postReversalOf(conn, tranId, LocalDate.now());
+      conn.commit();
+
+      assertThat(deltas).containsExactly(java.util.Map.entry(accountId, -7_000L));
+    }
+  }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName("POS-G17: an original with no journal reverses to nothing")
+  void postReversalOf_anOriginalThatPostedNothing_writesNoJournal() throws Exception {
+    var ds = TestDataSources.migrated(postgres);
+    long tranId = seedTranLog(ds, LocalDate.now());
+
+    try (Connection conn = ds.getConnection()) {
+      conn.setAutoCommit(false);
+      assertThat(new LedgerRepository().postReversalOf(conn, tranId, LocalDate.now())).isEmpty();
+      conn.commit();
+    }
+  }
+
+  private static long latestReversalJournal(Connection conn) throws Exception {
+    try (var stmt =
+            conn.prepareStatement(
+                "SELECT max(id) FROM journal_entry WHERE entry_type = 'REVERSAL'");
+        var rs = stmt.executeQuery()) {
+      rs.next();
+      return rs.getLong(1);
+    }
+  }
+
+  private static final java.util.concurrent.atomic.AtomicInteger NEXT_STAN =
+      new java.util.concurrent.atomic.AtomicInteger(777);
+
+  /** A fresh STAN per call: the tests share one container, and the dedupe key must stay unique. */
   private static long seedTranLog(javax.sql.DataSource ds, LocalDate businessDate) {
     var repo = new TranLogRepository(ds);
+    String stan = String.format("%06d", NEXT_STAN.getAndIncrement());
     return repo.insert(
         new TranLogRow(
             businessDate,
@@ -75,9 +124,9 @@ class LedgerRepositoryReversalTest {
             "970499",
             "00000042",
             "GOCPHO000000001",
-            "000777",
+            stan,
             "0922140000",
-            "RRN000000777",
+            "RRN000" + stan,
             10_000L,
             "704",
             null,

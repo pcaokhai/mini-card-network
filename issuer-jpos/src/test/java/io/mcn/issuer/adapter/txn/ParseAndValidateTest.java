@@ -51,4 +51,33 @@ class ParseAndValidateTest {
     assertThat(result & PREPARED).isEqualTo(PREPARED);
     assertThat(ctx.<Long>get(TxnContextKeys.AMOUNT)).isEqualTo(10000L);
   }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName(
+      "POS-G17: a balance inquiry needs no DE 4 and carries amount 0")
+  void should_prepareWithZeroAmount_when_balanceInquiryHasNoDe4() throws Exception {
+    ISOMsg msg = new ISOMsg("0200");
+    msg.set(3, "310000");
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.REQUEST, msg);
+
+    int result = new ParseAndValidate().prepare(1L, ctx);
+
+    assertThat(result & PREPARED).isEqualTo(PREPARED);
+    assertThat(ctx.<Long>get(TxnContextKeys.AMOUNT)).isZero();
+    assertThat(ctx.<String>get(TxnContextKeys.PROCESSING_CODE)).isEqualTo("310000");
+  }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName("POS-G17: a refund still needs a positive DE 4")
+  void should_abortRc13_when_refundAmountIsZero() throws Exception {
+    ISOMsg msg = new ISOMsg("0200");
+    msg.set(3, "200000");
+    msg.set(4, "000000000000");
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.REQUEST, msg);
+
+    assertThat(new ParseAndValidate().prepare(1L, ctx)).isEqualTo(ABORTED);
+    assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("13");
+  }
 }

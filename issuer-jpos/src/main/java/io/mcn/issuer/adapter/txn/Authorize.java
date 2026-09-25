@@ -18,9 +18,11 @@ import org.jpos.transaction.TransactionParticipant;
 import org.jpos.util.Destroyable;
 
 /**
- * Real approval (MCN-302b, replacing MCN-302a's RC-96 placeholder): row-locks the card's account,
- * approves (RC 00 + DE 38 auth code) and posts a balanced double-entry journal when funds are
- * sufficient, or declines RC 51 otherwise. Never touches the account when an earlier participant
+ * Real approval (MCN-302b, replacing MCN-302a's RC-96 placeholder), by what the request does to the
+ * customer ({@link io.mcn.issuer.domain.TransactionType}): a purchase row-locks the account and
+ * debits it with a balanced journal, or declines RC 51; a refund credits it with a balanced REFUND
+ * journal (never declined for funds); a balance inquiry answers DE 54 and posts nothing. Every
+ * approval carries RC 00 + a DE 38 auth code. Never touches the account when an earlier participant
  * already set {@code RESPONSE_CODE} (a decline, or a replayed duplicate).
  *
  * <p><b>Task 0 finding:</b> jPOS 3.0.1's {@code TransactionManager} hands every participant in a
@@ -102,49 +104,80 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     if (ctx.<String>get(TxnContextKeys.RESPONSE_CODE) != null) {
       return PREPARED;
     }
-
-    long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
-    long amount = ctx.get(TxnContextKeys.AMOUNT);
-
     try (Connection conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
-      AccountRow account = lockRepository.lockAndGet(conn, accountId);
-
-      if (account.availableBalance() < amount) {
+      boolean approved =
+          switch (TxnTypes.of(ctx).customerEffect()) {
+            case DEBIT -> debit(conn, ctx);
+            case CREDIT -> credit(conn, ctx);
+            case NONE -> answerBalance(conn, ctx);
+          };
+      if (!approved) {
         conn.rollback();
-        ctx.put(TxnContextKeys.RESPONSE_CODE, "51");
-        ctx.put(TxnContextKeys.DECLINE_REASON, "insufficient funds");
         return PREPARED;
       }
-
-      boolean debited = lockRepository.debit(conn, accountId, amount, account.version());
-      if (!debited) {
-        // ponytail: the row lock (FOR UPDATE) serializes every writer on this account within one
-        // DB transaction - a failed optimistic-version check here means the lock isn't actually
-        // being held, which is a real bug, not a retryable race. Fail loudly rather than looping.
-        throw new IllegalStateException(
-            "account " + accountId + " version changed under a held row lock");
-      }
-
-      String authCode = authCodeGenerator.generate();
-      Long tranId = ctx.get(TxnContextKeys.TRAN_ID);
-      LocalDate businessDate = ctx.get(TxnContextKeys.BUSINESS_DATE);
-      LocalDate effectiveBusinessDate = businessDate == null ? LocalDate.now() : businessDate;
-      ledgerRepository.postPurchase(
-          conn, tranId == null ? 0L : tranId, effectiveBusinessDate, accountId, amount, CURRENCY);
-
-      Long cardId = ctx.get(TxnContextKeys.CARD_ID);
-      if (cardId != null) {
-        velocityCounterRepository.incrementDaily(
-            conn, cardId, PURCHASE_TRAN_TYPE, effectiveBusinessDate, amount);
-      }
-
       conn.commit();
       ctx.put(TxnContextKeys.RESPONSE_CODE, "00");
-      ctx.put(TxnContextKeys.AUTH_CODE, authCode);
+      ctx.put(TxnContextKeys.AUTH_CODE, authCodeGenerator.generate());
       return PREPARED;
     } catch (SQLException e) {
       throw new IllegalStateException("authorize failed", e);
     }
+  }
+
+  /** Purchase or cash: RC 51 unless the funds cover it; then debit, journal and velocity. */
+  private boolean debit(Connection conn, Context ctx) {
+    long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
+    long amount = ctx.get(TxnContextKeys.AMOUNT);
+    AccountRow account = lockRepository.lockAndGet(conn, accountId);
+    if (account.availableBalance() < amount) {
+      ctx.put(TxnContextKeys.RESPONSE_CODE, "51");
+      ctx.put(TxnContextKeys.DECLINE_REASON, "insufficient funds");
+      return false;
+    }
+    if (!lockRepository.debit(conn, accountId, amount, account.version())) {
+      // ponytail: the row lock (FOR UPDATE) serializes every writer on this account within one
+      // DB transaction - a failed optimistic-version check here means the lock isn't actually
+      // being held, which is a real bug, not a retryable race. Fail loudly rather than looping.
+      throw new IllegalStateException(
+          "account " + accountId + " version changed under a held row lock");
+    }
+    LocalDate businessDate = businessDate(ctx);
+    ledgerRepository.postPurchase(conn, tranId(ctx), businessDate, accountId, amount, CURRENCY);
+    Long cardId = ctx.get(TxnContextKeys.CARD_ID);
+    if (cardId != null) {
+      velocityCounterRepository.incrementDaily(
+          conn, cardId, PURCHASE_TRAN_TYPE, businessDate, amount);
+    }
+    return true;
+  }
+
+  /**
+   * Refund: the money goes to the customer, so there is no funds check and it doesn't count towards
+   * the debit velocity counters (POS-G17).
+   */
+  private boolean credit(Connection conn, Context ctx) {
+    long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
+    long amount = ctx.get(TxnContextKeys.AMOUNT);
+    lockRepository.adjust(conn, accountId, amount);
+    ledgerRepository.postRefund(conn, tranId(ctx), businessDate(ctx), accountId, amount, CURRENCY);
+    return true;
+  }
+
+  /** Balance inquiry: answers the available balance in DE 54; posts and holds nothing. */
+  private boolean answerBalance(Connection conn, Context ctx) {
+    long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
+    ctx.put(TxnContextKeys.BALANCE, lockRepository.lockAndGet(conn, accountId).availableBalance());
+    return true;
+  }
+
+  private static long tranId(Context ctx) {
+    Long tranId = ctx.get(TxnContextKeys.TRAN_ID);
+    return tranId == null ? 0L : tranId;
+  }
+
+  private static LocalDate businessDate(Context ctx) {
+    LocalDate businessDate = ctx.get(TxnContextKeys.BUSINESS_DATE);
+    return businessDate == null ? LocalDate.now() : businessDate;
   }
 }

@@ -55,4 +55,34 @@ class CheckLimitsTest {
     assertThat(participant.prepare(1L, ctx)).isEqualTo(ABORTED);
     assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("61");
   }
+
+  @org.junit.jupiter.api.Test
+  @org.junit.jupiter.api.DisplayName(
+      "POS-G17: velocity limits are for debits - a refund skips them")
+  void should_skipTheRules_when_theTransactionIsARefund() {
+    VelocityRule declinesRc61 = (cardId, amount) -> Optional.of("61");
+    CheckLimits participant = new CheckLimits(List.of(declinesRc61));
+
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.CARD_ID, 1L);
+    ctx.put(TxnContextKeys.AMOUNT, 1_000_000L);
+    ctx.put(TxnContextKeys.PROCESSING_CODE, "200000");
+
+    assertThat(participant.prepare(1L, ctx)).isEqualTo(PREPARED);
+    assertThat(ctx.<String>get(TxnContextKeys.RESPONSE_CODE)).isNull();
+  }
+
+  @org.junit.jupiter.api.Test
+  @org.junit.jupiter.api.DisplayName("POS-G17: a balance inquiry skips the velocity rules")
+  void should_skipTheRules_when_theTransactionIsABalanceInquiry() {
+    VelocityRule declinesRc65 = (cardId, amount) -> Optional.of("65");
+    CheckLimits participant = new CheckLimits(List.of(declinesRc65));
+
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.CARD_ID, 1L);
+    ctx.put(TxnContextKeys.AMOUNT, 0L);
+    ctx.put(TxnContextKeys.PROCESSING_CODE, "310000");
+
+    assertThat(participant.prepare(1L, ctx)).isEqualTo(PREPARED);
+  }
 }

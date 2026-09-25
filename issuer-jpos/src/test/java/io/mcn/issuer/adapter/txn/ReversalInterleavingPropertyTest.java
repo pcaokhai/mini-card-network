@@ -56,6 +56,23 @@ class ReversalInterleavingPropertyTest {
 
   @Test
   void anyInterleavingOfOriginalDuplicateReversalRepeat_leavesLedgerBalanced_MCN_402_AC4() {
+    assertEveryInterleavingLeavesTheAccountWhereItStarted("000000", "PURCHASE", 0);
+  }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName(
+      "POS-G17: any interleaving of a refund, its duplicate, its reversal and repeat nets to zero")
+  void anyInterleavingOfARefundAndItsReversal_leavesTheAccountWhereItStarted() {
+    assertEveryInterleavingLeavesTheAccountWhereItStarted("200000", "REFUND", 1_000);
+  }
+
+  /**
+   * Every ordering ends with the original reversed or declined (RC 94), so the account must end
+   * where it started. The postings must agree with the balance columns: opening + Σ credits − Σ
+   * debits = available = ledger (docs/10 §5).
+   */
+  private void assertEveryInterleavingLeavesTheAccountWhereItStarted(
+      String processingCode, String tranType, int seedOffset) {
     DataSource ds = TestDataSources.migrated(postgres);
     var accounts = new AccountRepository(ds);
     var cards = new CardRepository(ds);
@@ -70,11 +87,13 @@ class ReversalInterleavingPropertyTest {
             new VelocityCounterRepository(ds),
             new AuthCodeGenerator(),
             ds);
-    var locateAndReverse = new LocateAndReverse(tranLog, ledger, rwo, cards, ds);
+    var locateAndReverse =
+        new LocateAndReverse(tranLog, ledger, rwo, new AccountLockRepository(ds), ds);
     LocalDate businessDate = LocalDate.now();
 
-    for (int seed = 0; seed < 200; seed++) {
-      List<Event> order = shuffled(seed);
+    for (int run = 0; run < 200; run++) {
+      int seed = run + seedOffset;
+      List<Event> order = shuffled(run);
 
       String stan = String.format("%06d", seed);
       long accountId = accounts.insert("ACC-RIT-" + seed, CURRENCY, AMOUNT);
@@ -91,7 +110,16 @@ class ReversalInterleavingPropertyTest {
       for (Event event : order) {
         switch (event) {
           case ORIGINAL ->
-              runOriginal(tranLog, deduplicate, authorize, businessDate, accountId, cardId, stan);
+              runOriginal(
+                  tranLog,
+                  deduplicate,
+                  authorize,
+                  businessDate,
+                  accountId,
+                  cardId,
+                  stan,
+                  processingCode,
+                  tranType);
           case DUPLICATE_ORIGINAL -> runDuplicateOriginal(deduplicate, businessDate, stan);
           case REVERSAL, REPEAT_REVERSAL -> runReversal(locateAndReverse, businessDate, stan);
         }
@@ -99,6 +127,18 @@ class ReversalInterleavingPropertyTest {
 
       long netPosted = sumPostingsForAccount(ds, accountId);
       assertThat(netPosted).as("seed=%d order=%s", seed, order).isZero();
+      var account = new AccountLockRepository(ds);
+      try (var conn = ds.getConnection()) {
+        var row = account.lockAndGet(conn, accountId);
+        assertThat(row.availableBalance())
+            .as("available seed=%d order=%s", seed, order)
+            .isEqualTo(AMOUNT);
+        assertThat(row.ledgerBalance())
+            .as("ledger seed=%d order=%s", seed, order)
+            .isEqualTo(AMOUNT);
+      } catch (java.sql.SQLException e) {
+        throw new IllegalStateException(e);
+      }
     }
   }
 
@@ -114,15 +154,19 @@ class ReversalInterleavingPropertyTest {
       LocalDate businessDate,
       long accountId,
       long cardId,
-      String stan) {
+      String stan,
+      String processingCode,
+      String tranType) {
     ISOMsg request = originalRequest(stan);
     Context ctx = new Context();
+    ctx.put(TxnContextKeys.PROCESSING_CODE, processingCode);
     ctx.put(TxnContextKeys.REQUEST, request);
     ctx.put(TxnContextKeys.ACQUIRER_ID, ACQUIRER_ID);
     ctx.put(TxnContextKeys.BUSINESS_DATE, businessDate);
     deduplicate.prepare(0, ctx);
 
-    long tranId = tranLog.insert(receivedTranLogRow(businessDate, stan, cardId));
+    long tranId =
+        tranLog.insert(receivedTranLogRow(businessDate, stan, cardId, processingCode, tranType));
     ctx.put(TxnContextKeys.ACCOUNT_ID, accountId);
     ctx.put(TxnContextKeys.AMOUNT, AMOUNT);
     ctx.put(TxnContextKeys.TRAN_ID, tranId);
@@ -194,12 +238,13 @@ class ReversalInterleavingPropertyTest {
     return order;
   }
 
-  private static TranLogRow receivedTranLogRow(LocalDate businessDate, String stan, long cardId) {
+  private static TranLogRow receivedTranLogRow(
+      LocalDate businessDate, String stan, long cardId, String processingCode, String tranType) {
     return new TranLogRow(
         businessDate,
         "0200",
-        "PURCHASE",
-        "000000",
+        tranType,
+        processingCode,
         ACQUIRER_ID,
         "GOCPHO00",
         "GOCPHO000000001",

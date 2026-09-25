@@ -63,6 +63,32 @@ public class AccountLockRepository {
     }
   }
 
+  /**
+   * Adds {@code signedAmount} (negative = debit) to both balances, in the caller's transaction. The
+   * UPDATE row-locks the account itself, so no prior {@link #lockAndGet} is needed. Used for
+   * movements that can't be declined for funds (a refund credit, a reversal), unlike {@link
+   * #debit}: {@code chk_available_floor} still guards the overdraft floor.
+   */
+  public void adjust(Connection conn, long accountId, long signedAmount) {
+    String sql =
+        """
+        UPDATE account SET available_balance = available_balance + ?,
+                            ledger_balance = ledger_balance + ?,
+                            version = version + 1,
+                            updated_at = now()
+        WHERE id = ?""";
+    try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, signedAmount);
+      stmt.setLong(2, signedAmount);
+      stmt.setLong(3, accountId);
+      if (stmt.executeUpdate() != 1) {
+        throw new IllegalStateException("account not found: " + accountId);
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException("adjust account balance failed", e);
+    }
+  }
+
   /** Exposed so callers (e.g. {@code Authorize}) can open a connection from the same pool. */
   public DataSource dataSource() {
     return dataSource;

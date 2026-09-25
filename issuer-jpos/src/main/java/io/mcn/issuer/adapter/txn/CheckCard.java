@@ -7,6 +7,7 @@ import io.mcn.issuer.adapter.persistence.CardRepository;
 import io.mcn.issuer.domain.CardLifecycle;
 import java.io.Serializable;
 import java.time.LocalDate;
+import java.util.Optional;
 import org.jpos.core.Configurable;
 import org.jpos.core.Configuration;
 import org.jpos.core.ConfigurationException;
@@ -15,8 +16,9 @@ import org.jpos.transaction.TransactionParticipant;
 import org.jpos.util.Destroyable;
 
 /**
- * Looks up the card by PAN hash and declines RC 14 (unknown), RC 62 (blocked/lost/stolen) or RC 54
- * (expired card, DE 14 YYMM semantics: expired once the business date's YYMM exceeds it).
+ * Looks up the card by PAN hash and declines RC 14 (unknown), or by the card's status as {@link
+ * CardLifecycle} reads it for the business date: RC 54 expired, RC 75 PIN_BLOCKED, RC 62 BLOCKED,
+ * LOST or STOLEN (docs/03 §8). The Admin API reads status with the same rule, so both agree.
  */
 public class CheckCard implements TransactionParticipant, Configurable, Destroyable {
 
@@ -71,14 +73,16 @@ public class CheckCard implements TransactionParticipant, Configurable, Destroya
     }
 
     Card card = found.get();
-    if (isNonActive(card.status())) {
-      ctx.put(TxnContextKeys.RESPONSE_CODE, "62");
-      return ABORTED;
-    }
-
+    // Same rule and date source the Admin API reads status with (CARDS-G18).
     LocalDate businessDate = ctx.get(TxnContextKeys.BUSINESS_DATE);
-    if (businessDate != null && CardLifecycle.isExpired(card.expiryYymm(), businessDate)) {
-      ctx.put(TxnContextKeys.RESPONSE_CODE, "54");
+    String status =
+        CardLifecycle.effectiveStatus(
+            card.status(),
+            card.expiryYymm(),
+            businessDate == null ? LocalDate.now() : businessDate);
+    Optional<String> declineRc = declineCodeFor(status);
+    if (declineRc.isPresent()) {
+      ctx.put(TxnContextKeys.RESPONSE_CODE, declineRc.get());
       return ABORTED;
     }
 
@@ -87,7 +91,13 @@ public class CheckCard implements TransactionParticipant, Configurable, Destroya
     return PREPARED;
   }
 
-  private static boolean isNonActive(String status) {
-    return "BLOCKED".equals(status) || "LOST".equals(status) || "STOLEN".equals(status);
+  /** docs/03 §8: 54 expired, 75 PIN tries exceeded, 62 restricted (v1 uses 62 for the rest). */
+  private static Optional<String> declineCodeFor(String effectiveStatus) {
+    return switch (effectiveStatus) {
+      case "ACTIVE" -> Optional.empty();
+      case "EXPIRED" -> Optional.of("54");
+      case "PIN_BLOCKED" -> Optional.of("75");
+      default -> Optional.of("62");
+    };
   }
 }

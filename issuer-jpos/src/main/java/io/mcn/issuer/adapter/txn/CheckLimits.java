@@ -18,8 +18,9 @@ import org.jpos.util.Destroyable;
 /**
  * Runs the configured {@link VelocityRule} strategies in order, aborting with whichever RC the
  * first declining rule returns (RC 61 amount ceilings, RC 65 frequency ceilings - docs/03 §8).
- * Account balance (RC 51) is Authorize's scope. The rule set itself is config-driven (MCN-803-AC2,
- * see {@link #setConfiguration}) - this class holds no rule-kind-specific branching.
+ * Account balance (RC 51) is Authorize's scope. Only debits are checked: a refund or a balance
+ * inquiry never counts against a spending ceiling. The rule set itself is config-driven
+ * (MCN-803-AC2, see {@link #setConfiguration}) - this class holds no rule-kind-specific branching.
  */
 public class CheckLimits implements TransactionParticipant, Configurable, Destroyable {
 
@@ -74,6 +75,9 @@ public class CheckLimits implements TransactionParticipant, Configurable, Destro
   @Override
   public int prepare(long id, Serializable context) {
     Context ctx = (Context) context;
+    if (!TxnTypes.debitsCustomer(ctx)) {
+      return PREPARED; // velocity ceilings cap spending; a refund or inquiry spends nothing
+    }
     long cardId = ctx.get(TxnContextKeys.CARD_ID);
     long amount = ctx.get(TxnContextKeys.AMOUNT);
 

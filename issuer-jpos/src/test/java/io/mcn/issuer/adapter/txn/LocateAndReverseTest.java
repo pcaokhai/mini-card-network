@@ -1,20 +1,19 @@
 package io.mcn.issuer.adapter.txn;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import io.mcn.issuer.adapter.persistence.Card;
-import io.mcn.issuer.adapter.persistence.CardRepository;
+import io.mcn.issuer.adapter.persistence.AccountLockRepository;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
 import io.mcn.issuer.adapter.persistence.OriginalTransactionRow;
 import io.mcn.issuer.adapter.persistence.ReversalWithoutOriginalRepository;
 import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import java.time.LocalDate;
+import java.util.Map;
 import java.util.Optional;
 import javax.sql.DataSource;
 import org.jpos.transaction.Context;
@@ -29,12 +28,15 @@ class LocateAndReverseTest {
     when(tranLog.findByReversalKey("0200", "000123", "0922140000", "970499     "))
         .thenReturn(Optional.of(originalRow(42L, "APPROVED", 10_000L)));
     when(tranLog.markReversed(any(), eq(42L), any())).thenReturn(true);
+    when(ledger.postReversalOf(any(), eq(42L), any())).thenReturn(Map.of(99L, 10_000L));
+    var accounts = mock(AccountLockRepository.class);
     Context ctx = contextWithReversalKey();
 
-    newLocateAndReverse(tranLog, ledger).prepare(0, ctx);
+    newLocateAndReverse(tranLog, ledger, accounts).prepare(0, ctx);
 
     verify(tranLog).markReversed(any(), eq(42L), any());
-    verify(ledger).postReversal(any(), eq(42L), any(), anyLong(), eq(10_000L), eq("704"));
+    verify(ledger).postReversalOf(any(), eq(42L), any());
+    verify(accounts).adjust(any(), eq(99L), eq(10_000L)); // balance moves with its journal
   }
 
   /** A 0420 and its 0421 repeat in flight together: only the one that flips APPROVED posts. */
@@ -70,12 +72,16 @@ class LocateAndReverseTest {
 
   private static LocateAndReverse newLocateAndReverse(
       TranLogRepository tranLog, LedgerRepository ledger) throws Exception {
-    var cards = mock(CardRepository.class);
-    when(cards.findById(7L)).thenReturn(Optional.of(card(7L, 99L)));
+    return newLocateAndReverse(tranLog, ledger, mock(AccountLockRepository.class));
+  }
+
+  private static LocateAndReverse newLocateAndReverse(
+      TranLogRepository tranLog, LedgerRepository ledger, AccountLockRepository accounts)
+      throws Exception {
     var ds = mock(DataSource.class);
     when(ds.getConnection()).thenReturn(mock(java.sql.Connection.class));
     return new LocateAndReverse(
-        tranLog, ledger, mock(ReversalWithoutOriginalRepository.class), cards, ds);
+        tranLog, ledger, mock(ReversalWithoutOriginalRepository.class), accounts, ds);
   }
 
   @Test
@@ -118,9 +124,5 @@ class LocateAndReverseTest {
 
   private static OriginalTransactionRow originalRow(long tranId, String status, long amount) {
     return new OriginalTransactionRow(tranId, LocalDate.now(), 7L, amount, "704", status);
-  }
-
-  private static Card card(long cardId, long accountId) {
-    return new Card(cardId, accountId, "970436", "0001", "3012", "ACTIVE", "crd_x", "Test");
   }
 }
