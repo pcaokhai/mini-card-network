@@ -229,3 +229,29 @@ func TestClearSamples_neverKeyedByEmptyString__LAB_N1(t *testing.T) {
 		t.Fatal(`Decode("") must fail`)
 	}
 }
+
+func TestEncode_returnsPackedMessageRedacted__LAB_G3(t *testing.T) {
+	d, err := Encode("0200", map[string]string{"2": "9704360000004417", "3": "000000", "11": "000123", "52": "7A3F09C21B84D6E0"})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if d.Packed == nil {
+		t.Fatal("packed missing on encode")
+	}
+	if strings.Contains(*d.Packed, "9704360000004417") || strings.Contains(*d.Packed, "7A3F09C21B84D6E0") {
+		t.Fatalf("packed leaks PAN or PIN block: %q", *d.Packed)
+	}
+	if !strings.Contains(*d.Packed, "16970436******4417") || !strings.HasPrefix(*d.Packed, "0200") {
+		t.Fatalf("packed is not the redacted wire message: %q", *d.Packed)
+	}
+}
+
+func TestDecode_leavesPackedNull__LAB_G3(t *testing.T) {
+	d, err := Decode(purchaseVector)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if d.Packed != nil {
+		t.Fatalf("packed = %q on decode, want null", *d.Packed)
+	}
+}

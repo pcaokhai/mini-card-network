@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 )
 
@@ -22,8 +23,10 @@ type Config struct {
 	ToxiproxyAdminAddr  string
 	IssuerProxyName     string
 	ChaosFakeIssuerAddr string
-	LMKTestValueHex     string
-	ZMK                 []byte
+	// IssuerAdminURL is the Issuer Admin API base URL; chaos runs read card balances from it (CHA-G1).
+	IssuerAdminURL  string
+	LMKTestValueHex string
+	ZMK             []byte
 	// InitialZAK / InitialZPK are the working keys the issuer is configured with. When
 	// key_store has no ACTIVE key of that type, the gateway registers these at startup so a
 	// fresh stack can MAC and verify from the first purchase; nil means "provision nothing".
@@ -58,6 +61,10 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("SHUTDOWN_TIMEOUT must be positive")
 	}
 	cfg.ShutdownTimeout = timeout
+
+	if cfg.IssuerAdminURL, err = httpURL(valueOr(getenv("ISSUER_ADMIN_URL"), "http://issuer:8081")); err != nil {
+		return Config{}, fmt.Errorf("ISSUER_ADMIN_URL: %w", err)
+	}
 
 	cfg.LMKTestValueHex = getenv("LMK_TEST_VALUE_HEX")
 	if cfg.LMKTestValueHex == "" {
@@ -122,6 +129,15 @@ func optionalAESKeyHex(getenv func(string) string, name string) ([]byte, error) 
 	default:
 		return nil, fmt.Errorf("%s: must decode to 16, 24 or 32 bytes (AES), got %d", name, len(key))
 	}
+}
+
+// httpURL accepts only an absolute http(s) URL with a host.
+func httpURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("want an http(s) URL with a host, got %q", raw)
+	}
+	return raw, nil
 }
 
 func valueOr(v, fallback string) string {

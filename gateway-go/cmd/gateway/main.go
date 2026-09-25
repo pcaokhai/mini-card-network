@@ -100,7 +100,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// traffic, only chaos scenarios.
 		logger.Error("disable chaos toxics at boot", "error", err.Error())
 	}
-	chaosRunner := chaos.NewRunner(purchaseService, safRepo, tranLogRepo, purchase.DefaultCardTokens().Seeds(), hub)
+	chaosRunner := chaos.NewRunner(purchaseService, safRepo, tranLogRepo, chaos.NewIssuerAdminClient(cfg.IssuerAdminURL), purchase.DefaultCardTokens().Seeds(), hub)
 	purchaseService.SetChaosDuplicateHook(newChaosDuplicateHook(ctx, toxiproxyClient))
 
 	health := api.NewHealth()

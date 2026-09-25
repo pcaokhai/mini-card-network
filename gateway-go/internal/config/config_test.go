@@ -132,3 +132,18 @@ func TestLoad_initialWorkingKeysAreOptionalHexAESKeys__MCN_002(t *testing.T) {
 	_, err = Load(env(withLMK(map[string]string{"ZPK_HEX": "0102030405"})))
 	require.ErrorContains(t, err, "ZPK_HEX", "5 bytes is not an AES key length")
 }
+
+func TestLoad_issuerAdminURL__CHA_G1(t *testing.T) {
+	cfg, err := Load(env(withLMK(nil)))
+	require.NoError(t, err)
+	require.Equal(t, "http://issuer:8081", cfg.IssuerAdminURL)
+
+	cfg, err = Load(env(withLMK(map[string]string{"ISSUER_ADMIN_URL": "http://localhost:18081"})))
+	require.NoError(t, err)
+	require.Equal(t, "http://localhost:18081", cfg.IssuerAdminURL)
+
+	for _, bad := range []string{"issuer:8081", "ftp://issuer", "http://", "://x"} {
+		_, err = Load(env(withLMK(map[string]string{"ISSUER_ADMIN_URL": bad})))
+		require.ErrorContains(t, err, "ISSUER_ADMIN_URL", bad)
+	}
+}
