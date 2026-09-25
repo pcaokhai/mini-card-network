@@ -2,12 +2,20 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/mcn/gateway-go/internal/iso8583"
 	"github.com/mcn/gateway-go/internal/lab"
+)
+
+// maxLabRaw is the decode request's raw maxLength (contracts/openapi.yaml); the body limit adds
+// room for the JSON envelope so an oversized raw is still read and answered precisely.
+const (
+	maxLabRaw  = 8192
+	maxLabBody = maxLabRaw + 1024
 )
 
 // MountLab registers the Message Lab routes (contracts/openapi.yaml, tag "lab").
@@ -21,8 +29,12 @@ func handleDecode(w http.ResponseWriter, req *http.Request) {
 	var body struct {
 		Raw string `json:"raw"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		problem(w, http.StatusBadRequest, "invalid-request", err.Error())
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, maxLabBody)).Decode(&body); err != nil {
+		writeLabBodyProblem(w, err)
+		return
+	}
+	if len(body.Raw) > maxLabRaw {
+		problem(w, http.StatusBadRequest, "validation-error", "raw exceeds maxLength 8192")
 		return
 	}
 	d, err := lab.Decode(body.Raw)
@@ -38,8 +50,8 @@ func handleEncode(w http.ResponseWriter, req *http.Request) {
 		MTI    string            `json:"mti"`
 		Fields map[string]string `json:"fields"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-		problem(w, http.StatusBadRequest, "invalid-request", err.Error())
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, maxLabBody)).Decode(&body); err != nil {
+		writeLabBodyProblem(w, err)
 		return
 	}
 	d, err := lab.Encode(body.MTI, body.Fields)
@@ -52,6 +64,15 @@ func handleEncode(w http.ResponseWriter, req *http.Request) {
 
 func handleSamples(w http.ResponseWriter, _ *http.Request) {
 	writeJSONBody(w, http.StatusOK, lab.Samples)
+}
+
+func writeLabBodyProblem(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		problem(w, http.StatusBadRequest, "validation-error", "request body exceeds the Lab message limit")
+		return
+	}
+	problem(w, http.StatusBadRequest, "invalid-request", err.Error())
 }
 
 func writeCodecProblem(w http.ResponseWriter, err error) {
