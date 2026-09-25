@@ -309,10 +309,24 @@ func (r *TranLogRepository) LastSTANInRRNPrefix(ctx context.Context, prefix stri
 	return last, err
 }
 
-// Backdate moves rrn's tran_log.created_at to at and shifts every tran_state_history row of it by
-// the same amount, so its latencies are unchanged. Seed-only: it rewrites the acquirer's record of
-// when a transaction happened, which the issuer's ledger does not follow (docs/plans/
-// MCN-002-acquirer-seed.md ruling 2).
+// backdateStatements shift one transaction's journey timestamps ($1 = tran id, $2 = seconds).
+var backdateStatements = []string{
+	`UPDATE tran_log SET created_at = created_at + make_interval(secs => $2),
+	   sent_at = sent_at + make_interval(secs => $2),
+	   responded_at = responded_at + make_interval(secs => $2),
+	   late_response_at = late_response_at + make_interval(secs => $2)
+	 WHERE id = $1`,
+	`UPDATE tran_state_history SET created_at = created_at + make_interval(secs => $2) WHERE tran_id = $1`,
+	`UPDATE saf_queue SET created_at = created_at + make_interval(secs => $2),
+	   next_retry_at = next_retry_at + make_interval(secs => $2),
+	   acked_at = acked_at + make_interval(secs => $2)
+	 WHERE tran_id = $1`,
+}
+
+// Backdate moves rrn's tran_log.created_at to at and shifts its sent and response times, its
+// tran_state_history and its saf_queue rows by the same amount, so its latencies are unchanged.
+// Seed-only: it rewrites the acquirer's record of when a transaction happened, which the issuer's
+// ledger does not follow (docs/plans/MCN-002-acquirer-seed.md ruling 2).
 func (r *TranLogRepository) Backdate(ctx context.Context, rrn string, at time.Time) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -329,14 +343,12 @@ func (r *TranLogRepository) Backdate(ctx context.Context, rrn string, at time.Ti
 	if err != nil {
 		return err
 	}
-	shift := at.Sub(createdAt)
-	if _, err := tx.Exec(ctx, `UPDATE tran_log SET created_at = $2 WHERE id = $1`, id, at); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE tran_state_history SET created_at = created_at + make_interval(secs => $2) WHERE tran_id = $1`,
-		id, shift.Seconds()); err != nil {
-		return err
+	secs := at.Sub(createdAt).Seconds()
+	// Every timestamp the journey reads moves by the same shift, so the story keeps its spacing.
+	for _, stmt := range backdateStatements {
+		if _, err := tx.Exec(ctx, stmt, id, secs); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
 }

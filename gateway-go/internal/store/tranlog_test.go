@@ -164,6 +164,38 @@ func TestTranLogRepository_backdateMovesTheRowAndItsHistoryTogether__MCN_002(t *
 	}
 }
 
+// The seed backdates whole transactions: every timestamp the journey reads moves by the same shift,
+// or a reversal's steps land hundreds of seconds after its purchase.
+func TestTranLogRepository_backdateMovesEveryJourneyTimestamp__MCN_002(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewTranLogRepository(pool)
+	safRepo := NewSafRepository(pool)
+	ctx := context.Background()
+	sentAt := time.Now().UTC().Truncate(time.Microsecond)
+	id, err := repo.Insert(ctx, TranLogRow{RRN: "626514000602", Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID, SentAt: &sentAt})
+	require.NoError(t, err)
+	require.NoError(t, repo.UpdateStatus(ctx, id, "APPROVED", "00", "A1"))
+	safID, err := safRepo.Enqueue(ctx, id, "0420", []byte("{}"))
+	require.NoError(t, err)
+	require.NoError(t, safRepo.MarkAcked(ctx, safID))
+	before, err := repo.Get(ctx, "626514000602")
+	require.NoError(t, err)
+	revBefore, err := safRepo.FindReversal(ctx, id)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Backdate(ctx, "626514000602", before.CreatedAt.Add(-26*time.Hour)))
+
+	after, err := repo.Get(ctx, "626514000602")
+	require.NoError(t, err)
+	revAfter, err := safRepo.FindReversal(ctx, id)
+	require.NoError(t, err)
+	shift := -26 * time.Hour
+	require.True(t, after.SentAt.Equal(before.SentAt.Add(shift)), "sent_at")
+	require.True(t, after.RespondedAt.Equal(before.RespondedAt.Add(shift)), "responded_at")
+	require.True(t, revAfter.CreatedAt.Equal(revBefore.CreatedAt.Add(shift)), "saf created_at")
+	require.True(t, revAfter.AckedAt.Equal(revBefore.AckedAt.Add(shift)), "saf acked_at")
+}
+
 func TestTranLogRepository_backdateUnknownRRN__MCN_002(t *testing.T) {
 	repo := NewTranLogRepository(newTestPool(t))
 
