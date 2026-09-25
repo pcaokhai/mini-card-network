@@ -314,8 +314,8 @@ func TestCreateCompletion_inheritsPreAuthsTerminalAndMerchant__MCN_002(t *testin
 	require.Equal(t, "BANHMA000000001", completion.MerchantID)
 	require.Equal(t, "970436******5540", txn.MaskedPAN)
 	require.Equal(t, "Tiệm bánh Mây", txn.MerchantName)
-	_, hasDE42 := mux.lastFields[42]
-	require.False(t, hasDE42, "0220 carries no DE 42")
+	require.Equal(t, "00000047", mux.lastFields[41], "SF2: the issuer dedupes on the terminal, so the 0220 names it")
+	require.Equal(t, "BANHMA000000001", mux.lastFields[42])
 }
 
 func TestCreateCompletion_unknownPreAuthSendsNothing__MCN_002(t *testing.T) {
@@ -369,6 +369,8 @@ func TestSend_everyPostSendFailureFollowsUpByType__POS_G4_POS_G9(t *testing.T) {
 			}
 			require.Equal(t, []string{"0220"}, reversal.adviceMTIs, "a completion is an advice: repeated, never reversed (docs/03 §7.4)")
 			require.Equal(t, "000001", reversal.advices[0][11])
+			require.Equal(t, "00000042", reversal.advices[0][41], "SF2: every 0221 repeat names the terminal the issuer dedupes on")
+			require.Equal(t, "GOCPHO000000001", reversal.advices[0][42])
 			for _, row := range tranLog.rows[1:] {
 				require.Equal(t, statusTimedOut, row.Status, "the row never stays SENT")
 			}

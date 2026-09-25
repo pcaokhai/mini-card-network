@@ -180,7 +180,9 @@ func (w *Worker) assignNetworkIdentity(ctx context.Context, id int64, adv *advic
 }
 
 // frame is what goes on the wire for one attempt: the stored fields plus DE 2 from the card token
-// and a MAC over the rest of the message, MTI included. A completion advice (02xx) carries no PAN.
+// and a MAC over the rest of the message, MTI included. Only the completion advice (0220/0221)
+// goes without a PAN: it names the pre-auth by DE 37 and its terminal (docs/03 §3), while a STIP
+// advice (0120) still carries its card.
 // The MAC is DE 128 when a field above 64 (DE 90) sets the secondary bitmap, else DE 64 (docs/03
 // §11). An unresolvable token can never succeed, so it dead-letters.
 func (w *Worker) frame(mti string, adv advice) (map[int]string, error) {
@@ -192,7 +194,7 @@ func (w *Worker) frame(mti string, adv advice) (map[int]string, error) {
 			macField = 128
 		}
 	}
-	if !strings.HasPrefix(mti, "02") {
+	if !strings.HasPrefix(mti, "022") {
 		pan, ok := w.cards.PAN(adv.CardToken)
 		if !ok {
 			return nil, fmt.Errorf("unknown card token %q: cannot build DE 2", adv.CardToken)

@@ -77,15 +77,20 @@ func (q *ReversalQueuer) Queue(ctx context.Context, txn store.TranLogRow, reason
 	return nil
 }
 
+// notStoredInAdvice are the fields QueueAdvice never persists: the MAC, recomputed per send, and
+// card data (PAN, track 2, PIN block), which never reaches saf_queue (root CLAUDE.md §6.2).
+var notStoredInAdvice = map[int]bool{2: true, 35: true, 52: true, 64: true, 128: true}
+
 // QueueAdvice stores an advice whose delivery is unknown (a 0220 completion that timed out or
 // whose 0230 failed its MAC) for the worker to repeat as x21 until the issuer's x30: an advice is
 // never declined and never reversed (docs/03 §7.4). sent is the message as it went out; its STAN
 // and DE 7 are kept, so every repeat is the same message, and its MAC is dropped, since each send
-// is MACed afresh.
+// is MACed afresh. Card data (DE 2, 35, 52) is dropped too: the payload may be stored
+// unencrypted, and a completion advice carries none.
 func (q *ReversalQueuer) QueueAdvice(ctx context.Context, tranID int64, mti string, sent map[int]string) error {
 	fields := make(map[int]string, len(sent))
 	for n, v := range sent {
-		if n != 64 && n != 128 {
+		if !notStoredInAdvice[n] {
 			fields[n] = v
 		}
 	}

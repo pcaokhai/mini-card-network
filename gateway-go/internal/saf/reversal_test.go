@@ -181,7 +181,8 @@ func TestAdviceQueuer_repeatsAnUnknownCompletionUntilThe0230__POS_G4(t *testing.
 	id, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000322", Type: "COMPLETION", Status: statusTimedOut, Amount: 5000, Currency: "704", MTI: "0220",
 		TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000322"})
 	require.NoError(t, err)
-	sent := map[int]string{3: "000000", 4: "000000005000", 7: "0925101500", 11: "000322", 32: "970499", 37: "626514000300", 49: "704", 64: "0102030405060708"}
+	sent := map[int]string{3: "000000", 4: "000000005000", 7: "0925101500", 11: "000322", 32: "970499", 37: "626514000300",
+		41: "00000042", 42: testMerchantID, 49: "704", 64: staleMACHex}
 
 	require.NoError(t, NewReversalQueuer(pool, nil).QueueAdvice(ctx, id, "0220", sent))
 	mux := &fakeMux{response: map[int]string{39: "00"}}
@@ -195,9 +196,52 @@ func TestAdviceQueuer_repeatsAnUnknownCompletionUntilThe0230__POS_G4(t *testing.
 	require.Equal(t, "0925101500", frame[7])
 	require.NotContains(t, frame, 2, "a completion carries no PAN")
 	require.NotContains(t, frame, 128)
-	require.NotEqual(t, "0102030405060708", frame[64], "MACed afresh for the 0221")
+	require.NotEqual(t, staleMACHex, frame[64], "MACed afresh for the 0221")
+	require.Equal(t, "00000042", frame[41])
+	require.Equal(t, testMerchantID, frame[42])
 	got, err := tranLog.Get(ctx, "626514000322")
 	require.NoError(t, err)
 	require.Equal(t, "APPROVED", got.Status, "an acknowledged advice was recorded by the issuer")
 	require.Equal(t, "00", got.ResponseCode)
 }
+
+// Payloads may be stored unencrypted (no SAF_ENC_KEY), so card data never reaches one, whatever
+// the caller passes.
+func TestAdviceQueuer_neverStoresCardData__POS_G4(t *testing.T) {
+	pool := newTestPool(t)
+	tranLog := store.NewTranLogRepository(pool)
+	safRepo := store.NewSafRepository(pool)
+	ctx := context.Background()
+	id, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000323", Type: "COMPLETION", Status: statusTimedOut, Amount: 5000, Currency: "704", MTI: "0220",
+		TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000323"})
+	require.NoError(t, err)
+	sent := map[int]string{2: testPAN, 3: "000000", 11: "000323", 35: testPAN + "=2811", 52: "0123456789ABCDEF", 64: staleMACHex, 128: staleMACHex}
+
+	require.NoError(t, NewReversalQueuer(pool, nil).QueueAdvice(ctx, id, "0220", sent))
+
+	pending, _, err := safRepo.ListPending(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, string(pending[0].Payload), testPAN)
+	adv, err := decodePayload(nil, pending[0].Payload)
+	require.NoError(t, err)
+	for _, de := range []int{2, 35, 52, 64, 128} {
+		require.NotContains(t, adv.Fields, de)
+	}
+	require.Equal(t, "000323", adv.Fields[11])
+}
+
+func TestWorker_onlyTheCompletionAdviceGoesWithoutAPAN__POS_G4(t *testing.T) {
+	w := newTestWorker(&fakeMux{}, &fakeSaf{}, &recordingHSM{})
+	adv := advice{Fields: map[int]string{3: "000000", 11: "000777"}, CardToken: testCardToken}
+
+	stip, err := w.frame("0121", adv)
+	require.NoError(t, err)
+	require.Equal(t, testPAN, stip[2], "a 0120 advice (STIP) carries its card")
+
+	completion, err := w.frame("0221", advice{Fields: adv.Fields})
+	require.NoError(t, err)
+	require.NotContains(t, completion, 2)
+}
+
+// staleMACHex is the MAC a queued message went out with; every send is MACed afresh.
+const staleMACHex = "0102030405060708"
