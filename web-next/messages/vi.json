@@ -365,26 +365,193 @@
   },
   "journey": {
     "title": "Hành trình giao dịch",
-    "controls": {
-      "restart": "Bắt đầu lại",
-      "back": "Lùi",
-      "play": "Phát",
-      "pause": "Tạm dừng",
-      "next": "Tiếp"
+    "breadcrumbHome": "Tổng quan",
+    "viewJourney": "Xem hành trình",
+    "tabs": {
+      "label": "Chọn giao dịch",
+      "approved": "Thành công",
+      "declined": "Bị từ chối",
+      "reversed": "Đã tự hủy"
     },
-    "money": {
-      "heading": "Biến động tiền"
+    "empty": {
+      "title": "Chưa có giao dịch nào loại này",
+      "body": "Thực hiện một giao dịch ở Máy POS, hành trình của nó sẽ hiện ở đây.",
+      "cta": "Mở Máy POS"
+    },
+    "notFound": "Không tìm thấy giao dịch {rrn}.",
+    "loadError": "Không tải được hành trình. Thử tải lại trang.",
+    "summary": {
+      "label": "Tóm tắt giao dịch",
+      "headline": {
+        "approved": "{type} {amount} đã được duyệt",
+        "declined": "{type} {amount} bị từ chối",
+        "autoReversed": "Giao dịch {amount} đã được tự động hủy",
+        "cancelled": "Giao dịch {amount} đã được hủy",
+        "reversing": "Giao dịch {amount} đang được hủy",
+        "pending": "{type} {amount} đang chờ kết quả"
+      },
+      "type": {
+        "PURCHASE": "Mua hàng",
+        "PREAUTH": "Tiền ủy quyền trước",
+        "COMPLETION": "Hoàn tất",
+        "REFUND": "Hoàn tiền",
+        "BALANCE": "Tra cứu số dư",
+        "REVERSAL": "Hủy giao dịch"
+      },
+      "card": "Thẻ •••• {last4}",
+      "rrnEasy": "Mã tra soát {rrn}",
+      "rrnExpert": "RRN {rrn}",
+      "total": "Tổng thời gian",
+      "totalExpert": "Tổng thời gian (end-to-end)",
+      "messages": "Số lần hai ngân hàng trao đổi",
+      "messagesExpert": "Số message ISO 8583",
+      "money": "Tiền của khách",
+      "moneyValue": {
+        "approved": "Đã trừ {amount}",
+        "declined": "Không bị trừ tiền",
+        "autoReversed": "Không bị mất tiền",
+        "cancelled": "Đã hoàn lại {amount}",
+        "reversing": "Đang hoàn lại",
+        "pending": "Đang chờ"
+      },
+      "seconds": "{value} giây"
+    },
+    "steps": {
+      "label": "Các bước",
+      "heading": "Từng bước, theo thời gian",
+      "counter": "Bước {current}/{total}"
+    },
+    "controls": {
+      "play": "Tự phát",
+      "playing": "Đang phát…",
+      "restart": "Xem từ đầu",
+      "back": "Bước trước",
+      "next": "Bước tiếp"
+    },
+    "actor": {
+      "POS": "Máy POS",
+      "ACQUIRER": "Ngân hàng thanh toán",
+      "ISSUER": "Ngân hàng phát hành",
+      "SAF": "Hàng đợi gửi lại",
+      "NETWORK": "Đường truyền",
+      "SWITCH": "Bộ chuyển mạch"
+    },
+    "actorExpert": {
+      "POS": "POS terminal",
+      "ACQUIRER": "Acquirer gateway (Go)",
+      "ISSUER": "Issuer host (jPOS)",
+      "SAF": "SAF queue",
+      "NETWORK": "Network (Toxiproxy)",
+      "SWITCH": "Switch"
+    },
+    "step": {
+      "POS_REQUEST": {
+        "title": "Máy POS gửi yêu cầu",
+        "easy": "Khách dùng thẻ •••• {last4} tại {merchant}. Máy POS gửi yêu cầu thanh toán {amount}."
+      },
+      "REQUEST_SENT": {
+        "title": "Đóng gói và gửi sang ngân hàng phát hành",
+        "easy": "Ngân hàng thanh toán gắn số thứ tự và mã tra soát, ký chống giả mạo rồi gửi yêu cầu đi."
+      },
+      "LOCAL_DECLINE": {
+        "title": "Chưa kết nối được ngân hàng phát hành",
+        "easy": "Đường truyền tới ngân hàng phát hành đang ngắt nên yêu cầu không được gửi đi. Khách không bị trừ tiền."
+      },
+      "ISSUER_APPROVED": {
+        "title": "Ngân hàng phát hành đồng ý",
+        "easy": "Thẻ hợp lệ, tài khoản đủ tiền và chưa vượt hạn mức. Ngân hàng phát hành trừ tiền, ghi sổ và gửi lại mã chấp thuận."
+      },
+      "ISSUER_DECLINED": {
+        "title": "Ngân hàng phát hành từ chối",
+        "easy": "Lý do: {reason}. Không có khoản tiền nào bị trừ."
+      },
+      "NO_RESPONSE": {
+        "title": "Hết thời gian chờ",
+        "easy": "Sau 30 giây không có câu trả lời, ngân hàng thanh toán không biết tiền đã bị trừ hay chưa. Để an toàn cho khách, hệ thống giả định là đã trừ."
+      },
+      "REVERSAL_QUEUED": {
+        "title": "Lưu lệnh hủy trước khi gửi",
+        "easy": "Lệnh hủy được ghi xuống cơ sở dữ liệu trước, để không bao giờ bị mất kể cả khi máy chủ khởi động lại."
+      },
+      "POS_RESULT": {
+        "approved": {
+          "title": "Máy POS in hóa đơn",
+          "easy": "Khách nhận hàng. Cả hành trình mất {total}."
+        },
+        "declined": {
+          "title": "Máy POS báo bị từ chối",
+          "easy": "Máy POS báo cho khách, không trừ tiền."
+        },
+        "failed": {
+          "title": "Máy POS báo không thành công",
+          "easy": "Khách được báo giao dịch không thành công và có thể thử lại. Tiền sẽ không bị mất."
+        }
+      },
+      "REVERSAL_SENT": {
+        "title": "Gửi lệnh hủy",
+        "easy": "Lệnh hủy mang theo thông tin nhận diện giao dịch gốc để ngân hàng phát hành tìm đúng giao dịch."
+      },
+      "REVERSAL_REPEAT": {
+        "title": "Gửi lại lệnh hủy",
+        "easy": "Lần gửi trước chưa được xác nhận nên hệ thống tự gửi lại, đánh dấu là bản gửi lặp để bên kia không xử lý hai lần."
+      },
+      "REVERSAL_CONFIRMED": {
+        "title": "Ngân hàng phát hành hoàn tiền",
+        "easy": "Tìm thấy giao dịch gốc, hoàn lại {amount} vào tài khoản khách và xác nhận. Lệnh hủy được xóa khỏi hàng đợi."
+      },
+      "LATE_RESPONSE": {
+        "title": "Câu trả lời cũ đến muộn",
+        "easy": "Câu trả lời cho yêu cầu ban đầu giờ mới tới. Vì giao dịch đang được hủy, hệ thống chỉ ghi lại để theo dõi."
+      }
     },
     "detail": {
-      "empty": "Bước này không có message ISO.",
-      "de": "DE",
-      "name": "Trường",
-      "value": "Giá trị"
+      "label": "Chi tiết bước",
+      "message": "Nội dung message {mti}",
+      "messageExpert": "Message {mti} · {count} phần tử",
+      "openInLab": "Mở trong phòng lab"
+    },
+    "field": {
+      "MTI": "Loại message",
+      "2": "Số thẻ (đã che)",
+      "3": "Loại giao dịch",
+      "4": "Số tiền",
+      "7": "Thời điểm gửi",
+      "11": "Số thứ tự giao dịch",
+      "12": "Giờ tại máy POS",
+      "13": "Ngày tại máy POS",
+      "15": "Ngày quyết toán",
+      "22": "Cách đọc thẻ",
+      "25": "Điều kiện tại quầy",
+      "32": "Mã ngân hàng thanh toán",
+      "37": "Mã tra soát",
+      "38": "Mã chấp thuận",
+      "39": "Mã kết quả",
+      "41": "Mã máy POS",
+      "42": "Mã cửa hàng",
+      "49": "Loại tiền",
+      "52": "PIN đã mã hóa",
+      "64": "Chữ ký chống giả mạo",
+      "90": "Thông tin giao dịch gốc",
+      "128": "Chữ ký chống giả mạo"
+    },
+    "money": {
+      "heading": "Tiền trong tài khoản khách",
+      "before": "Trước giao dịch",
+      "debit": "Trừ tiền mua hàng",
+      "credit": "Được hoàn lại",
+      "final": "Số dư cuối cùng",
+      "note": {
+        "approved": "Giao dịch diễn ra trọn vẹn: tiền bị trừ đúng một lần và khách nhận hàng.",
+        "declined": "Ngân hàng phát hành từ chối nên không có bút toán nào: tiền của khách không đổi.",
+        "autoReversed": "Tiền chỉ bị trừ tạm thời, sau đó được hoàn đủ. Đây là lý do mọi hệ thống thẻ đều phải có cơ chế tự hủy.",
+        "cancelled": "Giao dịch đã được duyệt rồi bị hủy: tiền bị trừ một lần và được hoàn lại đủ.",
+        "reversing": "Lệnh hủy đang chờ ngân hàng phát hành xác nhận. Hệ thống sẽ tự gửi lại cho tới khi tiền được hoàn.",
+        "pending": "Chưa có kết quả từ ngân hàng phát hành."
+      }
     },
     "countdown": {
       "ariaLabel": "Đang chờ phản hồi từ ngân hàng phát hành"
-    },
-    "viewJourney": "Xem hành trình"
+    }
   },
   "sidebar": {
     "businessDate": "Ngày giao dịch",
