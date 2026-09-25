@@ -11,6 +11,7 @@ import (
 
 const (
 	testMerchantID   = "GOCPHO000000001"
+	testMaskedPAN    = "970436******4417"
 	statusApproved   = "APPROVED"
 	tranTypePurchase = "PURCHASE"
 )
@@ -20,7 +21,7 @@ func TestTranLogRepository_insertUpdateAndGet__MCN_303(t *testing.T) {
 	repo := NewTranLogRepository(pool)
 	ctx := context.Background()
 
-	row := TranLogRow{RRN: "626514000123", Type: tranTypePurchase, Status: "CREATED", Amount: 10000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID}
+	row := TranLogRow{RRN: "626514000123", Type: tranTypePurchase, Status: "CREATED", Amount: 10000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID}
 	id, err := repo.Insert(ctx, row)
 	require.NoError(t, err)
 
@@ -69,7 +70,7 @@ func TestTranLogRepository_listFiltersAndPaginates__MCN_304_AC1(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 3; i++ {
-		row := TranLogRow{RRN: fmt.Sprintf("rrn-%d", i), Status: statusApproved, Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID, Type: tranTypePurchase}
+		row := TranLogRow{RRN: fmt.Sprintf("rrn-%d", i), Status: statusApproved, Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID, Type: tranTypePurchase}
 		_, err := repo.Insert(ctx, row)
 		require.NoError(t, err)
 	}
@@ -142,7 +143,7 @@ func TestTranLogRepository_roundTripsTheFieldsAReversalNeeds__MCN_401(t *testing
 
 	_, err := repo.Insert(ctx, TranLogRow{
 		RRN: "626514000701", Type: tranTypePurchase, Status: "CREATED", Amount: 600000, Currency: "704",
-		MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000124",
+		MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000124",
 		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: "tok_normal",
 	})
 	require.NoError(t, err)

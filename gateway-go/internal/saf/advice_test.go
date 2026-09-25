@@ -17,7 +17,7 @@ func goldenOriginal() store.TranLogRow {
 	sentAt := time.Date(2026, 9, 21, 7, 32, 44, 0, time.UTC)
 	return store.TranLogRow{
 		RRN: "626514000124", Amount: 600000, Currency: "704", TerminalID: "00000042", MerchantID: "GOCPHO000000001",
-		NetworkSTAN: "000124", ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: "tok_normal",
+		NetworkSTAN: "000124", ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: testCardToken,
 	}
 }
 
@@ -43,7 +43,7 @@ func TestReversalAdvice_matchesTheGoldenVectorFieldSet__MCN_401(t *testing.T) {
 		require.Equal(t, want, adv.Fields[n], "DE %s", de)
 	}
 	require.Len(t, adv.Fields, len(vector.Fields)-len(perSend))
-	require.Equal(t, "tok_normal", adv.CardToken)
+	require.Equal(t, testCardToken, adv.CardToken)
 }
 
 func TestReversalAdvice_refusesATransactionThatWasNeverSent__MCN_401(t *testing.T) {

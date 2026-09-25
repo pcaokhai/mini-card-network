@@ -15,14 +15,14 @@ func TestTranLogRepository_overview_countsApprovalRateAndDeclineReasons__MCN_306
 	now := time.Now().UTC()
 
 	approve := func(rrn string) {
-		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID})
+		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID})
 		require.NoError(t, err)
 		require.NoError(t, repo.RecordStateTransition(ctx, id, "CREATED", "SENT"))
 		require.NoError(t, repo.UpdateStatus(ctx, id, "APPROVED", "00", "123456"))
 		require.NoError(t, repo.RecordStateTransition(ctx, id, "SENT", "APPROVED"))
 	}
 	decline := func(rrn, rc string) {
-		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID})
+		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID})
 		require.NoError(t, err)
 		require.NoError(t, repo.RecordStateTransition(ctx, id, "CREATED", "SENT"))
 		require.NoError(t, repo.UpdateStatus(ctx, id, "DECLINED", rc, ""))
@@ -68,7 +68,7 @@ func TestTranLogRepository_overview_p50AndP99FromControlledLatencies__MCN_306(t 
 	ctx := context.Background()
 
 	for i, latencyMs := range []int{100, 200, 300, 1000} {
-		id, err := repo.Insert(ctx, TranLogRow{RRN: "62651400010" + string(rune('0'+i)), Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID})
+		id, err := repo.Insert(ctx, TranLogRow{RRN: "62651400010" + string(rune('0'+i)), Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID})
 		require.NoError(t, err)
 		require.NoError(t, repo.RecordStateTransition(ctx, id, "CREATED", "SENT"))
 		require.NoError(t, repo.RecordStateTransition(ctx, id, "SENT", "APPROVED"))
@@ -94,7 +94,7 @@ func TestTranLogRepository_overview_deltaVersusSameWindowYesterday__MCN_306(t *t
 	yesterdayMidWindow := dayStart.Add(-24 * time.Hour).Add(now.Sub(dayStart) / 2)
 
 	insert := func(rrn string) int64 {
-		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID})
+		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID})
 		require.NoError(t, err)
 		return id
 	}
@@ -131,7 +131,7 @@ func TestTranLogRepository_overview_throughputIs24DenseBuckets__MCN_306(t *testi
 	now := time.Now().UTC()
 
 	at := func(rrn string, ago time.Duration) {
-		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID})
+		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: "CREATED", Amount: 1000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID})
 		require.NoError(t, err)
 		_, err = pool.Exec(ctx, `UPDATE tran_log SET created_at = $2 WHERE id = $1`, id, now.Add(-ago))
 		require.NoError(t, err)

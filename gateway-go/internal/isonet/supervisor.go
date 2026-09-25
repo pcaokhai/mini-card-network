@@ -255,8 +255,16 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	})
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
+	// connCtx ends with the connection, so a request still waiting on a socket the peer has closed
+	// (Toxiproxy does this while the issuer is not up yet) fails at once and the link reconnects.
+	connCtx, connDown := context.WithCancel(ctx)
+	defer connDown()
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- mux.Serve(serveCtx) }()
+	go func() {
+		err := mux.Serve(serveCtx)
+		connDown()
+		serveErr <- err
+	}()
 
 	s.triggerMu.Lock()
 	s.mux = mux
@@ -267,7 +275,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		s.triggerMu.Unlock()
 	}()
 
-	if err := s.signOn(ctx); err != nil {
+	if err := s.signOn(connCtx); err != nil {
 		return err
 	}
 	obs.LinkUp.WithLabelValues(endpointName).Set(1)
@@ -304,7 +312,9 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 }
 
 func (s *Supervisor) signOn(ctx context.Context) error {
-	fields, err := s.mux.Send(ctx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "001"})
+	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.EchoTimeout)
+	defer cancel()
+	fields, err := s.mux.Send(sendCtx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "001"})
 	if err != nil {
 		return err
 	}

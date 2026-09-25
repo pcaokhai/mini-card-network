@@ -46,7 +46,7 @@ func TestReversalQueuer_queuesTimeoutAsReasonSixtyEightAtomically__MCN_401_AC1(t
 	q := NewReversalQueuer(pool, nil)
 	sentAt := time.Now().UTC()
 	txn := store.TranLogRow{ID: id, RRN: "626514000123", Type: tranTypePurchase, Status: "TIMED_OUT", NetworkSTAN: "000123", Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, CreatedAt: time.Now(),
-		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: "tok_normal"}
+		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: testCardToken}
 	require.NoError(t, q.Queue(ctx, txn, "68"))
 
 	got, err := tranLog.Get(ctx, "626514000123")
@@ -61,7 +61,7 @@ func TestReversalQueuer_queuesTimeoutAsReasonSixtyEightAtomically__MCN_401_AC1(t
 	adv, err := decodePayload(nil, pending[0].Payload)
 	require.NoError(t, err)
 	require.Equal(t, "68", adv.Fields[39])
-	require.Equal(t, "tok_normal", adv.CardToken)
+	require.Equal(t, testCardToken, adv.CardToken)
 }
 
 func TestReversalQueuer_queuesCancellationAsReasonSeventeen__MCN_401_AC5(t *testing.T) {
@@ -76,7 +76,7 @@ func TestReversalQueuer_queuesCancellationAsReasonSeventeen__MCN_401_AC5(t *test
 	q := NewReversalQueuer(pool, nil)
 	sentAt := time.Now().UTC()
 	txn := store.TranLogRow{ID: id, RRN: "626514000456", Type: tranTypePurchase, Status: statusSent, NetworkSTAN: "000456", Amount: 5000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, CreatedAt: time.Now(),
-		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: "tok_normal"}
+		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: testCardToken}
 	require.NoError(t, q.Queue(ctx, txn, "17"))
 
 	pending, _, err := safRepo.ListPending(ctx)
@@ -97,14 +97,14 @@ func TestReversal_cancellationIsDeliveredAndCompletes__MCN_401(t *testing.T) {
 	sentAt := time.Now().UTC().Truncate(time.Second)
 	_, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000789", Type: tranTypePurchase, Status: "APPROVED", Amount: 71000, Currency: "704",
 		MaskedPAN: "970436******4417", TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000789",
-		ProcessingCode: "000000", POSEntryMode: "052", SentAt: &sentAt, CardToken: "tok_normal"})
+		ProcessingCode: "000000", POSEntryMode: "052", SentAt: &sentAt, CardToken: testCardToken})
 	require.NoError(t, err)
 	original, err := tranLog.Get(ctx, "626514000789")
 	require.NoError(t, err)
 
 	require.NoError(t, NewReversalQueuer(pool, nil).Queue(ctx, original, "17"))
 	mux := &fakeMux{response: map[int]string{39: "00"}}
-	w := NewWorker(mux, fakeCards{"tok_normal": testPAN}, &recordingHSM{}, make([]byte, 16), safRepo, nil,
+	w := NewWorker(mux, fakeCards{testCardToken: testPAN}, &recordingHSM{}, make([]byte, 16), safRepo, nil,
 		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
 	require.NoError(t, w.deliverOnce(ctx))
 

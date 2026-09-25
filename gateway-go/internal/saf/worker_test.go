@@ -16,7 +16,10 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
-const testPAN = "9704360000004417"
+const (
+	testPAN       = "9704360000004417"
+	testCardToken = "tok_normal"
+)
 
 type fakeMux struct {
 	sentMTIs   []string
@@ -113,7 +116,7 @@ func queuedRow(t *testing.T, id int64, attempts int) store.SafRow {
 }
 
 func newTestWorker(mux *fakeMux, safPort *fakeSaf, h *recordingHSM) *Worker {
-	return NewWorker(mux, fakeCards{"tok_normal": testPAN}, h, make([]byte, 16), safPort, nil,
+	return NewWorker(mux, fakeCards{testCardToken: testPAN}, h, make([]byte, 16), safPort, nil,
 		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
 }
 
