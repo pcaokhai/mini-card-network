@@ -42,10 +42,24 @@ type fakeStack struct {
 	limits    map[string]any
 	onCancel  func()
 	declineRC string // when set, every purchase is declined with it
+	linkState string
+	signOns   int
 }
 
 func (f *fakeStack) handler(t *testing.T) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/network/links", func(w http.ResponseWriter, _ *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"linkId": "issuer", "to": "issuer", "status": f.linkState}})
+	})
+	mux.HandleFunc("POST /v1/network/links/issuer/sign-on", func(w http.ResponseWriter, _ *http.Request) {
+		f.mu.Lock()
+		f.signOns++
+		f.linkState = "SIGNED_ON"
+		f.mu.Unlock()
+		_, _ = w.Write([]byte(`{}`))
+	})
 	mux.HandleFunc("GET /v1/cards/crd_limit00005", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("ETag", `"v1"`)
 		_, _ = w.Write([]byte(`{}`))
@@ -113,6 +127,9 @@ func newTestRunner(t *testing.T, stack *fakeStack, now *time.Time) (*Runner, *re
 	fixture, err := LoadFixture(fixturePath)
 	require.NoError(t, err)
 	stack.byRRN = map[string]string{}
+	if stack.linkState == "" {
+		stack.linkState = "SIGNED_ON"
+	}
 	srv := httptest.NewServer(stack.handler(t))
 	t.Cleanup(srv.Close)
 	terminals := &recordingTerminals{}
@@ -127,7 +144,7 @@ func newTestRunner(t *testing.T, stack *fakeStack, now *time.Time) (*Runner, *re
 
 func TestRunner_seedsEveryPlannedOutcomeAndBackdatesByTheElapsedTime__MCN_002(t *testing.T) {
 	now := planNow
-	stack := &fakeStack{}
+	stack := &fakeStack{linkState: "CONNECTED"}
 	stack.onCancel = func() { now = planNow.Add(90 * time.Second) }
 	runner, terminals, backdater := newTestRunner(t, stack, &now)
 	plan := Build(planNow, rand.New(rand.NewSource(11))) //nolint:gosec // deterministic test data
@@ -136,6 +153,7 @@ func TestRunner_seedsEveryPlannedOutcomeAndBackdatesByTheElapsedTime__MCN_002(t 
 
 	require.NoError(t, err)
 	require.Empty(t, sum.Mismatches)
+	require.Equal(t, 1, stack.signOns, "a link that is only CONNECTED gets signed on before purchasing")
 	require.Len(t, terminals.got, 7)
 	require.Equal(t, `"v1"`, stack.ifMatch, "limits are updated with the card's ETag")
 	require.EqualValues(t, LimitPerTransaction, stack.limits["perTransactionAmount"].(map[string]any)["amount"])

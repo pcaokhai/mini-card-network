@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -68,6 +69,9 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 	if err := r.Terminals.UpsertFromFixture(ctx, r.fixtureTerminals()); err != nil {
 		return Summary{}, fmt.Errorf("upsert merchants and terminals: %w", err)
 	}
+	if err := r.ensureSignedOn(ctx); err != nil {
+		return Summary{}, fmt.Errorf("sign on to the issuer: %w", err)
+	}
 	if err := r.setLimit(ctx); err != nil {
 		return Summary{}, fmt.Errorf("set %s per-transaction limit: %w", limitCardToken, err)
 	}
@@ -95,6 +99,68 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 		}
 	}
 	return sum, nil
+}
+
+// ensureSignedOn signs the issuer link on when it is only connected: the gateway sends nothing
+// but link-down declines (RC 91) until a 0800 sign-on succeeds, and it does not sign on by itself.
+func (r *Runner) ensureSignedOn(ctx context.Context) error {
+	deadline := r.Now().Add(r.SettleTimeout)
+	signOnSent := false
+	for {
+		state, err := r.issuerLinkState(ctx)
+		if err != nil {
+			return err
+		}
+		if state == "SIGNED_ON" {
+			return nil
+		}
+		if !signOnSent && state == "CONNECTED" {
+			if err := r.signOn(ctx); err != nil {
+				return err
+			}
+			signOnSent = true
+			continue
+		}
+		if !r.Now().Before(deadline) {
+			return fmt.Errorf("issuer link is %s after %s", state, r.SettleTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(r.PollInterval):
+		}
+	}
+}
+
+func (r *Runner) signOn(ctx context.Context) error {
+	status, _, err := r.do(ctx, http.MethodPost, r.GatewayURL+"/v1/network/links/issuer/sign-on", nil, map[string]any{}, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("POST sign-on: HTTP %d", status)
+	}
+	return nil
+}
+
+func (r *Runner) issuerLinkState(ctx context.Context) (string, error) {
+	var links []struct {
+		To     string `json:"to"`
+		Status string `json:"status"`
+	}
+	status, _, err := r.do(ctx, http.MethodGet, r.GatewayURL+"/v1/network/links", nil, nil, &links)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusOK {
+		return "", fmt.Errorf("GET links: HTTP %d", status)
+	}
+	for _, l := range links {
+		if l.To == "issuer" {
+			return l.Status, nil
+		}
+	}
+	return "", errors.New("gateway reports no issuer link")
 }
 
 func (r *Runner) fixtureTerminals() []store.FixtureTerminal {
