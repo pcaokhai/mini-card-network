@@ -18,7 +18,7 @@ The baseline file shows all three schemas together for review. MCN-301 (issuer),
 
 | Schema | Table | Purpose | Key constraints |
 | --- | --- | --- | --- |
-| issuer | `account` | Ledger and available balance, overdraft | `chk_available_floor`, optimistic `version` |
+| issuer | `account` | Ledger and available balance, overdraft | Floor `available ≥ −overdraft_limit` enforced by Authorize for debits under the row lock (the `chk_available_floor` CHECK was dropped in V7: a reversal always posts and may overdraw, flagged by an `audit_log` `NEGATIVE_BALANCE_AFTER_REVERSAL` row); `version` bumped on every change |
 | issuer | `card` | Card status, encrypted PAN, HMAC, PVV, ATC | `pan_hash` unique; no CVV/PIN columns |
 | issuer | `card_limit`, `velocity_counter` | Limits and fast counters | PK (card, type, period[, key]) |
 | issuer | `tran_log` | Every ISO request/response at the issuer | Partitioned by `business_date`; `uq_tran_dedupe`; FK to original |
@@ -54,6 +54,7 @@ The baseline file shows all three schemas together for review. MCN-301 (issuer),
 | issuer | `tran_log.stored_response JSONB` | Byte-exact duplicate replay (DE 38, 39, 4, 54) | MCN-402 |
 | issuer | `tran_log.status` add `REVERSAL_WITHOUT_ORIGINAL` | Reversal before original (ISO §7.3) | MCN-402 |
 | issuer | `idempotency_record(key, route, request_hash, status, body, created_at)` | Admin API idempotency | MCN-308 |
+| issuer | V7: drop `account.chk_available_floor`; add `tran_log.balance BIGINT NULL` | A reversal is an advice and must post even past the overdraft floor (the floor moved into Authorize's debit path); a duplicate balance inquiry replays its DE 54 | #119 (POS-G17/G18) |
 | acquirer | `outbox_event` (same shape as issuer) | Acquirer events for settlement | MCN-703 |
 | acquirer | `idempotency_record` | REST idempotency | MCN-303 |
 | acquirer | `network_event(id, occurred_at, severity, easy_text, technical_text)` | Network screen timeline | MCN-204 |
