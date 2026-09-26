@@ -11,16 +11,16 @@ import org.jpos.iso.ISOMsg;
  * sets the secondary bitmap (a 0430 echoes DE 90), else DE 64 - the gateway's own rule (MCN-502
  * Ruling 2). Any MAC the response inherited from its request is dropped first.
  */
-final class ResponseMac {
+public final class ResponseMac {
   private final SecurityModule securityModule;
   private final SessionKeys sessionKeys;
 
-  ResponseMac(SecurityModule securityModule, SessionKeys sessionKeys) {
+  public ResponseMac(SecurityModule securityModule, SessionKeys sessionKeys) {
     this.securityModule = securityModule;
     this.sessionKeys = sessionKeys;
   }
 
-  ISOMsg sign(ISOMsg response) throws ISOException {
+  public ISOMsg sign(ISOMsg response) throws ISOException {
     response.unset(64);
     response.unset(128);
     int macField = hasSecondaryBitmapFields(response) ? 128 : 64;
