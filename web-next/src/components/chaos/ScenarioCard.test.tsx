@@ -36,4 +36,16 @@ describe("ScenarioCard", () => {
     renderWithIntl(<ScenarioCard id="DROP_RESPONSE" enabled expert busy={false} onToggle={vi.fn()} />);
     expect(screen.getByText("Drop 0210 → timeout → 0420")).toBeInTheDocument();
   });
+
+  it("disables a scenario this stack cannot run and says why __CHA_G11", () => {
+    const onToggle = vi.fn();
+    renderWithIntl(<ScenarioCard id="DROP_RESPONSE" enabled={false} available={false} expert={false} busy={false} onToggle={onToggle} />);
+
+    const button = screen.getByRole("button", { name: "Bật sự cố" });
+    expect(button).toBeDisabled();
+    expect(screen.getByTestId("scenario-card-DROP_RESPONSE")).toHaveAttribute("data-available", "false");
+    expect(screen.getByText("Môi trường này chưa chạy được sự cố này.")).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(onToggle).not.toHaveBeenCalled();
+  });
 });

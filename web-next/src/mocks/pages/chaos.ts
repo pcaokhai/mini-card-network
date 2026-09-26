@@ -13,6 +13,8 @@ const DECLINED_PER_100 = 6;
 const REVERSED_PER_100: Partial<Record<ChaosScenarioId, number>> = { DROP_RESPONSE: 8, CONNECTION_CUT: 12, LATE_RESPONSE: 5 };
 const RUNNING_MS = 3000;
 const VERIFYING_MS = 800;
+// seq grows with elapsed time, like the gateway's per-snapshot counter (CHA-G13).
+const SEQ_EVERY_MS = 100;
 
 const IDS: ChaosScenarioId[] = ["SLOW_NETWORK", "CONNECTION_CUT", "DROP_RESPONSE", "DUPLICATE_REQUEST", "ISSUER_DOWN", "LATE_RESPONSE"];
 
@@ -34,7 +36,8 @@ export function resetChaosMock() {
 }
 
 function scenario(id: ChaosScenarioId): ChaosScenario {
-  return { id, enabled: enabled.has(id), easyText: id, technicalText: id };
+  // The dev mock stands in for a stack with a fake issuer, so every scenario can run (CHA-G11).
+  return { id, enabled: enabled.has(id), available: true, easyText: id, technicalText: id };
 }
 
 /** Where a run is after `elapsedMs`: counts grow while RUNNING, money settles once it finishes. */
@@ -56,6 +59,10 @@ function snapshot(run: MockRun, elapsedMs: number): ChaosRun {
     openingBalanceTotal: OPENING_MINOR,
     closingBalanceTotal: status === "PASSED" ? OPENING_MINOR - approved * AMOUNT_MINOR : 0,
     ledgerDiscrepancy: 0,
+    failureKind: null,
+    failureDetail: null,
+    startedAt: new Date(run.startedAt).toISOString(),
+    seq: Math.floor(elapsedMs / SEQ_EVERY_MS),
   };
 }
 
@@ -76,6 +83,11 @@ export const chaosHandlers: HttpHandler[] = [
     const run: MockRun = { runId: `run-${runs.size + 1}`, requested: transactions, startedAt: Date.now(), reversedPer100 };
     runs.set(run.runId, run);
     return HttpResponse.json(snapshot(run, 0), { status: 202 });
+  }),
+  http.get("*/v1/chaos/runs", ({ request }) => {
+    const limit = Number(new URL(request.url).searchParams.get("limit") ?? 50);
+    const newestFirst = [...runs.values()].reverse().slice(0, limit);
+    return HttpResponse.json({ items: newestFirst.map((run) => snapshot(run, Date.now() - run.startedAt)) });
   }),
   http.get("*/v1/chaos/runs/:runId", ({ params }) => {
     const run = runs.get(String(params.runId));

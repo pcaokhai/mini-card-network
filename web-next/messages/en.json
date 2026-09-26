@@ -63,6 +63,7 @@
       "0800": "0800 Echo"
     },
     "loading": "Loading sample messages…",
+    "empty": "No sample messages to dissect yet.",
     "loadFailed": "Could not load the message: {detail}",
     "raw": {
       "label": "Raw message",
@@ -293,7 +294,8 @@
     "subtitle": "Watch the links between the two banks, the resend queue and stand-in mode when something breaks.",
     "toggle": {
       "down": "Simulate issuer outage",
-      "restore": "Restore the issuer"
+      "restore": "Restore the issuer",
+      "failed": "Couldn't change the scenario. Try again."
     },
     "topology": {
       "heading": "Connection map",
@@ -359,7 +361,8 @@
         "minutes": "{n} min ago",
         "hours": "{n} h ago"
       },
-      "empty": "No links reported yet."
+      "empty": "No links reported yet.",
+      "loadFailed": "Couldn't load the link status."
     },
     "events": {
       "heading": "Today's event log",
@@ -421,7 +424,8 @@
       "reversalTech": "{mti} reversal",
       "rrn": "RRN {rrn}",
       "attemptsEasy": "Tried {n} times",
-      "attemptsTech": "attempts {n}"
+      "attemptsTech": "attempts {n}",
+      "loadFailed": "Couldn't load the SAF queue."
     }
   },
   "pos": {
@@ -921,11 +925,13 @@
     "runBatch": "Run {count} test transactions",
     "error": {
       "toggle": "Could not change the failure. Try again.",
-      "run": "Could not start the test run. Try again."
+      "run": "Could not start the test run. Try again.",
+      "scenarios": "Couldn't load the scenarios. Try again."
     },
     "card": {
       "on": "On · click to turn off",
-      "off": "Turn on failure"
+      "off": "Turn on failure",
+      "unavailable": "This stack can't run this scenario."
     },
     "money": {
       "heading": "Money check",
@@ -933,7 +939,8 @@
         "none": "Not run yet",
         "pending": "Checking…",
         "ok": "Books match",
-        "discrepancy": "Books do not match"
+        "discrepancy": "Books do not match",
+        "error": "Run failed"
       },
       "note": "Whatever fails, the money in customer accounts must always equal the sum of the transactions that really succeeded.",
       "easy": {
@@ -953,7 +960,8 @@
         "discrepancy": "Σ ledger − Σ tran_log"
       },
       "count": "{count} txns",
-      "discrepancyRun": "Mismatch in run {runId}"
+      "discrepancyRun": "Mismatch in run {runId}",
+      "errorDetail": "Run {runId} did not finish: {detail}"
     },
     "reaction": {
       "heading": "How the system is reacting",

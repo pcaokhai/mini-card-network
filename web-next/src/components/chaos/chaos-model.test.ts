@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChaosRun } from "@/shared/api/chaos-client";
+import { newerRun } from "@/shared/api/chaos-client";
 import { latencyParts, ledgerRows, runVerdict } from "./chaos-model";
 
 const running: ChaosRun = {
@@ -59,5 +60,25 @@ describe("latencyParts", () => {
   it("keeps sub-second latency in ms and shows seconds with one decimal above __MCN_405_AC3", () => {
     expect(latencyParts(212)).toEqual({ unit: "ms", value: "212" });
     expect(latencyParts(3200)).toEqual({ unit: "s", value: "3,2" });
+  });
+});
+
+describe("run errors and snapshot order", () => {
+  const runError: ChaosRun = { ...running, status: "FAILED", failureKind: "RUN_ERROR", failureDetail: "SAF not drained after the run (2 pending)" };
+
+  it("tells an infrastructure error apart from a ledger mismatch __CHA_G3", () => {
+    expect(runVerdict(runError)).toBe("error");
+    expect(runVerdict({ ...passed, status: "FAILED", failureKind: "LEDGER_MISMATCH", ledgerDiscrepancy: -2000 })).toBe("discrepancy");
+    expect(ledgerRows(runError).find((r) => r.key === "discrepancy")?.value).toEqual({ kind: "none" });
+    expect(ledgerRows(runError).find((r) => r.key === "current")?.value).toEqual({ kind: "none" });
+  });
+
+  it("keeps the newer of two snapshots by seq __CHA_G13", () => {
+    const older = { ...running, seq: 4, completed: 40 };
+    const newer = { ...running, seq: 7, completed: 70 };
+    expect(newerRun(newer, older)).toBe(newer);
+    expect(newerRun(older, newer)).toBe(newer);
+    expect(newerRun(undefined, older)).toBe(older);
+    expect(newerRun({ ...running }, older)).toBe(older); // no seq on the cached one: take the incoming
   });
 });

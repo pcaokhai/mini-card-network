@@ -4,7 +4,7 @@ import type { ChaosRun } from "@/shared/api/chaos-client";
 import { ledgerRows, runVerdict, type LedgerValue, type RunVerdict } from "./chaos-model";
 
 const CURRENCY_VND = "704";
-const BADGE_TONE: Record<RunVerdict, string> = { none: "info", pending: "info", ok: "ok", discrepancy: "bad" };
+const BADGE_TONE: Record<RunVerdict, string> = { none: "info", pending: "info", ok: "ok", discrepancy: "bad", error: "warn" };
 
 /** "Kiểm chứng tiền": the latest run's ledger invariant, with the zero difference flashing green on completion. */
 export function MoneyVerificationPanel({ run, expert }: { run: ChaosRun | undefined; expert: boolean }) {
@@ -65,6 +65,11 @@ export function MoneyVerificationPanel({ run, expert }: { run: ChaosRun | undefi
         ))}
       </dl>
       {verdict === "discrepancy" && run && <p className="chaos-ledger__alert">{t("discrepancyRun", { runId: run.runId })}</p>}
+      {verdict === "error" && run && (
+        <p role="alert" className="chaos-ledger__alert" data-tone="warn">
+          {t("errorDetail", { runId: run.runId, detail: run.failureDetail ?? "" })}
+        </p>
+      )}
     </section>
   );
 }

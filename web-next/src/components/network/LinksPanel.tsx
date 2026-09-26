@@ -8,10 +8,12 @@ interface LinksPanelProps {
   now: number;
   pendingLinkId: string | null;
   onEcho: (linkId: string) => void;
+  /** The links read failed: say so instead of "no links" (NET-G11). */
+  failed?: boolean;
 }
 
 /** MCN-205-AC2: one row per ISO link with status, latency, last echo and a "check now" echo. */
-export function LinksPanel({ links, expert, now, pendingLinkId, onEcho }: LinksPanelProps) {
+export function LinksPanel({ links, expert, now, pendingLinkId, onEcho, failed = false }: LinksPanelProps) {
   const t = useTranslations("network.links");
   const pick = (easy: string, tech: string) => t(expert ? tech : easy);
   const label = (id: string) => (id === "switch" ? t("switch") : endpointName(id));
@@ -19,7 +21,11 @@ export function LinksPanel({ links, expert, now, pendingLinkId, onEcho }: LinksP
   return (
     <section aria-label={t("ariaLabel")} className="net-card gap-1">
       <h2 className="mb-2">{t("heading")}</h2>
-      {links.length === 0 ? (
+      {failed ? (
+        <p role="alert" className="net-desc net-desc--error">
+          {t("loadFailed")}
+        </p>
+      ) : links.length === 0 ? (
         <p className="net-desc">{t("empty")}</p>
       ) : (
         <table className="net-links">
