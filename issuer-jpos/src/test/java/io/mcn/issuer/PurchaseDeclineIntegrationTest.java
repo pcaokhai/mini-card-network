@@ -653,11 +653,15 @@ class PurchaseDeclineIntegrationTest {
     }
   }
 
+  /** Verifies the response's MAC, in DE 128 when it has a secondary bitmap, else DE 64. */
   private static boolean responseMacVerifiesUnder(ISOMsg response, byte[] zak) throws Exception {
+    int macField = response.hasField(128) ? 128 : 64;
+    if (!response.hasField(macField)) return false;
     ISOMsg unsigned = (ISOMsg) response.clone();
     unsigned.unset(64);
+    unsigned.unset(128);
     byte[] expected = new JCESecurityModule(LMK_HEX).computeMac(unsigned.pack(), zak);
-    return HexFormat.of().formatHex(expected).equalsIgnoreCase(response.getString(64));
+    return HexFormat.of().formatHex(expected).equalsIgnoreCase(response.getString(macField));
   }
 
   @Test
@@ -718,6 +722,20 @@ class PurchaseDeclineIntegrationTest {
 
     assertThat(purchaseUnder(56, "9704360000005540", 1_000L, ZAK2, ZPK2).getString(39))
         .isEqualTo("00");
+  }
+
+  @Test
+  @Order(54)
+  @DisplayName("0430 MAC: the reversal ack carries a MAC under the active (rotated) ZAK")
+  void reversalAckIsMacedUnderTheActiveZak() throws Exception {
+    assertThat(purchaseUnder(58, "9704360000005540", 1_000L, ZAK2, ZPK2).getString(39))
+        .isEqualTo("00");
+
+    ISOMsg ack = reversal(59, 58, "000000", 1_000L);
+
+    assertThat(ack.getMTI()).isEqualTo("0430");
+    assertThat(ack.getString(39)).isEqualTo("00");
+    assertThat(responseMacVerifiesUnder(ack, ZAK2)).isTrue();
   }
 
   private static void execute(String sql) throws Exception {

@@ -61,15 +61,25 @@ class RespondReversalTest {
   @Test
   void abort_answers96SoTheAcquirerRepeats__MCN_401() throws Exception {
     ISOMsg request = new ISOMsg("0420");
+    request.setPackager(new org.jpos.iso.packager.GenericPackager("src/dist/cfg/iso87ascii.xml"));
     request.set(39, "68");
     var sent = new java.util.ArrayList<ISOMsg>();
     Context ctx = new Context();
     ctx.put(TxnContextKeys.REQUEST, request);
     ctx.put(TxnContextKeys.SOURCE, recordingSource(sent));
 
-    new RespondReversal().abort(0, ctx);
+    new RespondReversal(
+            new io.mcn.issuer.adapter.crypto.JCESecurityModule(LMK_HEX),
+            FixedSessionKeys.of(ZAK, ZAK))
+        .abort(0, ctx);
 
-    assertThat(sent).singleElement().satisfies(r -> assertThat(r.getString(39)).isEqualTo("96"));
+    assertThat(sent)
+        .singleElement()
+        .satisfies(
+            r -> {
+              assertThat(r.getString(39)).isEqualTo("96");
+              assertThat(r.hasField(64)).isTrue(); // the "not recorded" answer is MACed too
+            });
   }
 
   private static org.jpos.iso.ISOSource recordingSource(java.util.List<ISOMsg> sent) {
@@ -84,5 +94,42 @@ class RespondReversalTest {
         return true;
       }
     };
+  }
+
+  private static final String LMK_HEX =
+      "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+  private static final byte[] ZAK =
+      java.util.HexFormat.of().parseHex("3132333435363738393a3b3c3d3e3f40");
+
+  /**
+   * docs/03 §4: 64/128 is mandatory on the 0430. The echoed DE 90 sets the secondary bitmap, so the
+   * MAC goes in DE 128 (as the gateway MACs its 0420), under the ACTIVE ZAK - never the acquirer's
+   * own 0420 MAC echoed back.
+   */
+  @Test
+  @org.junit.jupiter.api.DisplayName(
+      "0430 MAC: the reversal ack is MACed in DE 128 under the active ZAK, not the 0420's echoed")
+  void should_macThe0430InDe128UnderTheActiveZak() throws Exception {
+    ISOMsg request = new ISOMsg("0420");
+    request.setPackager(new org.jpos.iso.packager.GenericPackager("src/dist/cfg/iso87ascii.xml"));
+    request.set(3, "000000");
+    request.set(4, "000000010000");
+    request.set(7, "0922120500");
+    request.set(11, "000123");
+    request.set(39, "17");
+    request.set(90, "0200000122092212000000000970499" + "0".repeat(11));
+    request.set(128, "0123456789ABCDEF"); // the acquirer's MAC over its 0420
+    Context ctx = new Context();
+    ctx.put(TxnContextKeys.REQUEST, request);
+    var hsm = new io.mcn.issuer.adapter.crypto.JCESecurityModule(LMK_HEX);
+
+    ISOMsg response =
+        new RespondReversal(hsm, FixedSessionKeys.of(ZAK, ZAK)).signedResponse(ctx, "00");
+
+    assertThat(response.hasField(64)).isFalse();
+    ISOMsg unsigned = (ISOMsg) response.clone();
+    unsigned.unset(128);
+    assertThat(response.getBytes(128)).isEqualTo(hsm.computeMac(unsigned.pack(), ZAK));
+    assertThat(response.getString(128)).isNotEqualToIgnoringCase("0123456789ABCDEF");
   }
 }

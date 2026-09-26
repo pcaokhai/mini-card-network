@@ -7,7 +7,6 @@ import io.mcn.issuer.adapter.persistence.KeyStoreRepository;
 import io.mcn.issuer.application.SecurityModule;
 import io.mcn.issuer.application.SessionKeys;
 import java.io.Serializable;
-import java.util.Arrays;
 import java.util.HexFormat;
 import org.jpos.core.Configurable;
 import org.jpos.core.Configuration;
@@ -101,26 +100,7 @@ public class Respond implements AbortParticipant, Configurable, Destroyable {
 
   /** {@link #buildResponse} with its MAC attached: what actually goes on the wire. */
   ISOMsg signedResponse(Context ctx) throws ISOException {
-    ISOMsg response = buildResponse(ctx);
-    int macField = hasSecondaryBitmapFields(response) ? 128 : 64;
-    response.unset(64);
-    response.unset(128);
-    byte[] zak = sessionKeys.active("ZAK");
-    try {
-      response.set(macField, securityModule.computeMac(response.pack(), zak));
-    } finally {
-      Arrays.fill(zak, (byte) 0);
-    }
-    return response;
-  }
-
-  private static boolean hasSecondaryBitmapFields(ISOMsg msg) {
-    for (int field = 65; field <= 127; field++) {
-      if (msg.hasField(field)) {
-        return true;
-      }
-    }
-    return false;
+    return new ResponseMac(securityModule, sessionKeys).sign(buildResponse(ctx));
   }
 
   ISOMsg buildResponse(Context ctx) throws ISOException {

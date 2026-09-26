@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/network-page.md` |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Approved for integration (links, events, SAF, echo); Draft for `/v1/network/switch` and `/v1/terminals`, which the provider doesn't have yet |
 | Date | 2026-09-25 |
 | Screen | route `/network`, container `web-next/src/app/(console)/network/NetworkScreen.tsx` |
@@ -506,9 +506,12 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | NET-G15 | Gateway event texts are English only, with no language-neutral code. The web maps five exact strings, so any wording change silently falls back to English. | `network-model.ts` `GATEWAY_EVENT_KEYS`; Ruling 7 | contracts + GW | Add `code` to `NetworkEvent` (contract PR) and map by code |
 | NET-G16 | `p99LatencyMs` is always null and `inFlight` always 0: nothing writes those columns. The "Độ trễ" column is always "—" on the real stack. | `migrations/00001_link_state_and_network_event.sql`; no writer in `internal/` | GW | Compute p99 from the MUX latency histogram; track in-flight in the MUX |
 | NET-G17 | Problem `type` values are bare slugs (`unknown-link`, `link-not-ready`), not docs/04 URIs, and `link-not-ready` isn't in the docs/04 §3 catalogue (the nearest is `link-down` 503). | `internal/api/lab.go` `problem()`; `network.go:162` | GW | Shared URI problem writer; align with the catalogue |
+| NET-G19 | The issuer's 0430 (reversal acknowledgement) carried no MAC of its own: `RespondReversal` cloned the 0420 and sent it back with the acquirer's own DE 128 MAC echoed, although docs/03 §4 makes 64/128 mandatory on the 0430 | `RespondReversal.buildResponse` | ISS | **Fixed** in #122: every 0430 from the reversal chain (00, and the 96 that makes the SAF repeat) is MACed under the ACTIVE ZAK from `key_store`, in DE 128 because the echoed DE 90 sets the secondary bitmap (the gateway's own rule for its 0420, MCN-502 Ruling 2), through the shared `ResponseMac` Respond also uses. The gateway ignores the 0430's MAC (`saf/worker.go` checks only DE 39), so this can't break delivery. Still unsigned: the two 0430s `ReversalListener` sends itself (91 on a link that isn't signed on, and the fallback when queueing fails) |
+| NET-G20 | The gateway never verifies the 0430's MAC: the SAF worker marks an advice ACKED on DE 39 = "00" alone, so a forged or corrupted 0430 would complete a reversal the issuer never recorded | `saf.Worker.deliverRow` | GW | Verify the 0430 like a 0210 (`purchase.MACVerifier`, DE 128 because of DE 90, with dual-key acceptance), and treat a failure as not acknowledged (retry). Possible now that the issuer MACs every 0430 (NET-G19). Open |
 
 ## 10. Change log
 
 | Version | Date | Change |
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack (GET only) |
+| 1.1 | 2026-09-26 | NET-G19 (issuer 0430 unsigned) Fixed in #122; NET-G20 (gateway doesn't verify the 0430 MAC) added, open. |

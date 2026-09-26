@@ -25,5 +25,10 @@
     <property name="jdbc-password" value="${DB_PASSWORD}" />
   </participant>
 
-  <participant class="io.mcn.issuer.adapter.txn.RespondReversal" logger="Q2" />
+  <!-- RespondReversal MACs every 0430 under the ACTIVE ZAK from key_store (docs/03 §4). -->
+  <participant class="io.mcn.issuer.adapter.txn.RespondReversal" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+  </participant>
 </txnmgr>
