@@ -1,5 +1,6 @@
 import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { labHandlers } from "@/mocks/pages/lab";
@@ -88,5 +89,13 @@ describe("MessageLabScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "0210 Trả lời" }));
     await screen.findByRole("button", { name: "Bit 39, bật" });
     expect(screen.getByRole("button", { name: "Bit 11, bật" })).not.toBe(before);
+  });
+
+  it("says there are no samples instead of loading forever when the list is empty __LAB_G5", async () => {
+    server.use(http.get("*/v1/lab/messages/samples", () => HttpResponse.json([])));
+    renderWithIntl(<MessageLabScreen />);
+
+    expect(await screen.findByText("Chưa có message mẫu nào để mổ xẻ.")).toBeInTheDocument();
+    expect(screen.queryByText("Đang tải message mẫu…")).not.toBeInTheDocument();
   });
 });

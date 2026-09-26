@@ -1,6 +1,7 @@
 // BFF (web-next/CLAUDE.md): the browser calls /api/v1/..., and this server-side handler forwards to
 // the service that owns the path, so the browser never talks to the gateway or the Issuer Admin API
-// directly. Card administration belongs to the issuer (docs/04); everything else to the gateway.
+// directly. Cards, accounts and the issuer key inventory belong to the issuer (docs/04 §1);
+// everything else to the gateway.
 // ponytail: a pass-through proxy, no auth or caching; add those when the BFF gains sessions.
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:8080";
@@ -12,7 +13,9 @@ const FORWARDED_RESPONSE_HEADERS = ["content-type", "etag", "location", "retry-a
 type Context = { params: Promise<{ path: string[] }> };
 
 function upstreamFor(path: string[]): string {
-  return path[0] === "v1" && path[1] === "cards" ? ISSUER_ADMIN_URL : GATEWAY_URL;
+  if (path[0] !== "v1") return GATEWAY_URL;
+  const issuerOwned = path[1] === "cards" || path[1] === "accounts" || (path[1] === "keys" && path[2] === "issuer");
+  return issuerOwned ? ISSUER_ADMIN_URL : GATEWAY_URL;
 }
 
 function pick(headers: Headers, names: string[]): Headers {

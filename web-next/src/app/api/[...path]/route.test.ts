@@ -20,6 +20,20 @@ describe("BFF proxy (web-next/CLAUDE.md: the browser talks only to Next.js)", ()
     expect(String(upstream.mock.calls[0][0])).toBe("http://localhost:8081/v1/cards/crd_1/ledger?limit=50");
   });
 
+  it("sends the issuer key inventory and accounts to the issuer admin API, the acquirer keys to the gateway __SEC_G1", async () => {
+    const upstream = stubUpstream();
+
+    await GET(new Request("http://web/api/v1/keys/issuer"), ctx("v1", "keys", "issuer"));
+    await GET(new Request("http://web/api/v1/accounts/acc_1"), ctx("v1", "accounts", "acc_1"));
+    await GET(new Request("http://web/api/v1/keys/acquirer"), ctx("v1", "keys", "acquirer"));
+
+    expect(upstream.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://localhost:8081/v1/keys/issuer",
+      "http://localhost:8081/v1/accounts/acc_1",
+      "http://localhost:8080/v1/keys/acquirer",
+    ]);
+  });
+
   it("sends everything else to the gateway", async () => {
     const upstream = stubUpstream();
 

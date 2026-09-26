@@ -365,7 +365,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** @description Recent runs, newest first. Runs are kept in memory by the gateway, so the list is empty after a restart. */
+        get: operations["listChaosRuns"];
         put?: never;
         post: operations["startChaosRun"];
         delete?: never;
@@ -463,6 +464,23 @@ export interface paths {
         };
         get?: never;
         put: operations["updateCardLimits"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/cards/{cardRef}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Admin actions on the card (block, unblock, limit changes), newest first. */
+        get: operations["getCardAudit"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -575,6 +593,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Allowed only in stage OPEN. */
         post: operations["triggerCutover"];
         delete?: never;
         options?: never;
@@ -591,6 +610,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Allowed only in stage TOTALS_EXCHANGED. */
         post: operations["runReconciliation"];
         delete?: never;
         options?: never;
@@ -639,6 +659,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Allowed only in stage RECONCILED with no open breaks. */
         post: operations["generateClearingFile"];
         delete?: never;
         options?: never;
@@ -706,7 +727,13 @@ export interface components {
             latencyMs?: number | null;
             /** Format: date-time */
             createdAt: string;
+            reversalReason?: components["schemas"]["ReversalReason"] | null;
         };
+        /**
+         * @description Why a reversal (0420) was queued, from its DE 39 reason code. Null when the transaction was never reversed.
+         * @enum {string}
+         */
+        ReversalReason: "CUSTOMER_CANCELLATION" | "TIMEOUT" | "MAC_FAILURE" | "SEND_FAILURE";
         Transaction: components["schemas"]["TransactionSummary"] & {
             authCode?: string | null;
             approvedAmount?: components["schemas"]["Money"] | null;
@@ -776,6 +803,8 @@ export interface components {
                 text: string;
             }[];
             fields: components["schemas"]["IsoField"][];
+            /** @description The packed wire message (encode only; null on decode). PAN masked, PIN block and MAC redacted, as everywhere in the Lab. */
+            packed?: string | null;
         };
         Terminal: {
             terminalId: string;
@@ -820,9 +849,15 @@ export interface components {
             occurredAt: string;
             /** @enum {string} */
             severity: "INFO" | "OK" | "WARN" | "ERROR";
+            code?: components["schemas"]["NetworkEventCode"];
             easyText: string;
             technicalText: string;
         };
+        /**
+         * @description What happened, independent of language. Clients render their own copy from it; easyText/technicalText are the provider's English fallback.
+         * @enum {string}
+         */
+        NetworkEventCode: "LINK_UP" | "LINK_DOWN" | "SIGNED_ON" | "SIGNED_OFF" | "SIGNED_ON_AGAIN" | "SIGN_ON_FAILED" | "ECHO_OK" | "ECHO_FAILED" | "LATE_RESPONSE";
         SwitchStatus: {
             /** @enum {string} */
             circuit: "CLOSED" | "OPEN" | "HALF_OPEN";
@@ -835,6 +870,8 @@ export interface components {
         ChaosScenario: {
             id: components["schemas"]["ChaosScenarioId"];
             enabled: boolean;
+            /** @description False when this stack cannot run the scenario (e.g. DROP_RESPONSE without a fake issuer); enabling it then answers 501 scenario-unavailable. Absent means available. */
+            available?: boolean;
             easyText: string;
             technicalText: string;
         };
@@ -856,8 +893,23 @@ export interface components {
              * @description must be 0
              */
             ledgerDiscrepancy?: number;
+            /**
+             * @description Set when status is FAILED. LEDGER_MISMATCH means the issuer's balances moved differently from the run's outcomes; RUN_ERROR means the run could not complete (infrastructure), not a money problem.
+             * @enum {string|null}
+             */
+            failureKind?: "LEDGER_MISMATCH" | "RUN_ERROR" | null;
+            failureDetail?: string | null;
+            /** Format: date-time */
+            startedAt?: string;
+            /** @description Increases with every snapshot of this run; clients ignore a snapshot older than one they hold. */
+            seq?: number;
         };
         Overview: {
+            /**
+             * Format: date
+             * @description The acquirer's current business date (ADR-007); every per-day figure in this object counts this date
+             */
+            businessDate?: string;
             transactionsToday: number;
             transactionsDeltaPct?: number;
             approvalRate: number;
@@ -914,12 +966,27 @@ export interface components {
             entryType: "PURCHASE" | "CASH" | "REFUND" | "REVERSAL" | "COMPLETION" | "FEE" | "ADJUSTMENT";
             rrn?: string | null;
             postings: {
-                /** @description customer account number (masked) or GL code */
+                /** @description customer account id (ACC-<cardRef>, never a card or account number) or a GL code */
                 account: string;
                 /** @enum {string} */
                 direction: "DEBIT" | "CREDIT";
                 amount: components["schemas"]["Money"];
             }[];
+        };
+        AuditEntry: {
+            auditId: string;
+            /** Format: date-time */
+            occurredAt: string;
+            /** @description The X-Actor the BFF sent */
+            actor: string;
+            /** @enum {string} */
+            action: "CARD_BLOCKED" | "CARD_UNBLOCKED" | "CARD_LIMITS_UPDATED";
+            before?: {
+                [key: string]: unknown;
+            } | null;
+            after?: {
+                [key: string]: unknown;
+            } | null;
         };
         KeyInfo: {
             /** @enum {string} */
@@ -970,6 +1037,10 @@ export interface components {
             openBreaks: number;
             netPosition?: components["schemas"]["Money"] | null;
             clearingFile?: components["schemas"]["ClearingFile"] | null;
+            /** @description Acquirer institution id (DE 32), e.g. "970499" */
+            participantId?: string;
+            /** @description ISO 4217 numeric currency of every TotalsRow amount */
+            currency?: string;
         };
         ReconBreak: {
             breakId: string;
@@ -1192,6 +1263,7 @@ export interface operations {
                 last4?: string;
                 from?: string;
                 to?: string;
+                reversalReason?: components["schemas"]["ReversalReason"];
             };
             header?: never;
             path?: never;
@@ -1474,6 +1546,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
+                        /** @description Advices still owed (PENDING + IN_FLIGHT); DEAD rows are counted in deadCount only. */
                         depth: number;
                         deadCount: number;
                         items: components["schemas"]["SafItem"][];
@@ -1574,6 +1647,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChaosScenario"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listChaosRuns: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ChaosRun"][];
+                    };
                 };
             };
             default: components["responses"]["Problem"];
@@ -1782,6 +1880,35 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    getCardAudit: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                cardRef: components["parameters"]["CardRef"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["AuditEntry"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     getCardLedger: {
         parameters: {
             query?: {
@@ -1948,6 +2075,15 @@ export interface operations {
                     "application/json": components["schemas"]["SettlementDay"];
                 };
             };
+            /** @description conflict: the day is past OPEN */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };
@@ -1971,6 +2107,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettlementDay"];
+                };
+            };
+            /** @description conflict: the day is not in TOTALS_EXCHANGED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -2028,6 +2173,15 @@ export interface operations {
                     "application/json": components["schemas"]["ReconBreak"];
                 };
             };
+            /** @description conflict: the break is already resolved, or its day is not RECONCILED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };
@@ -2051,6 +2205,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClearingFile"];
+                };
+            };
+            /** @description open-breaks: breaks are still open (detail says how many); conflict: the day is not RECONCILED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];

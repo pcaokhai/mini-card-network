@@ -42,15 +42,23 @@ function IssuerDownToggle() {
   const down = scenarios.data?.find((s) => s.id === "ISSUER_DOWN")?.enabled ?? false;
 
   return (
-    <button
-      type="button"
-      className="net-toggle"
-      data-down={down}
-      disabled={scenarios.data === undefined || setScenario.isPending}
-      onClick={() => setScenario.mutate({ scenarioId: "ISSUER_DOWN", enabled: !down }, { onSettled: refreshNetwork })}
-    >
-      {t(down ? "restore" : "down")}
-    </button>
+    <div className="flex flex-col items-end gap-1.5">
+      <button
+        type="button"
+        className="net-toggle"
+        data-down={down}
+        disabled={scenarios.data === undefined || setScenario.isPending}
+        onClick={() => setScenario.mutate({ scenarioId: "ISSUER_DOWN", enabled: !down }, { onSettled: refreshNetwork })}
+      >
+        {t(down ? "restore" : "down")}
+      </button>
+      {/* Same one-line alert as the Chaos Lab (NET-G10). */}
+      {setScenario.isError && (
+        <p role="alert" className="net-desc net-desc--error">
+          {t("failed")}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -93,12 +101,13 @@ export function NetworkScreen() {
             now={now}
             pendingLinkId={linkAction.isPending ? (linkAction.variables?.linkId ?? null) : null}
             onEcho={(linkId) => linkAction.mutate({ linkId, action: "echo" })}
+            failed={links.isError}
           />
           <EventLog events={events.data ?? []} expert={expert} now={now} />
         </div>
         <div className="flex flex-col gap-5">
           <BreakerCard switchStatus={switchStatus.data} expert={expert} />
-          <SafCard saf={saf.data} expert={expert} />
+          <SafCard saf={saf.data} expert={expert} failed={saf.isError} />
         </div>
       </div>
     </section>

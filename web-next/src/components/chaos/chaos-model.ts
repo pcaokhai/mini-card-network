@@ -10,14 +10,17 @@ export const SCENARIO_ICONS: Record<ChaosScenarioId, string> = {
   LATE_RESPONSE: "M12 8v4l2 2M12 4a8 8 0 1 0 0 16a8 8 0 0 0 0-16z",
 };
 
-export type RunVerdict = "none" | "pending" | "ok" | "discrepancy";
+export type RunVerdict = "none" | "pending" | "ok" | "discrepancy" | "error";
 
+/** A FAILED run is a money verdict only when the provider says LEDGER_MISMATCH; RUN_ERROR means it
+ * could not finish (CHA-G3). */
 export function runVerdict(run: ChaosRun | undefined): RunVerdict {
   if (!run) return "none";
   if (run.status === "PASSED") return "ok";
-  if (run.status === "FAILED") return "discrepancy";
+  if (run.status === "FAILED") return run.failureKind === "RUN_ERROR" ? "error" : "discrepancy";
   return "pending";
 }
+
 
 export type LedgerKey = "opening" | "approved" | "reversed" | "current" | "discrepancy";
 export type LedgerValue =
@@ -46,6 +49,16 @@ export function ledgerRows(run: ChaosRun | undefined): LedgerRow[] {
   }
   const opening = run.openingBalanceTotal ?? 0;
   const verdict = runVerdict(run);
+  if (verdict === "error") {
+    // The run stopped before verification: its money rows mean nothing (CHA-G3).
+    return [
+      { key: "opening", value: opening ? { kind: "money", amount: opening } : NONE },
+      { key: "approved", count: run.approved ?? 0, value: NONE },
+      { key: "reversed", value: { kind: "count", amount: run.reversed ?? 0 } },
+      { key: "current", value: NONE },
+      { key: "discrepancy", value: NONE },
+    ];
+  }
   const finished = verdict === "ok" || verdict === "discrepancy";
   const closing = run.closingBalanceTotal ?? 0;
   const discrepancy = run.ledgerDiscrepancy ?? 0;

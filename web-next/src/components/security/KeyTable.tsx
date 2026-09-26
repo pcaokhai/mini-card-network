@@ -40,7 +40,8 @@ export function KeyTable({ keys, expert, canRotate, onRotate, newKcv }: KeyTable
           {keyRows(keys).map((row) => {
             const name = t(`types.${row.keyType}.name`);
             return (
-              <tr key={row.keyType} className="security-keys__grid security-keys__row">
+              // One type can have an ACTIVE and a PENDING key at once (SEC-G8): the KCV tells them apart.
+              <tr key={`${row.keyType}-${row.kcv}`} className="security-keys__grid security-keys__row">
                 <td className="security-keys__key">
                   <span className="security-keys__name">{expert ? `${row.keyType} · ${name}` : name}</span>
                   <span className="security-note">
@@ -64,7 +65,7 @@ export function KeyTable({ keys, expert, canRotate, onRotate, newKcv }: KeyTable
                   </span>
                 </td>
                 <td>
-                  {canRotate && row.keyType === "ZPK" && (
+                  {canRotate && row.keyType === "ZPK" && (row.status === "active" || row.status === "rotateSoon") && (
                     <button type="button" className="security-button" data-variant="outline" onClick={onRotate}>
                       {t("rotateNow")}
                     </button>

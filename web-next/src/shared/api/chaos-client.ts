@@ -98,20 +98,43 @@ export function useStartChaosRun() {
   });
 }
 
+/** The gateway no longer knows the run (runs live in its memory, so a restart forgets them). */
+export class ChaosRunGoneError extends Error {
+  constructor(runId: string) {
+    super(`chaos run ${runId} not found`);
+    this.name = "ChaosRunGoneError";
+  }
+}
+
 export function useChaosRun(runId: string | null) {
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: chaosRunKey(runId ?? "none"),
     enabled: runId != null,
     queryFn: async (): Promise<ChaosRun> => {
-      const { data, error } = await client.GET("/v1/chaos/runs/{runId}", {
-        params: { path: { runId: runId as string } },
+      const id = runId as string; // enabled only when runId is set
+      const { data, error, response } = await client.GET("/v1/chaos/runs/{runId}", {
+        params: { path: { runId: id } },
         fetch: liveFetch,
       });
+      if (response.status === 404) throw new ChaosRunGoneError(id);
       if (error) throw error;
-      return data;
+      // A WS snapshot may already be newer than this poll (CHA-G13).
+      return newerRun(queryClient.getQueryData<ChaosRun>(chaosRunKey(id)), data);
     },
-    refetchInterval: (query) => (isRunFinished(query.state.data) ? false : RUN_POLL_INTERVAL_MS),
+    // A gone run never comes back: no retries and no more polling (CHA-G7).
+    retry: (failureCount, error) => !(error instanceof ChaosRunGoneError) && failureCount < 3,
+    refetchInterval: (query) =>
+      isRunFinished(query.state.data) || query.state.error instanceof ChaosRunGoneError ? false : RUN_POLL_INTERVAL_MS,
   });
+}
+
+/** The later of two snapshots of one run by `seq`, so a delayed WS event can't roll the panel
+ * back past a newer poll (CHA-G13). A snapshot without `seq` never wins over one with it. */
+export function newerRun(cached: ChaosRun | undefined, incoming: ChaosRun): ChaosRun {
+  if (cached?.seq === undefined) return incoming;
+  if (incoming.seq === undefined) return cached;
+  return incoming.seq >= cached.seq ? incoming : cached;
 }
 
 export function isRunFinished(run: ChaosRun | undefined): boolean {

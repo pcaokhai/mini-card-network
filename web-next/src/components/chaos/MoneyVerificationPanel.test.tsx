@@ -71,4 +71,14 @@ describe("MoneyVerificationPanel", () => {
     expect(screen.getByText("Đang kiểm chứng…")).toBeInTheDocument();
     expect(screen.getByTestId("ledger-discrepancy-value")).not.toHaveAttribute("data-flash");
   });
+
+  it("shows a run that could not finish as an error with the provider's reason, not a ledger mismatch __CHA_G3", () => {
+    const failed: ChaosRun = { ...passed, status: "FAILED", failureKind: "RUN_ERROR", failureDetail: "SAF not drained after the run (2 pending)", closingBalanceTotal: 0 };
+    renderWithIntl(<MoneyVerificationPanel run={failed} expert={false} />);
+
+    expect(screen.getByTestId("money-verification")).toHaveAttribute("data-result", "error");
+    expect(screen.getByText("Lần chạy thử bị lỗi")).toBeInTheDocument();
+    expect(screen.queryByText("Sổ sách lệch")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("SAF not drained after the run (2 pending)");
+  });
 });

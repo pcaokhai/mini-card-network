@@ -191,4 +191,28 @@ describe("NetworkScreen", () => {
     renderScreen();
     expect(await screen.findByRole("heading", { level: 1, name: "Vận hành mạng" })).toBeInTheDocument();
   });
+
+  it("NET-G10: a failed issuer-outage toggle says so, like the Chaos Lab", async () => {
+    server.use(http.put("*/v1/chaos/scenarios/:scenarioId", () => HttpResponse.json({ title: "boom" }, { status: 500 })));
+    renderScreen();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Mô phỏng ngân hàng phát hành sập" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Không đổi được sự cố. Hãy thử lại.");
+  });
+
+  it("NET-G11: a failed SAF or links read shows an error, never the empty state", async () => {
+    server.use(
+      http.get("*/v1/network/saf", () => HttpResponse.json({ title: "boom" }, { status: 502 })),
+      http.get("*/v1/network/links", () => HttpResponse.json({ title: "boom" }, { status: 502 })),
+    );
+    renderScreen();
+
+    const saf = section("Hàng đợi gửi lại");
+    expect(await within(saf).findByText("Không tải được hàng đợi gửi lại.")).toBeInTheDocument();
+    expect(within(saf).queryByText("Trống")).not.toBeInTheDocument();
+    const links = section("Các kết nối");
+    expect(await within(links).findByText("Không tải được trạng thái các kết nối.")).toBeInTheDocument();
+    expect(within(links).queryByText(/Chưa có đường kết nối nào/)).not.toBeInTheDocument();
+  });
 });

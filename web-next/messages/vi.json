@@ -63,6 +63,7 @@
       "0800": "0800 Kiểm tra kết nối"
     },
     "loading": "Đang tải message mẫu…",
+    "empty": "Chưa có message mẫu nào để mổ xẻ.",
     "loadFailed": "Không tải được message: {detail}",
     "raw": {
       "label": "Message thô",
@@ -293,7 +294,8 @@
     "subtitle": "Theo dõi các đường kết nối giữa hai ngân hàng, hàng đợi gửi lại và chế độ duyệt thay khi có sự cố.",
     "toggle": {
       "down": "Mô phỏng ngân hàng phát hành sập",
-      "restore": "Khôi phục ngân hàng phát hành"
+      "restore": "Khôi phục ngân hàng phát hành",
+      "failed": "Không đổi được sự cố. Hãy thử lại."
     },
     "topology": {
       "heading": "Sơ đồ kết nối",
@@ -359,7 +361,8 @@
         "minutes": "{n} phút trước",
         "hours": "{n} giờ trước"
       },
-      "empty": "Chưa có đường kết nối nào được báo về."
+      "empty": "Chưa có đường kết nối nào được báo về.",
+      "loadFailed": "Không tải được trạng thái các kết nối."
     },
     "events": {
       "heading": "Nhật ký sự kiện hôm nay",
@@ -421,7 +424,8 @@
       "reversalTech": "{mti} reversal",
       "rrn": "RRN {rrn}",
       "attemptsEasy": "Đã thử {n} lần",
-      "attemptsTech": "attempts {n}"
+      "attemptsTech": "attempts {n}",
+      "loadFailed": "Không tải được hàng đợi gửi lại."
     }
   },
   "pos": {
@@ -921,11 +925,13 @@
     "runBatch": "Chạy thử {count} giao dịch",
     "error": {
       "toggle": "Không đổi được sự cố. Hãy thử lại.",
-      "run": "Không bắt đầu được lần chạy thử. Hãy thử lại."
+      "run": "Không bắt đầu được lần chạy thử. Hãy thử lại.",
+      "scenarios": "Không tải được danh sách sự cố. Hãy thử lại."
     },
     "card": {
       "on": "Đang bật · bấm để tắt",
-      "off": "Bật sự cố"
+      "off": "Bật sự cố",
+      "unavailable": "Môi trường này chưa chạy được sự cố này."
     },
     "money": {
       "heading": "Kiểm chứng tiền",
@@ -933,7 +939,8 @@
         "none": "Chưa chạy thử",
         "pending": "Đang kiểm chứng…",
         "ok": "Sổ sách khớp",
-        "discrepancy": "Sổ sách lệch"
+        "discrepancy": "Sổ sách lệch",
+        "error": "Lần chạy thử bị lỗi"
       },
       "note": "Dù sự cố gì xảy ra, tổng tiền trong tài khoản khách phải luôn bằng đúng tổng các giao dịch thật sự thành công.",
       "easy": {
@@ -953,7 +960,8 @@
         "discrepancy": "Σ ledger − Σ tran_log"
       },
       "count": "{count} lệnh",
-      "discrepancyRun": "Lệch trong lần chạy {runId}"
+      "discrepancyRun": "Lệch trong lần chạy {runId}",
+      "errorDetail": "Lần chạy {runId} không hoàn tất: {detail}"
     },
     "reaction": {
       "heading": "Hệ thống đang phản ứng thế nào",

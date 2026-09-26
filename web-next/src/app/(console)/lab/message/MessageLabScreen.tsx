@@ -58,7 +58,8 @@ export function MessageLabScreen() {
           {t("loadFailed", { detail: problemDetail(error) })}
         </p>
       )}
-      {!decoded && !error && <p className="text-muted">{t("loading")}</p>}
+      {samples.data?.length === 0 && !error && <p className="text-muted">{t("empty")}</p>}
+      {!decoded && !error && samples.data?.length !== 0 && <p className="text-muted">{t("loading")}</p>}
       {decoded && <Dissection decoded={decoded} expert={expert} copy={copy} page={page} onPage={setPage} picked={picked} onPick={setPicked} />}
     </section>
   );
