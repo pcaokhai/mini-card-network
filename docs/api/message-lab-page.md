@@ -291,7 +291,7 @@ Load: at most 1 samples call and 4 decode calls per page session (decodes are ca
 | LAB-G5 | An empty samples list leaves "Đang tải message mẫu…" on screen forever. | `MessageLabScreen.tsx`: loading shows while `!decoded && !error`, and decode is disabled without a `raw` | WEB | **Fixed** in #124: an empty samples list shows "Chưa có message mẫu nào để mổ xẻ." |
 | LAB-G6 | `maxLength: 8192` on `raw` isn't enforced. The request is bounded only by the server's 5 s `ReadTimeout`. | `internal/api/lab.go` `handleDecode` has no `http.MaxBytesReader` | GW | **Fixed** in #112: `http.MaxBytesReader` on decode and encode; `raw` over 8192 answers 400 `validation-error` |
 | LAB-G7 | The provider's `easyName`, `technicalName` and `format` are English and coarse (`n`, `b`). The page ignores them for the 27 DEs in its own `FIELD_SPECS` and glossary, so two sources of truth exist for DE names and formats. | `web-next/src/components/lab/lab-model.ts` `FIELD_SPECS`; plan Ruling R2 | WEB + GW | Accepted for v1 (R2). Long term: return the packager-spec format string (e.g. `n..19 LLVAR`) and drop the client table |
-| LAB-G8 | The Lab's redaction set (`secretDEs` in `internal/lab/decode.go`: 52, 55, 64, 128, plus DE 2 by position) duplicates packager-spec's `sensitive` flags (2, 14, 48, 52, 55; none on 64/128), and codegen drops the flag, so the two can drift. | `contracts/iso8583/packager-spec.yaml`; `internal/iso8583/spec_gen.go` has no `Sensitive` field | contracts + GW | Contracts PR adds `sensitive: mac` to DE 64/128; the generator emits a `Sensitive` field; the Lab redacts from it and drops `secretDEs` |
+| LAB-G8 | ~~The Lab's redaction set (`secretDEs` in `internal/lab/decode.go`: 52, 55, 64, 128, plus DE 2 by position) duplicates packager-spec's `sensitive` flags (2, 14, 48, 52, 55; none on 64/128), and codegen drops the flag, so the two can drift.~~ | `contracts/iso8583/packager-spec.yaml`; `internal/iso8583/spec_gen.go` has no `Sensitive` field | contracts + GW | **Fixed**: #130 adds `sensitive: mac` to DE 64/128; #PRN generates `Sensitive` into `iso8583.Fields` and the Lab redacts from it (a PIN block, ICC data, a MAC, and any kind added later, are redacted whole; the PAN is masked by position; an expiry and a key-change cryptogram stay visible with free-text PAN masking). `secretDEs` is gone |
 
 ## 10. Change log
 
@@ -301,4 +301,4 @@ Load: at most 1 samples call and 4 decode calls per page session (decodes are ca
 | 1.1 | 2026-09-25 | LAB-G1, LAB-G2 and LAB-G6 fixed (#112), including DE 55 redaction and position-based DE 2 masking after security review; §6 updated; LAB-G8 added |
 | 1.2 | 2026-09-25 | LAB-G3 fixed (#118) |
 | 1.3 | 2026-09-26 | LAB-G5 fixed (#124) |
-| 1.4 | 2026-09-26 | LAB-G4 fixed (#PRN, P-1) |
+| 1.4 | 2026-09-26 | LAB-G4 fixed (#PRN, P-1); LAB-G8 fixed (#130 contract, #PRN gateway) |

@@ -13,6 +13,9 @@ type FieldSpec struct {
 	Length int    // fixed length, or max length when Prefix is LL/LLL
 	Prefix string // "", "LL", "LLL"
 	Name   string
+	// Sensitive is packager-spec's sensitivity kind (pan, expiry, key-material, pin-block, emv,
+	// mac), empty for an ordinary field.
+	Sensitive string
 }
 
 const (
