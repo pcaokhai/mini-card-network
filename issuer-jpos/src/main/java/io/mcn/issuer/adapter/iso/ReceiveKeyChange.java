@@ -86,26 +86,32 @@ public final class ReceiveKeyChange {
                   null,
                   null));
       try {
-        keyStoreRepository.activate(id);
+        // SEC-G23: the audit entry commits with the activation, so a failed audit write rolls the
+        // activation back too and the 96 below matches key_store (nothing changed).
+        keyStoreRepository.activate(
+            id,
+            conn ->
+                auditLogRepository.record(
+                    conn,
+                    "issuer",
+                    "key_change.activated",
+                    "key_store",
+                    String.valueOf(id),
+                    null,
+                    "{\"keyType\":\""
+                        + keyType
+                        + "\",\"counterparty\":\""
+                        + counterpartyId
+                        + "\",\"newKcv\":\""
+                        + kcv
+                        + "\"}"));
       } catch (RuntimeException e) {
         // SF2: a concurrent copy of this advice (the gateway resends an unanswered 0800, #121)
         // activated the same key first, so this activation hit the one-ACTIVE index (V8). If the
         // key it carries is now ACTIVE the change took effect: 00, and the winner has audited it.
+        // Otherwise (e.g. the audit write failed) nothing committed, and the answer is 96.
         return isAlreadyActive(keyType, clearKey);
       }
-      auditLogRepository.record(
-          "issuer",
-          "key_change.activated",
-          "key_store",
-          String.valueOf(id),
-          null,
-          "{\"keyType\":\""
-              + keyType
-              + "\",\"counterparty\":\""
-              + counterpartyId
-              + "\",\"newKcv\":\""
-              + kcv
-              + "\"}");
       return true;
     } catch (Exception e) {
       return false;
