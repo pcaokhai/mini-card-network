@@ -47,7 +47,7 @@ class PurchaseDeclineIntegrationTest {
   private static final String ENCRYPTION_KEY_HEX = "0".repeat(64);
   private static final String HMAC_KEY_HEX = "1".repeat(64);
   private static final String LMK_HEX =
-      "00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
+      "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
   private static final byte[] ZAK = HexFormat.of().parseHex("3132333435363738393a3b3c3d3e3f40");
   private static final byte[] ZPK = HexFormat.of().parseHex("2132333435363738393a3b3c3d3e3f41");
   private static final String FIXTURE_PIN =
@@ -154,8 +154,21 @@ class PurchaseDeclineIntegrationTest {
     return financial(stan, pan, "000000", amountMinor);
   }
 
+  /** A purchase MACed under {@code zak} with its PIN block under {@code zpk}. */
+  private static ISOMsg purchaseUnder(
+      int stan, String pan, long amountMinor, byte[] zak, byte[] zpk) throws Exception {
+    return financialUnder(stan, pan, "000000", amountMinor, zak, zpk);
+  }
+
   /** A 0200 with {@code processingCode}; {@code amountMinor} null leaves DE 4 out (inquiry). */
   private static ISOMsg financial(int stan, String pan, String processingCode, Long amountMinor)
+      throws Exception {
+    return financialUnder(stan, pan, processingCode, amountMinor, ZAK, ZPK);
+  }
+
+  /** As {@link #financial}, MACed under {@code zak} with its PIN block under {@code zpk}. */
+  private static ISOMsg financialUnder(
+      int stan, String pan, String processingCode, Long amountMinor, byte[] zak, byte[] zpk)
       throws Exception {
     ISOMsg request =
         buildIso(
@@ -178,9 +191,10 @@ class PurchaseDeclineIntegrationTest {
     // VerifySecurity (MCN-503) verifies DE 52/64 on every 0200; a real gateway always sends
     // both, so the test builds a genuine PIN block (fixture PIN) and Retail MAC too - otherwise
     // every purchase would fail RC 96 before CheckCard's own RC 14/62/51 checks get exercised.
-    request.set(52, HexFormat.of().formatHex(encryptPinBlock(buildPinBlock(FIXTURE_PIN, pan))));
+    request.set(
+        52, HexFormat.of().formatHex(encryptPinBlock(buildPinBlock(FIXTURE_PIN, pan), zpk)));
     JCESecurityModule securityModule = new JCESecurityModule(LMK_HEX);
-    byte[] mac = securityModule.computeMac(request.pack(), ZAK);
+    byte[] mac = securityModule.computeMac(request.pack(), zak);
     request.set(64, HexFormat.of().formatHex(mac));
     return unpack(send(request.pack()));
   }
@@ -244,10 +258,10 @@ class PurchaseDeclineIntegrationTest {
   }
 
   /** Test-only counterpart to {@code JCESecurityModule.decryptPinBlock}, same key expansion. */
-  private static byte[] encryptPinBlock(byte[] clearBlock) throws Exception {
+  private static byte[] encryptPinBlock(byte[] clearBlock, byte[] zpk) throws Exception {
     byte[] tripleKey = new byte[24];
-    System.arraycopy(ZPK, 0, tripleKey, 0, 16);
-    System.arraycopy(ZPK, 0, tripleKey, 16, 8);
+    System.arraycopy(zpk, 0, tripleKey, 0, 16);
+    System.arraycopy(zpk, 0, tripleKey, 16, 8);
     Cipher cipher = Cipher.getInstance("DESede/ECB/NoPadding");
     cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(tripleKey, "DESede"));
     return cipher.doFinal(clearBlock);
@@ -593,6 +607,102 @@ class PurchaseDeclineIntegrationTest {
       }
     }
     assertThat(unbalancedJournalCount()).isZero();
+  }
+
+  // ---- SEC-G15: the issuer uses the ACTIVE ZAK/ZPK from key_store, not the env value ----------
+  // Runs last among the ISO tests: it rotates the keys every earlier test MACs with.
+
+  private static final byte[] ZAK2 = HexFormat.of().parseHex("4142434445464748494a4b4c4d4e4f50");
+  private static final byte[] ZPK2 = HexFormat.of().parseHex("5152535455565758595a5b5c5d5e5f60");
+  private static final byte[] ZAK3 = HexFormat.of().parseHex("6162636465666768696a6b6c6d6e6f70");
+  private static final byte[] ZMK = new byte[16]; // ZMK_HEX = 00 x 16 in start()
+
+  /** 0800/161 with DE 48 = type prefix + the new key under the ZMK (AES-GCM, as the gateway). */
+  private static ISOMsg keyChange(int stan, String keyType, byte[] clearKey) throws Exception {
+    byte[] nonce = new byte[12];
+    new java.security.SecureRandom().nextBytes(nonce);
+    Cipher gcm = Cipher.getInstance("AES/GCM/NoPadding");
+    gcm.init(
+        Cipher.ENCRYPT_MODE,
+        new SecretKeySpec(ZMK, "AES"),
+        new javax.crypto.spec.GCMParameterSpec(128, nonce));
+    byte[] ciphertext = gcm.doFinal(clearKey);
+    byte[] cryptogram = new byte[nonce.length + ciphertext.length];
+    System.arraycopy(nonce, 0, cryptogram, 0, nonce.length);
+    System.arraycopy(ciphertext, 0, cryptogram, nonce.length, ciphertext.length);
+    ISOMsg request =
+        buildIso(
+            "0800",
+            Map.of(
+                7, "0922130000",
+                11, pad(stan),
+                48, keyType + ":" + HexFormat.of().formatHex(cryptogram),
+                53, "01",
+                70, "161"));
+    return unpack(send(request.pack()));
+  }
+
+  private static boolean responseMacVerifiesUnder(ISOMsg response, byte[] zak) throws Exception {
+    ISOMsg unsigned = (ISOMsg) response.clone();
+    unsigned.unset(64);
+    byte[] expected = new JCESecurityModule(LMK_HEX).computeMac(unsigned.pack(), zak);
+    return HexFormat.of().formatHex(expected).equalsIgnoreCase(response.getString(64));
+  }
+
+  @Test
+  @Order(50)
+  @DisplayName(
+      "SEC-G15: after a ZAK change, a request MACed under the new key verifies and the"
+          + " response is MACed under it")
+  void newZakVerifiesAndSignsTheResponse() throws Exception {
+    assertThat(keyChange(50, "ZAK", ZAK2).getString(39)).isEqualTo("00");
+
+    ISOMsg response = purchaseUnder(51, "9704360000005540", 1_000L, ZAK2, ZPK);
+
+    assertThat(response.getString(39)).isEqualTo("00");
+    assertThat(responseMacVerifiesUnder(response, ZAK2)).isTrue();
+  }
+
+  @Test
+  @Order(51)
+  @DisplayName("SEC-G15: the old ZAK is still accepted within 5 minutes of the change, then not")
+  void oldZakIsAcceptedOnlyWithinTheDualKeyWindow() throws Exception {
+    assertThat(purchaseUnder(52, "9704360000005540", 1_000L, ZAK, ZPK).getString(39))
+        .isEqualTo("00");
+
+    execute(
+        "UPDATE key_store SET retired_at = now() - interval '6 minutes'"
+            + " WHERE key_type = 'ZAK' AND status = 'RETIRED'");
+
+    assertThat(purchaseUnder(53, "9704360000005540", 1_000L, ZAK, ZPK).getString(39))
+        .isEqualTo("96");
+  }
+
+  @Test
+  @Order(52)
+  @DisplayName("SEC-G15: a ZAK that was never activated is never accepted")
+  void neverActivatedZakIsNeverAccepted() throws Exception {
+    JCESecurityModule hsm = new JCESecurityModule(LMK_HEX);
+    execute(
+        "INSERT INTO key_store (key_type, counterparty, key_under_lmk, kcv, status, retired_at)"
+            + " VALUES ('ZAK', '970499', '"
+            + HexFormat.of().formatHex(hsm.wrapUnderLmk(ZAK3))
+            + "', '"
+            + hsm.computeKcv(ZAK3)
+            + "', 'RETIRED', now())");
+
+    assertThat(purchaseUnder(54, "9704360000005540", 1_000L, ZAK3, ZPK).getString(39))
+        .isEqualTo("96");
+  }
+
+  @Test
+  @Order(53)
+  @DisplayName("SEC-G15: after a ZPK change, a PIN block under the new ZPK verifies")
+  void newZpkVerifiesThePin() throws Exception {
+    assertThat(keyChange(55, "ZPK", ZPK2).getString(39)).isEqualTo("00");
+
+    assertThat(purchaseUnder(56, "9704360000005540", 1_000L, ZAK2, ZPK2).getString(39))
+        .isEqualTo("00");
   }
 
   private static void execute(String sql) throws Exception {

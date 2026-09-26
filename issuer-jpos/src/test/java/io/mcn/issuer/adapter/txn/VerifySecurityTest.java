@@ -11,8 +11,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mcn.issuer.adapter.crypto.JCESecurityModule;
 import io.mcn.issuer.adapter.crypto.PvvCalculator;
 import io.mcn.issuer.adapter.persistence.CardRepository;
-import io.mcn.issuer.adapter.persistence.KeyStoreRepository;
-import io.mcn.issuer.adapter.persistence.KeyStoreRow;
 import java.io.File;
 import java.util.HexFormat;
 import java.util.Iterator;
@@ -42,7 +40,8 @@ class VerifySecurityTest {
   void should_abort_with_rc96_and_skip_pin_check_on_bad_mac__MCN_503_AC2() throws Exception {
     JCESecurityModule securityModule = new JCESecurityModule(LMK_HEX);
     CardRepository cardRepository = Mockito.mock(CardRepository.class);
-    VerifySecurity participant = new VerifySecurity(securityModule, cardRepository, ZAK, ZPK);
+    VerifySecurity participant =
+        new VerifySecurity(securityModule, cardRepository, FixedSessionKeys.of(ZAK, ZPK));
 
     ISOMsg request = baseFields();
     request.set(
@@ -98,7 +97,8 @@ class VerifySecurityTest {
     when(cardRepository.findPvv(CARD_ID))
         .thenReturn(java.util.Optional.of(PvvCalculator.computePvv(PAN, "1234")));
     when(cardRepository.incrementPinTryCount(CARD_ID)).thenReturn(1);
-    VerifySecurity participant = new VerifySecurity(securityModule, cardRepository, ZAK, ZPK);
+    VerifySecurity participant =
+        new VerifySecurity(securityModule, cardRepository, FixedSessionKeys.of(ZAK, ZPK));
 
     ISOMsg request = goodMacRequest("0000", securityModule);
     Context ctx = new Context();
@@ -122,7 +122,8 @@ class VerifySecurityTest {
         .thenReturn(java.util.Optional.of(PvvCalculator.computePvv(PAN, "1234")));
     when(cardRepository.incrementPinTryCount(CARD_ID))
         .thenReturn(3); // two prior failures + this one
-    VerifySecurity participant = new VerifySecurity(securityModule, cardRepository, ZAK, ZPK);
+    VerifySecurity participant =
+        new VerifySecurity(securityModule, cardRepository, FixedSessionKeys.of(ZAK, ZPK));
 
     ISOMsg request = goodMacRequest("0000", securityModule);
     Context ctx = new Context();
@@ -142,7 +143,8 @@ class VerifySecurityTest {
     CardRepository cardRepository = Mockito.mock(CardRepository.class);
     when(cardRepository.findPvv(CARD_ID))
         .thenReturn(java.util.Optional.of(PvvCalculator.computePvv(PAN, "1234")));
-    VerifySecurity participant = new VerifySecurity(securityModule, cardRepository, ZAK, ZPK);
+    VerifySecurity participant =
+        new VerifySecurity(securityModule, cardRepository, FixedSessionKeys.of(ZAK, ZPK));
 
     ISOMsg request = goodMacRequest("1234", securityModule);
     Context ctx = new Context();
@@ -165,7 +167,8 @@ class VerifySecurityTest {
     when(cardRepository.findPvv(CARD_ID))
         .thenReturn(java.util.Optional.of(PvvCalculator.computePvv(PAN, "1234")));
     when(cardRepository.incrementPinTryCount(CARD_ID)).thenReturn(1);
-    VerifySecurity participant = new VerifySecurity(securityModule, cardRepository, ZAK, ZPK);
+    VerifySecurity participant =
+        new VerifySecurity(securityModule, cardRepository, FixedSessionKeys.of(ZAK, ZPK));
 
     ISOMsg wrongPinRequest = goodMacRequest("0000", securityModule);
     Context ctxWrong = new Context();
@@ -189,28 +192,12 @@ class VerifySecurityTest {
       throws Exception {
     JCESecurityModule securityModule = new JCESecurityModule(LMK_HEX);
     CardRepository cardRepository = Mockito.mock(CardRepository.class);
-    KeyStoreRepository keyStoreRepository = Mockito.mock(KeyStoreRepository.class);
     byte[] retiredZak = HexFormat.of().parseHex("5132333435363738393a3b3c3d3e3f40");
-    String retiredZakUnderLmkHex =
-        HexFormat.of().formatHex(securityModule.wrapUnderLmk(retiredZak));
-    when(keyStoreRepository.findRecentlyRetired(
-            org.mockito.ArgumentMatchers.eq("ZAK"),
-            org.mockito.ArgumentMatchers.any(),
-            org.mockito.ArgumentMatchers.eq(KeyStoreRepository.DUAL_KEY_WINDOW)))
-        .thenReturn(
-            java.util.Optional.of(
-                new KeyStoreRow(
-                    9,
-                    "ZAK",
-                    "970499",
-                    retiredZakUnderLmkHex,
-                    "AAAAAA",
-                    "RETIRED",
-                    null,
-                    null,
-                    null)));
     VerifySecurity participant =
-        new VerifySecurity(securityModule, cardRepository, keyStoreRepository, ZAK, ZPK);
+        new VerifySecurity(
+            securityModule,
+            cardRepository,
+            FixedSessionKeys.of(ZAK, ZPK).withRetired("ZAK", retiredZak));
 
     ISOMsg request = baseFields();
     byte[] packed = request.pack();

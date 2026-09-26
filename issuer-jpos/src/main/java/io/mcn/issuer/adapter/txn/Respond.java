@@ -1,16 +1,23 @@
 package io.mcn.issuer.adapter.txn;
 
+import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.crypto.JCESecurityModule;
+import io.mcn.issuer.adapter.crypto.KeyStoreSessionKeys;
+import io.mcn.issuer.adapter.persistence.KeyStoreRepository;
 import io.mcn.issuer.application.SecurityModule;
+import io.mcn.issuer.application.SessionKeys;
 import java.io.Serializable;
+import java.util.Arrays;
 import java.util.HexFormat;
 import org.jpos.core.Configurable;
 import org.jpos.core.Configuration;
+import org.jpos.core.ConfigurationException;
 import org.jpos.iso.ISOException;
 import org.jpos.iso.ISOMsg;
 import org.jpos.iso.ISOSource;
 import org.jpos.transaction.AbortParticipant;
 import org.jpos.transaction.Context;
+import org.jpos.util.Destroyable;
 
 /**
  * Builds the 0210 response and sends it via the {@link ISOSource} stored in the context. A
@@ -23,23 +30,40 @@ import org.jpos.transaction.Context;
  * {@code contracts/iso8583/vectors/0210-approved.json} carries DE 64): the gateway treats a 0210
  * without a valid MAC as a MAC failure and declines with RC 96.
  */
-public class Respond implements AbortParticipant, Configurable {
+public class Respond implements AbortParticipant, Configurable, Destroyable {
+
+  // docs/03 §3 - the counterparty ReceiveKeyChange writes key_store rows under.
+  private static final String LAB_ACQUIRER_ID = "970499";
 
   private SecurityModule securityModule;
-  private byte[] zak;
+  private SessionKeys sessionKeys;
+  private HikariDataSource dataSource;
 
   /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
   public Respond() {}
 
-  public Respond(SecurityModule securityModule, byte[] zak) {
+  public Respond(SecurityModule securityModule, SessionKeys sessionKeys) {
     this.securityModule = securityModule;
-    this.zak = zak;
+    this.sessionKeys = sessionKeys;
+  }
+
+  /** MACs every response under the ACTIVE ZAK in {@code key_store} (SEC-G15). */
+  @Override
+  public void setConfiguration(Configuration cfg) throws ConfigurationException {
+    this.dataSource = TxnDataSource.fromConfig(cfg);
+    this.securityModule = new JCESecurityModule(env("LMK_TEST_VALUE_HEX"));
+    var keys =
+        new KeyStoreSessionKeys(
+            new KeyStoreRepository(dataSource), securityModule, LAB_ACQUIRER_ID);
+    keys.ensureActive("ZAK", HexFormat.of().parseHex(env("ZAK_HEX")));
+    this.sessionKeys = keys;
   }
 
   @Override
-  public void setConfiguration(Configuration cfg) {
-    this.securityModule = new JCESecurityModule(env("LMK_TEST_VALUE_HEX"));
-    this.zak = HexFormat.of().parseHex(env("ZAK_HEX"));
+  public void destroy() {
+    if (dataSource != null) {
+      dataSource.close();
+    }
   }
 
   private static String env(String name) {
@@ -81,7 +105,12 @@ public class Respond implements AbortParticipant, Configurable {
     int macField = hasSecondaryBitmapFields(response) ? 128 : 64;
     response.unset(64);
     response.unset(128);
-    response.set(macField, securityModule.computeMac(response.pack(), zak));
+    byte[] zak = sessionKeys.active("ZAK");
+    try {
+      response.set(macField, securityModule.computeMac(response.pack(), zak));
+    } finally {
+      Arrays.fill(zak, (byte) 0);
+    }
     return response;
   }
 

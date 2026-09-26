@@ -66,5 +66,10 @@
     <property name="jdbc-password" value="${DB_PASSWORD}" />
   </participant>
 
-  <participant class="io.mcn.issuer.adapter.txn.Respond" logger="Q2" />
+  <!-- Respond reads the ACTIVE ZAK from key_store for every response MAC (SEC-G15). -->
+  <participant class="io.mcn.issuer.adapter.txn.Respond" logger="Q2">
+    <property name="jdbc-url" value="${DATABASE_URL}" />
+    <property name="jdbc-user" value="${DB_USER}" />
+    <property name="jdbc-password" value="${DB_PASSWORD}" />
+  </participant>
 </txnmgr>
