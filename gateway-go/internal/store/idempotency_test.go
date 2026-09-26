@@ -104,3 +104,30 @@ func TestIdempotencyRepository_aPendingKeyReportsItsRRNAndAge__POS_G3(t *testing
 	require.Equal(t, "626514000801", pending.RRN, "a retry can find what the first request sent")
 	require.WithinDuration(t, time.Now(), pending.ReservedAt, time.Minute)
 }
+
+func TestIdempotencyRepository_reclaimsAStaleKeyThatNeverSent__POS_G3(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewIdempotencyRepository(pool)
+	ctx := context.Background()
+	_, err := repo.Reserve(ctx, "key-s", testIdemRoute, testIdemHash)
+	require.NoError(t, err)
+
+	reclaimed, err := repo.Reclaim(ctx, "key-s", testIdemRoute, testIdemHash, time.Minute)
+	require.NoError(t, err)
+	require.False(t, reclaimed, "a fresh reservation may still be about to send")
+
+	_, err = pool.Exec(ctx, `UPDATE idempotency_record SET created_at = now() - interval '5 minutes'`)
+	require.NoError(t, err)
+	reclaimed, err = repo.Reclaim(ctx, "key-s", testIdemRoute, testIdemHash, time.Minute)
+	require.NoError(t, err)
+	require.True(t, reclaimed)
+	reclaimed, err = repo.Reclaim(ctx, "key-s", testIdemRoute, testIdemHash, time.Minute)
+	require.NoError(t, err)
+	require.False(t, reclaimed, "reclaiming refreshes the reservation, so a concurrent retry can't reclaim it too")
+
+	_, err = pool.Exec(ctx, `UPDATE idempotency_record SET created_at = now() - interval '5 minutes', rrn = '626514000001'`)
+	require.NoError(t, err)
+	reclaimed, err = repo.Reclaim(ctx, "key-s", testIdemRoute, testIdemHash, time.Minute)
+	require.NoError(t, err)
+	require.False(t, reclaimed, "a key that sent is answered from tran_log, never re-sent")
+}

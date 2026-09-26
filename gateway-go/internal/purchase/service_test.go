@@ -152,6 +152,15 @@ func (f *fakeIdempotency) pendAt(key, route, hash, rrn string, reservedAt time.T
 	f.rrns[k], f.reserved[k] = rrn, reservedAt
 }
 
+func (f *fakeIdempotency) Reclaim(_ context.Context, key, route, hash string, staleAfter time.Duration) (bool, error) {
+	k := key + route
+	if !f.pending[k] || f.hashes[k] != hash || f.rrns[k] != "" || time.Since(f.reserved[k]) < staleAfter {
+		return false, nil
+	}
+	f.reserved[k] = time.Now()
+	return true, nil
+}
+
 func (f *fakeIdempotency) AttachRRN(_ context.Context, key, route, rrn string) error {
 	f.rrns[key+route] = rrn
 	return nil
@@ -760,4 +769,18 @@ func TestCreatePurchase_aFailureAfterTheSendAnswersFromTheTransaction__S1(t *tes
 	require.NoError(t, err)
 	require.Equal(t, statusTimedOut, txn.Status, "the row's real status")
 	require.Equal(t, tranLog.rows[0].RRN, idem.rrns["key-after-send"+purchaseRoute], "the RRN was attached before the send")
+}
+
+func TestCreatePurchase_aStaleKeyThatNeverSentIsRetried__S1(t *testing.T) {
+	idem := &fakeIdempotency{}
+	idem.pendAt("key-never-sent", purchaseRoute, hashRequest(newTestRequest()), "", time.Now().Add(-2*time.Minute))
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}}
+	tranLog := &fakeTranLog{}
+	svc := newIdemTestService(mux, tranLog, idem, &fakeHub{}, &fakeReversal{})
+
+	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-never-sent")
+
+	require.NoError(t, err, "no RRN proves nothing was sent, so the key is taken over instead of a 409 for 24 h")
+	require.Equal(t, statusApproved, txn.Status)
+	require.Len(t, tranLog.rows, 1, "sent once")
 }

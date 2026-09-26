@@ -354,3 +354,19 @@ func TestTranLogRepository_concurrentCompletionsClaimThePreAuthOnce__S2(t *testi
 	wg.Wait()
 	require.Equal(t, int32(1), won.Load())
 }
+
+func TestTranLogRepository_releasingAClaimLetsThePreAuthBeCompletedAgain__S2(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	insertPreAuth(ctx, t, repo, "626514000961", statusApproved)
+	_, err := repo.InsertCompletion(ctx, completionOf("626514000962"), "626514000961")
+	require.NoError(t, err)
+
+	require.NoError(t, repo.ReleaseCompletion(ctx, "626514000961", "626514000999"), "another completion's release is a no-op")
+	_, err = repo.InsertCompletion(ctx, completionOf("626514000963"), "626514000961")
+	require.ErrorIs(t, err, ErrNotCompletable)
+
+	require.NoError(t, repo.ReleaseCompletion(ctx, "626514000961", "626514000962"))
+	_, err = repo.InsertCompletion(ctx, completionOf("626514000964"), "626514000961")
+	require.NoError(t, err)
+}

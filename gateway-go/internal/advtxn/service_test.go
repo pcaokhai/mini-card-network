@@ -59,6 +59,15 @@ func (f *fakeTranLog) UpdateAmounts(_ context.Context, id int64, approved *int64
 	return nil
 }
 
+func (f *fakeTranLog) ReleaseCompletion(_ context.Context, preAuthRRN, completionRRN string) error {
+	for i := range f.rows {
+		if f.rows[i].RRN == preAuthRRN && f.rows[i].CompletedBy == completionRRN {
+			f.rows[i].CompletedBy = ""
+		}
+	}
+	return nil
+}
+
 // InsertCompletion claims the pre-auth as store.TranLogRepository does, in one step.
 func (f *fakeTranLog) InsertCompletion(ctx context.Context, row store.TranLogRow, preAuthRRN string) (int64, error) {
 	for i := range f.rows {
@@ -116,6 +125,15 @@ func (f *fakeIdempotency) pendAt(key, route, hash, rrn string, reservedAt time.T
 	_, _ = f.Reserve(context.Background(), key, route, hash)
 	k := key + route
 	f.rrns[k], f.reserved[k] = rrn, reservedAt
+}
+
+func (f *fakeIdempotency) Reclaim(_ context.Context, key, route, hash string, staleAfter time.Duration) (bool, error) {
+	k := key + route
+	if !f.pending[k] || f.hashes[k] != hash || f.rrns[k] != "" || time.Since(f.reserved[k]) < staleAfter {
+		return false, nil
+	}
+	f.reserved[k] = time.Now()
+	return true, nil
 }
 
 func (f *fakeIdempotency) AttachRRN(_ context.Context, key, route, rrn string) error {
@@ -708,4 +726,44 @@ func TestCreateRefund_aRetryOfAStaleKeyAnswersFromTheTransaction__S1(t *testing.
 	require.Equal(t, statusApproved, txn.Status)
 	require.Equal(t, "626514000952", txn.RRN)
 	require.Zero(t, mux.stanCounter, "never resent")
+}
+
+func TestCreateCompletion_aPreSendFailureReleasesTheClaim__S2(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, approvedPreAuth("626514000970"))
+	tranLog.failStatus = statusSent
+	completion := CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}
+
+	_, err := svc.CreateCompletion(context.Background(), "626514000970", completion, "key-fails-before-send")
+	require.Error(t, err)
+	require.Nil(t, mux.lastFields, "nothing was sent")
+	require.Empty(t, tranLog.rows[0].CompletedBy, "the hold is free again")
+
+	tranLog.failStatus = ""
+	txn, err := svc.CreateCompletion(context.Background(), "626514000970", completion, "key-fails-before-send")
+	require.NoError(t, err, "the retry completes instead of a 409 forever")
+	require.Equal(t, statusApproved, txn.Status)
+}
+
+func TestCreateCompletion_aDeclineFreesThePreAuth__S2(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "05", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, approvedPreAuth("626514000971"))
+
+	txn, err := svc.CreateCompletion(context.Background(), "626514000971", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "key-declined")
+
+	require.NoError(t, err)
+	require.Equal(t, statusDeclined, txn.Status)
+	require.Empty(t, tranLog.rows[0].CompletedBy, "a declined completion consumed nothing")
+}
+
+func TestCreateCompletion_anUnknownOutcomeKeepsTheClaim__S2(t *testing.T) {
+	svc, tranLog, _, _ := newTestService(&fakeMux{err: context.DeadlineExceeded})
+	tranLog.rows = append(tranLog.rows, approvedPreAuth("626514000972"))
+
+	_, err := svc.CreateCompletion(context.Background(), "626514000972", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "key-unknown")
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tranLog.rows[0].CompletedBy, "the 0220 is repeated through SAF, so the hold stays taken")
 }

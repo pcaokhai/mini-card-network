@@ -538,3 +538,29 @@ func (r *TranLogRepository) Backdate(ctx context.Context, rrn string, at time.Ti
 	}
 	return tx.Commit(ctx)
 }
+
+// ReleaseCompletion undoes completionRRN's claim on preAuthRRN, so the hold can be completed
+// again: the completion never left the gateway, or the issuer declined it. A claim held by
+// another completion is left alone.
+func (r *TranLogRepository) ReleaseCompletion(ctx context.Context, preAuthRRN, completionRRN string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE tran_log SET completed_by = NULL WHERE rrn = $1 AND completed_by = $2`, preAuthRRN, completionRRN)
+	return err
+}
+
+// Reclaim takes over a reservation of (key, route) for the same request that has been pending
+// longer than staleAfter without recording an RRN. AttachRRN always runs before the send, so such
+// a key sent nothing: its request failed or crashed before sending, and may be retried. It
+// reports whether the key is now held by the caller; reclaiming refreshes its age, so of several
+// concurrent retries exactly one wins.
+func (r *IdempotencyRepository) Reclaim(ctx context.Context, key, route, requestHash string, staleAfter time.Duration) (bool, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE idempotency_record SET created_at = now()
+		 WHERE key = $1 AND route = $2 AND request_hash = $3 AND status = $4 AND rrn IS NULL
+		   AND created_at < now() - make_interval(secs => $5)`,
+		key, route, requestHash, pendingStatus, staleAfter.Seconds())
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}

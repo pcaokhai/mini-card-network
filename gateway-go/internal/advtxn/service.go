@@ -136,6 +136,7 @@ type TranLogPort interface {
 	UpdateStatus(ctx context.Context, id int64, status, responseCode, authCode string) error
 	UpdateAmounts(ctx context.Context, id int64, approvedAmount *int64, balance *store.Money) error
 	InsertCompletion(ctx context.Context, completion store.TranLogRow, preAuthRRN string) (int64, error)
+	ReleaseCompletion(ctx context.Context, preAuthRRN, completionRRN string) error
 	RecordStateTransition(ctx context.Context, id int64, fromStatus, toStatus string) error
 }
 
@@ -288,11 +289,9 @@ func (s *Service) sendAndRecord(ctx context.Context, p sendParams, merchant stor
 	if err != nil {
 		return Transaction{}, err
 	}
-	if err := s.transition(ctx, id, statusCreated, statusSent, "", ""); err != nil {
-		return Transaction{}, err
-	}
-	if err := purchase.AttachRRN(ctx, p.rrn); err != nil {
-		return Transaction{}, err
+	if err := s.markSending(ctx, id, p); err != nil {
+		// Nothing was sent: a completion's hold is free again, as its idempotency key is.
+		return Transaction{}, errors.Join(err, s.releaseClaim(ctx, p))
 	}
 
 	sendCtx, cancel := context.WithTimeout(ctx, requestTimeout)
@@ -337,6 +336,28 @@ func afterSend(err error) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %w", purchase.ErrAfterSend, err)
+}
+
+// markSending moves row id to SENT and records its RRN on the idempotency key, the last steps
+// before the send.
+func (s *Service) markSending(ctx context.Context, id int64, p sendParams) error {
+	if err := s.transition(ctx, id, statusCreated, statusSent, "", ""); err != nil {
+		return err
+	}
+	return purchase.AttachRRN(ctx, p.rrn)
+}
+
+// releaseClaim frees a completion's claim on its pre-auth when the completion consumed nothing:
+// it was never sent, or the issuer declined it. An unknown outcome keeps the claim, since its
+// 0220 is repeated through SAF.
+func (s *Service) releaseClaim(ctx context.Context, p sendParams) error {
+	if p.txnType != tranTypeCompletion {
+		return nil
+	}
+	if err := s.tranLog.ReleaseCompletion(ctx, p.originalRRN, p.rrn); err != nil {
+		return fmt.Errorf("release %s's claim on %s: %w", p.rrn, p.originalRRN, err)
+	}
+	return nil
 }
 
 // insert logs row about to be sent. A completion also claims its pre-authorization in the same
@@ -390,6 +411,8 @@ func (s *Service) finalize(ctx context.Context, p sendParams, row store.TranLogR
 	switch {
 	case p.txnType == tranTypeBalance:
 		return txn, recordErr
+	case txn.Status == statusDeclined && !macFailed:
+		return txn, errors.Join(recordErr, s.releaseClaim(ctx, p))
 	case p.txnType == tranTypeCompletion && txn.Status == statusTimedOut:
 		if err := s.saf.QueueAdvice(ctx, row.ID, p.mti, p.fields); err != nil {
 			return Transaction{}, errors.Join(recordErr, fmt.Errorf("queue %s repeat for %s: %w", p.mti, row.RRN, err))

@@ -15,6 +15,7 @@ import (
 type IdempotencyPort interface {
 	Reserve(ctx context.Context, key, route, requestHash string) (*store.StoredResponse, error)
 	AttachRRN(ctx context.Context, key, route, rrn string) error
+	Reclaim(ctx context.Context, key, route, requestHash string, staleAfter time.Duration) (bool, error)
 	Store(ctx context.Context, key, route, requestHash string, status int, body []byte) error
 	Release(ctx context.Context, key, route string) error
 }
@@ -100,9 +101,8 @@ func Idempotent[T any](ctx context.Context, port IdempotencyPort, key, route, re
 func begin[T any](ctx context.Context, k idemKey, fromLog Recover[T]) (answer T, done bool, err error) {
 	stored, err := k.port.Reserve(ctx, k.key, k.route, k.requestHash)
 	var pending *store.InProgressError
-	if errors.As(err, &pending) && fromLog != nil && pending.RRN != "" && time.Since(pending.ReservedAt) > staleAfter {
-		answer, err = answerFromLog(ctx, k, pending.RRN, fromLog)
-		return answer, true, err
+	if errors.As(err, &pending) && time.Since(pending.ReservedAt) > staleAfter {
+		return takeOverStale(ctx, k, pending.RRN, fromLog)
 	}
 	if err != nil {
 		return answer, true, fmt.Errorf("reserve idempotency key: %w", err)
@@ -114,6 +114,27 @@ func begin[T any](ctx context.Context, k idemKey, fromLog Recover[T]) (answer T,
 		return answer, true, fmt.Errorf("decode stored response: %w", err)
 	}
 	return answer, true, nil
+}
+
+// takeOverStale settles a key still in flight past staleAfter. With an RRN it may have been sent,
+// so it is answered from tran_log; without one nothing was sent (AttachRRN runs before every send),
+// so the caller takes the key over and sends. Either way a retry never waits out the 24 h TTL.
+func takeOverStale[T any](ctx context.Context, k idemKey, rrn string, fromLog Recover[T]) (answer T, done bool, err error) {
+	if rrn != "" {
+		if fromLog == nil {
+			return answer, true, fmt.Errorf("reserve idempotency key: %w", store.ErrIdempotencyInProgress)
+		}
+		answer, err = answerFromLog(ctx, k, rrn, fromLog)
+		return answer, true, err
+	}
+	reclaimed, err := k.port.Reclaim(ctx, k.key, k.route, k.requestHash, staleAfter)
+	switch {
+	case err != nil:
+		return answer, true, fmt.Errorf("reclaim idempotency key: %w", err)
+	case !reclaimed: // another retry took it over first
+		return answer, true, fmt.Errorf("reserve idempotency key: %w", store.ErrIdempotencyInProgress)
+	}
+	return answer, false, nil
 }
 
 // failed releases the key when nothing was sent; otherwise it answers from the RRN sent, if any.
