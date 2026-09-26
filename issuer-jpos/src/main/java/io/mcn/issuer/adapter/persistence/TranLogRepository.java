@@ -229,6 +229,7 @@ public class TranLogRepository {
     String sql =
         """
         UPDATE tran_log t SET status = 'REVERSED',
+                              response_code = '94',
                               decline_reason = 'abandoned: reversed while still RECEIVED',
                               updated_at = now()
         WHERE t.id = ? AND t.business_date = ? AND t.status = 'RECEIVED'

@@ -218,6 +218,9 @@ class AuthorizeAtomicityTest {
         .isEqualTo(org.jpos.transaction.TransactionConstants.PREPARED);
     assertThat(status()).isEqualTo("REVERSED");
     assertThat(scalar("SELECT count(*) FROM journal_entry WHERE tran_id = " + tranId)).isZero();
+    // A repeat 0200 of the abandoned original replays this row, so it must carry an RC (docs/03
+    // §7.3).
+    assertThat(text("SELECT response_code FROM tran_log WHERE id = " + tranId)).isEqualTo("94");
     assertThat(scalar("SELECT available_balance FROM account WHERE id = " + accountId))
         .isEqualTo(OPENING);
   }
