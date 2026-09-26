@@ -111,6 +111,17 @@ func (r *KeyStoreRepository) List(ctx context.Context) ([]KeyRow, error) {
 	return result, rows.Err()
 }
 
+// Get returns the key_store row id.
+func (r *KeyStoreRepository) Get(ctx context.Context, id int64) (KeyRow, error) {
+	var row KeyRow
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
+		 FROM key_store WHERE id = $1`, id,
+	).Scan(&row.ID, &row.KeyType, &row.OwnerRef, &row.KeyUnderLMKHex, &row.KCV,
+		&row.Status, &row.ActivatedAt, &row.RetiredAt, &row.CreatedAt)
+	return row, err
+}
+
 // ListCurrent returns the keys in use: every ACTIVE row plus a PENDING one while its rotation runs.
 // RETIRED rows stay in the table for the dual-key window and the audit trail, but never reach
 // GET /v1/keys/acquirer (SEC-G8).
@@ -143,17 +154,6 @@ func (r *KeyStoreRepository) RetirePending(ctx context.Context, id int64) error 
 	return err
 }
 
-// RetireAllPending retires every PENDING row. Only safe while no rotation runs: the rotation
-// runner calls it at startup, when any PENDING key belongs to a rotation a crash interrupted.
-func (r *KeyStoreRepository) RetireAllPending(ctx context.Context) (int64, error) {
-	tag, err := r.pool.Exec(ctx,
-		`UPDATE key_store SET status = 'RETIRED', retired_at = now() WHERE status = 'PENDING'`)
-	if err != nil {
-		return 0, err
-	}
-	return tag.RowsAffected(), nil
-}
-
 // FindRecentlyRetired returns the most recently RETIRED row for (keyType, ownerRef) if it
 // retired within the last `within` duration, or nil if none qualifies (not an error - "no
 // recently-retired key" is the expected steady state outside a rotation's grace window).
@@ -163,6 +163,7 @@ func (r *KeyStoreRepository) FindRecentlyRetired(ctx context.Context, keyType, o
 		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
 		 FROM key_store
 		 WHERE key_type = $1 AND coalesce(owner_ref, '') = $2 AND status = 'RETIRED'
+		   AND activated_at IS NOT NULL -- a key retired without ever being used is never a fallback
 		   AND retired_at > now() - $3::interval
 		 ORDER BY retired_at DESC LIMIT 1`,
 		keyType, ownerRef, within.String(),
@@ -175,6 +176,44 @@ func (r *KeyStoreRepository) FindRecentlyRetired(ctx context.Context, keyType, o
 		return nil, err
 	}
 	return &row, nil
+}
+
+// FindPending returns the newest PENDING row of (keyType, ownerRef), or nil if there is none.
+func (r *KeyStoreRepository) FindPending(ctx context.Context, keyType, ownerRef string) (*KeyRow, error) {
+	var row KeyRow
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
+		 FROM key_store WHERE key_type = $1 AND coalesce(owner_ref, '') = $2 AND status = 'PENDING'
+		 ORDER BY id DESC LIMIT 1`,
+		keyType, ownerRef,
+	).Scan(&row.ID, &row.KeyType, &row.OwnerRef, &row.KeyUnderLMKHex, &row.KCV,
+		&row.Status, &row.ActivatedAt, &row.RetiredAt, &row.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// MACFallbackKeys picks the one extra key a response MAC is retried under. A PENDING key comes
+// first: it only survives a rotation whose 0810 never arrived, and the issuer may already MAC
+// with it (review S2). Otherwise it is the key retired within the dual-key window (MCN-504-AC2).
+// It satisfies purchase.RetiredKeyFinder, hence the method name.
+type MACFallbackKeys struct{ repo *KeyStoreRepository }
+
+// MACFallback adapts r for the MAC verifier's single fallback key.
+func (r *KeyStoreRepository) MACFallback() MACFallbackKeys { return MACFallbackKeys{repo: r} }
+
+// FindRecentlyRetired returns the pending key of (keyType, ownerRef) if any, else the key retired
+// within the window, else nil.
+func (f MACFallbackKeys) FindRecentlyRetired(ctx context.Context, keyType, ownerRef string, within time.Duration) (*KeyRow, error) {
+	pending, err := f.repo.FindPending(ctx, keyType, ownerRef)
+	if err != nil || pending != nil {
+		return pending, err
+	}
+	return f.repo.FindRecentlyRetired(ctx, keyType, ownerRef, within)
 }
 
 func nullableOwnerRef(ownerRef string) any {

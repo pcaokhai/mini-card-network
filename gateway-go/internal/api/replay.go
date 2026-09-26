@@ -19,12 +19,14 @@ type storedResponse struct {
 	fingerprint string
 	status      int
 	body        any
+	location    string
 }
 
 func newReplayStore() *replayStore { return &replayStore{byKey: map[string]storedResponse{}} }
 
-// serve replays key's stored response, or calls run and stores what it returns. run writes its
-// own problem responses and returns ok=false for them, so failures are not replayed. The lock is
+// serve replays key's stored response (status, body and Location header), or calls run and
+// stores what it returns. run writes its own problem responses and returns ok=false for them, so
+// failures are not replayed. The lock is
 // held across run so two retries of one key can't both act.
 func (s *replayStore) serve(ctx context.Context, w http.ResponseWriter, key, fingerprint string, run func(ctx context.Context) (status int, body any, ok bool)) {
 	s.mu.Lock()
@@ -34,6 +36,9 @@ func (s *replayStore) serve(ctx context.Context, w http.ResponseWriter, key, fin
 			problem(w, http.StatusUnprocessableEntity, problemIdempotencyMismatch, "Idempotency-Key was already used with a different request")
 			return
 		}
+		if prior.location != "" {
+			w.Header().Set("Location", prior.location)
+		}
 		writeJSONBody(w, prior.status, prior.body)
 		return
 	}
@@ -41,6 +46,6 @@ func (s *replayStore) serve(ctx context.Context, w http.ResponseWriter, key, fin
 	if !ok {
 		return
 	}
-	s.byKey[key] = storedResponse{fingerprint: fingerprint, status: status, body: body}
+	s.byKey[key] = storedResponse{fingerprint: fingerprint, status: status, body: body, location: w.Header().Get("Location")}
 	writeJSONBody(w, status, body)
 }

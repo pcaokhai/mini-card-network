@@ -146,3 +146,32 @@ func TestGetKeysAcquirerRotation_returns200__MCN_504_AC1(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `"status":"RUNNING"`)
 }
+
+func TestPostRotation_ZAKIsDisabledUntilTheIssuerLoadsItsActiveZAK__SEC_G15(t *testing.T) {
+	r := chi.NewRouter()
+	rotator := &fakeRotator{}
+	MountRotations(r, rotator)
+
+	code, got := postRotation(t, r, testLinkKey, "ZAK")
+	require.Equal(t, http.StatusConflict, code)
+	require.Equal(t, "conflict", got["type"])
+	require.Contains(t, got["detail"], "SEC-G15")
+	require.Zero(t, rotator.starts)
+}
+
+func TestPostRotation_aReplayCarriesLocation__SEC_N4(t *testing.T) {
+	r := chi.NewRouter()
+	MountRotations(r, &fakeRotator{result: rotation.Row{ID: 9, KeyType: keyZPK, Status: rotationRunning}})
+
+	for i := 0; i < 2; i++ {
+		body, _ := json.Marshal(struct {
+			KeyType string `json:"keyType"`
+		}{keyZPK})
+		req := httptest.NewRequest(http.MethodPost, rotationsPath, bytes.NewReader(body))
+		req.Header.Set("Idempotency-Key", testLinkKey)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusAccepted, rec.Code)
+		require.Equal(t, rotationsPath+"/9", rec.Header().Get("Location"), "attempt %d", i+1)
+	}
+}

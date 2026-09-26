@@ -28,6 +28,13 @@ type Config struct {
 	ChaosFakeIssuerAddr string
 	// IssuerAdminURL is the Issuer Admin API base URL; chaos runs read card balances from it (CHA-G1).
 	IssuerAdminURL string
+	// EchoTimeout bounds each network-management round trip (ECHO_TIMEOUT, default 10s). A manual
+	// trigger can wait one echo plus its own round trip, so it is capped at half the API server's
+	// 35 s WriteTimeout, less margin (NET-G9, review N2).
+	EchoTimeout time.Duration
+	// RotationSendAttempts is how often an unanswered 0800/161 is resent with the same key before
+	// the rotation's outcome is unknown (ROTATION_SEND_ATTEMPTS, 1-10, default 3).
+	RotationSendAttempts int
 	// ChaosRunMaxDuration caps a chaos run's wall-clock time (CHAOS_RUN_MAX_DURATION, default 10m).
 	ChaosRunMaxDuration time.Duration
 	LMKTestValueHex     string
@@ -72,6 +79,9 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.ChaosRunMaxDuration, err = positiveDuration(getenv, "CHAOS_RUN_MAX_DURATION", "10m"); err != nil {
+		return Config{}, err
+	}
+	if err := loadLinkTimings(getenv, &cfg); err != nil {
 		return Config{}, err
 	}
 
@@ -146,6 +156,27 @@ func optionalAESKeyHex(getenv func(string) string, name string) ([]byte, error) 
 	default:
 		return nil, fmt.Errorf("%s: must decode to 16, 24 or 32 bytes (AES), got %d", name, len(key))
 	}
+}
+
+// maxEchoTimeout keeps two network-management round trips inside the 35 s HTTP WriteTimeout.
+const maxEchoTimeout = 15 * time.Second
+
+// loadLinkTimings reads ECHO_TIMEOUT and ROTATION_SEND_ATTEMPTS.
+func loadLinkTimings(getenv func(string) string, cfg *Config) error {
+	echo, err := positiveDuration(getenv, "ECHO_TIMEOUT", "10s")
+	if err != nil {
+		return err
+	}
+	if echo > maxEchoTimeout {
+		return fmt.Errorf("ECHO_TIMEOUT must be at most %s, got %s", maxEchoTimeout, echo)
+	}
+	cfg.EchoTimeout = echo
+	attempts, err := strconv.Atoi(valueOr(getenv("ROTATION_SEND_ATTEMPTS"), "3"))
+	if err != nil || attempts < 1 || attempts > 10 {
+		return fmt.Errorf("ROTATION_SEND_ATTEMPTS must be an integer from 1 to 10, got %q", getenv("ROTATION_SEND_ATTEMPTS"))
+	}
+	cfg.RotationSendAttempts = attempts
+	return nil
 }
 
 // positiveDuration reads name as a Go duration (fallback when unset) that must be above zero.

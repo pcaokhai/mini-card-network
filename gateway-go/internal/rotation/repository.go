@@ -46,6 +46,7 @@ type Row struct {
 	Status    string
 	Steps     []Step
 	NewKCV    *string
+	NewKeyID  *int64 // the key_store row GENERATE created
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -124,18 +125,41 @@ func (r *Repository) Fail(ctx context.Context, id int64) error {
 	return err
 }
 
-// FailAllRunning marks every RUNNING rotation FAILED, flagging each still-PENDING step FAILED.
-// Only the runner calls it, at startup, when a RUNNING row can only be one a crash interrupted.
-func (r *Repository) FailAllRunning(ctx context.Context) (int64, error) {
-	tag, err := r.pool.Exec(ctx,
-		`UPDATE key_rotation SET status = 'FAILED', updated_at = now(),
-		   steps = (SELECT jsonb_agg(CASE WHEN s->>'status' = 'PENDING' THEN jsonb_set(s, '{status}', '"FAILED"') ELSE s END)
-		            FROM jsonb_array_elements(steps) s)
-		 WHERE status = 'RUNNING'`)
+// SetNewKey records the key_store row this rotation generated.
+func (r *Repository) SetNewKey(ctx context.Context, id, keyID int64) error {
+	_, err := r.pool.Exec(ctx, `UPDATE key_rotation SET new_key_id = $1, updated_at = now() WHERE id = $2`, keyID, id)
+	return err
+}
+
+// ListRunning returns every RUNNING rotation. At startup these can only be ones a crash
+// interrupted.
+func (r *Repository) ListRunning(ctx context.Context) ([]Row, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id FROM key_rotation WHERE status = 'RUNNING' ORDER BY id`)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return tag.RowsAffected(), nil
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]Row, 0, len(ids))
+	for _, id := range ids {
+		row, err := r.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, nil
 }
 
 // Get loads one key_rotation row.
@@ -143,8 +167,8 @@ func (r *Repository) Get(ctx context.Context, id int64) (Row, error) {
 	var row Row
 	var raw []byte
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, key_type, status, steps, new_kcv, created_at, updated_at FROM key_rotation WHERE id = $1`, id,
-	).Scan(&row.ID, &row.KeyType, &row.Status, &raw, &row.NewKCV, &row.CreatedAt, &row.UpdatedAt)
+		`SELECT id, key_type, status, steps, new_kcv, new_key_id, created_at, updated_at FROM key_rotation WHERE id = $1`, id,
+	).Scan(&row.ID, &row.KeyType, &row.Status, &raw, &row.NewKCV, &row.NewKeyID, &row.CreatedAt, &row.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Row{}, ErrNotFound
 	}

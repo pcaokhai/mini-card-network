@@ -506,6 +506,7 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | NET-G15 | Gateway event texts are English only, with no language-neutral code. The web maps five exact strings, so any wording change silently falls back to English. | `network-model.ts` `GATEWAY_EVENT_KEYS`; Ruling 7 | contracts + GW | **Fixed** in #121 (provider): every supervisor event carries `code` (migration 00008). The late-response event from #117 gets `LATE_RESPONSE` in a follow-up once both merge. WEB still maps by text |
 | NET-G16 | `p99LatencyMs` is always null and `inFlight` always 0: nothing writes those columns. The "Độ trễ" column is always "—" on the real stack. | `migrations/00001_link_state_and_network_event.sql`; no writer in `internal/` | GW | **Fixed** in #121: `p99LatencyMs` over the last 1000 echo/request round trips and `inFlight` from the MUX, computed live rather than stored |
 | NET-G17 | Problem `type` values are bare slugs (`unknown-link`, `link-not-ready`), not docs/04 URIs, and `link-not-ready` isn't in the docs/04 §3 catalogue (the nearest is `link-down` 503). | `internal/api/lab.go` `problem()`; `network.go:162` | GW | Shared URI problem writer; align with the catalogue |
+| NET-G18 | A manual sign-off does not last: the next request that gets RC 91 makes the supervisor sign on again automatically (`resignOn`), so the operator's choice is silently undone. | `internal/isonet/supervisor.go` `Send` → `signOnAgain` | GW | Remember a manual sign-off and suppress the automatic re-sign-on until a manual sign-on (or reconnect) |
 
 ## 10. Change log
 
@@ -513,3 +514,4 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack (GET only) |
 | 1.1 | 2026-09-25 | NET-G1–G4, G7, G9, G12–G16 fixed on the provider side (#121) |
+| 1.2 | 2026-09-26 | NET-G18 added; `ECHO_TIMEOUT` is validated (≤ 15 s) so manual triggers stay under the HTTP WriteTimeout (#121 review) |

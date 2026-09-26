@@ -69,7 +69,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	lastSTAN := func(ctx context.Context) (int64, error) {
 		return store.NewTranLogRepository(pool).LastSTANInRRNPrefix(ctx, purchase.BuildRRN(time.Now().UTC(), ""))
 	}
-	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoFailureLimit: 3, LastSTAN: lastSTAN}, linkRepo)
+	supervisor := isonet.NewSupervisor(isonet.Config{Addr: cfg.IssuerAddr, EchoInterval: 60 * time.Second, EchoTimeout: cfg.EchoTimeout, EchoFailureLimit: 3, LastSTAN: lastSTAN}, linkRepo)
 	hub := ws.NewHub()
 	supervisor.SetHub(hub)
 	tranLogRepo := store.NewTranLogRepository(pool)
@@ -84,11 +84,14 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	terminalRepo := store.NewTerminalRepository(pool)
-	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, keyStoreRepo)
-	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, reversalQueuer, hsmModule, zak, keyStoreRepo)
+	// A response MAC is retried under a PENDING key of unknown outcome, else the recently retired
+	// key (review S2 of #121).
+	macFallback := keyStoreRepo.MACFallback()
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, macFallback)
+	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, reversalQueuer, hsmModule, zak, macFallback)
 	rotationRepo := rotation.NewRepository(pool)
 	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK,
-		rotation.WithActivationHook(reloadOnActivate(activeKeys, logger)))
+		rotation.WithActivationHook(reloadOnActivate(activeKeys, logger)), rotation.WithSendAttempts(cfg.RotationSendAttempts))
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, zak, safRepo, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 	safWorker.SetLogger(logger)

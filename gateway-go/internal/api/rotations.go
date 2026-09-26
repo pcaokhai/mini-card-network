@@ -59,6 +59,12 @@ func handleStartRotation(svc Rotator, replays *replayStore) http.HandlerFunc {
 			return
 		}
 		replays.serve(req.Context(), w, key, body.KeyType, func(ctx context.Context) (int, any, bool) {
+			if body.KeyType == "ZAK" {
+				// The issuer reads its ZAK from env once and never loads a rotated one, so after a
+				// ZAK rotation plus a gateway restart every MAC would fail (RC 96).
+				problem(w, http.StatusConflict, "conflict", "ZAK rotation disabled until the issuer loads its active ZAK from key_store; see SEC-G15")
+				return 0, nil, false
+			}
 			row, err := svc.StartRotation(ctx, body.KeyType)
 			if errors.Is(err, rotation.ErrRotationInProgress) {
 				problem(w, http.StatusConflict, "conflict", "a key rotation is already running")

@@ -107,9 +107,7 @@ func TestRunner_shutdownStopsARunningRotationAsFailed__SEC_G2(t *testing.T) {
 	require.Equal(t, "FAILED", final.Status)
 	require.Equal(t, StatusFailed, stepStatus(final.Steps, StepSend0800161))
 
-	current, err := keyStore.ListCurrent(context.Background())
-	require.NoError(t, err)
-	require.Empty(t, current, "the failed rotation's PENDING key is retired (SEC-G8)")
+	require.Len(t, pendingKeys(t, keyStore), 1, "a 0800 cut off by shutdown has an unknown outcome: the key stays PENDING")
 
 	_, err = runner.Start(context.Background(), typeZPK, "")
 	require.ErrorIs(t, err, ErrNotServing)
@@ -126,24 +124,6 @@ func TestRunner_rejectsASecondRotationWhileOneRuns__SEC_G2(t *testing.T) {
 	_, err = runner.Start(context.Background(), typeZAK, "")
 	require.ErrorIs(t, err, ErrRotationInProgress)
 	close(mux.release)
-}
-
-func TestRunner_serveFailsRotationsACrashInterrupted__SEC_G8(t *testing.T) {
-	pool := newTestPool(t)
-	repo := NewRepository(pool)
-	keyStore := store.NewKeyStoreRepository(pool)
-	ctx := context.Background()
-	id, err := repo.Create(ctx, typeZPK)
-	require.NoError(t, err)
-	_, err = keyStore.Insert(ctx, store.KeyRow{KeyType: typeZPK, KeyUnderLMKHex: "aa", KCV: "AAAAAA"})
-	require.NoError(t, err)
-
-	serveRunner(t, NewRunner(repo, keyStore, fakeHSM{}, &fakeMux{}, testZMK))
-
-	require.Equal(t, "FAILED", waitStatus(t, repo, id, "FAILED").Status)
-	current, err := keyStore.ListCurrent(ctx)
-	require.NoError(t, err)
-	require.Empty(t, current)
 }
 
 func TestRunner_notifiesActivationSoTheNewKeyIsUsed__SEC_G10(t *testing.T) {

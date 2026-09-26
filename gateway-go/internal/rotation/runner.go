@@ -48,6 +48,8 @@ type Runner struct {
 	zmk        []byte
 	onActivate func(ctx context.Context, keyType string)
 
+	sendAttempts int
+
 	mu      sync.Mutex
 	base    context.Context // Serve's context; nil when not serving
 	running bool
@@ -56,6 +58,12 @@ type Runner struct {
 
 // Option configures optional Runner behaviour.
 type Option func(*Runner)
+
+// defaultSendAttempts is how often an unanswered 0800/161 is sent before the outcome is unknown.
+const defaultSendAttempts = 3
+
+// WithSendAttempts sets how many times an unanswered 0800/161 is sent, with the same key (min 1).
+func WithSendAttempts(n int) Option { return func(r *Runner) { r.sendAttempts = max(n, 1) } }
 
 // WithActivationHook calls fn after a new key is activated, so holders of the clear key reload it
 // without a restart (SEC-G10).
@@ -66,15 +74,15 @@ func WithActivationHook(fn func(ctx context.Context, keyType string)) Option {
 // NewRunner builds a Runner. zmk is the clear Zone Master Key used to wrap the new key for
 // transport in DE 48 of the 0800 (docs/03 §7.3's key-change convention).
 func NewRunner(repo *Repository, keyStore *store.KeyStoreRepository, hsmModule hsm.Module, mux Mux, zmk []byte, opts ...Option) *Runner {
-	r := &Runner{repo: repo, keyStore: keyStore, hsm: hsmModule, mux: mux, zmk: zmk}
+	r := &Runner{repo: repo, keyStore: keyStore, hsm: hsmModule, mux: mux, zmk: zmk, sendAttempts: defaultSendAttempts}
 	for _, opt := range opts {
 		opt(r)
 	}
 	return r
 }
 
-// Serve owns the background rotations. It first fails any rotation a crash left RUNNING (and
-// retires its PENDING key), then accepts Start calls until ctx is cancelled, and returns once
+// Serve owns the background rotations. It first resolves any rotation a crash left RUNNING
+// (recoverInterrupted), then accepts Start calls until ctx is cancelled, and returns once
 // every running rotation has stopped (root CLAUDE.md §6 rule 9).
 func (r *Runner) Serve(ctx context.Context) error {
 	if err := r.recoverInterrupted(ctx); err != nil {
@@ -98,14 +106,6 @@ func (r *Runner) serving() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.base != nil
-}
-
-func (r *Runner) recoverInterrupted(ctx context.Context) error {
-	if _, err := r.repo.FailAllRunning(ctx); err != nil {
-		return err
-	}
-	_, err := r.keyStore.RetireAllPending(ctx)
-	return err
 }
 
 // Start records a RUNNING rotation and returns it at once; the steps run in the background under
@@ -153,19 +153,25 @@ func (r *Runner) Run(ctx context.Context, keyType, ownerRef string) (Row, error)
 }
 
 func (r *Runner) execute(ctx context.Context, id int64, keyType, ownerRef string) (Row, error) {
-	clearKey, newRowID, kcv, err := r.runGenerate(ctx, id, keyType, ownerRef)
+	cryptogram, newRowID, kcv, err := r.runGenerate(ctx, id, keyType, ownerRef)
 	if err != nil {
-		return r.failStep(ctx, id, StepGenerate, 0, err)
+		return r.failStep(ctx, id, StepGenerate, newRowID, err)
 	}
-	resp, err := r.runSend0800161(ctx, id, keyType, clearKey)
+	resp, err := r.runSend0800161(ctx, id, keyType, cryptogram)
 	if err != nil {
-		return r.failStep(ctx, id, StepSend0800161, newRowID, err)
+		// No 0810 after every attempt: the issuer may have activated the key, so it stays PENDING
+		// (the MAC fallback tries it) until a key-status query can settle it (SEC-G16).
+		return r.failStep(ctx, id, StepSend0800161, 0, fmt.Errorf("outcome unknown: %w", err))
 	}
 	if err := r.runPartnerConfirm(ctx, id, resp); err != nil {
-		return r.failStep(ctx, id, StepPartnerConfirm, newRowID, err)
+		if resp[39] != "00" {
+			return r.failStep(ctx, id, StepPartnerConfirm, newRowID, err) // declined: the key is dead
+		}
+		return r.failStep(ctx, id, StepPartnerConfirm, 0, err)
 	}
 	if err := r.runActivate(ctx, id, newRowID); err != nil {
-		return r.failStep(ctx, id, StepActivate, newRowID, err)
+		// The issuer confirmed the key; keep it PENDING rather than retire a key in use (S2).
+		return r.failStep(ctx, id, StepActivate, 0, err)
 	}
 	if r.onActivate != nil {
 		r.onActivate(ctx, keyType)
@@ -177,11 +183,17 @@ func (r *Runner) execute(ctx context.Context, id int64, keyType, ownerRef string
 	return r.repo.Get(ctx, id)
 }
 
-// runGenerate creates a fresh clear key, existing only in this call's return value for the rest
-// of Run - wrapped under the LMK for key_store, KCV'd, never persisted or logged in the clear
-// (root CLAUDE.md §6 rule 2).
-func (r *Runner) runGenerate(ctx context.Context, id int64, keyType, ownerRef string) (clearKey []byte, newRowID int64, kcv string, err error) {
-	clearKey = make([]byte, clearKeyLenBytes)
+// runGenerate creates a fresh clear key and returns only its cryptogram under the ZMK for the
+// 0800: the clear key is wrapped under the LMK for key_store, KCV'd, wrapped under the ZMK and
+// zeroed before this returns, never persisted or logged in the clear (root CLAUDE.md §6 rule 2).
+// newRowID is non-zero once the PENDING key_store row exists, even on a later error.
+//
+// store.EncryptBytes (not hsm.WrapUnderLMK, which is bound to the module's own LMK) wraps the
+// clear key under the ZMK directly - the same AES-256-GCM primitive Unwrap/WrapUnderLMK already
+// use internally, just keyed by r.zmk instead of the module's LMK.
+func (r *Runner) runGenerate(ctx context.Context, id int64, keyType, ownerRef string) (underZMK []byte, newRowID int64, kcv string, err error) {
+	clearKey := make([]byte, clearKeyLenBytes)
+	defer clear(clearKey)
 	if _, genErr := rand.Read(clearKey); genErr != nil {
 		return nil, 0, "", fmt.Errorf("generate key: %w", genErr)
 	}
@@ -193,6 +205,10 @@ func (r *Runner) runGenerate(ctx context.Context, id int64, keyType, ownerRef st
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("compute KCV: %w", err)
 	}
+	underZMK, err = store.EncryptBytes(r.zmk, clearKey)
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("wrap under ZMK: %w", err)
+	}
 	newRowID, err = r.keyStore.Insert(ctx, store.KeyRow{
 		KeyType: keyType, OwnerRef: ownerRef,
 		KeyUnderLMKHex: strings.ToUpper(hex.EncodeToString(wrappedUnderLMK)), KCV: kcv,
@@ -200,10 +216,13 @@ func (r *Runner) runGenerate(ctx context.Context, id int64, keyType, ownerRef st
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("insert key_store row: %w", err)
 	}
-	if err := r.completeStep(ctx, id, StepGenerate); err != nil {
-		return nil, 0, "", err
+	if err := r.repo.SetNewKey(ctx, id, newRowID); err != nil {
+		return nil, newRowID, "", fmt.Errorf("link key to rotation: %w", err)
 	}
-	return clearKey, newRowID, kcv, nil
+	if err := r.completeStep(ctx, id, StepGenerate); err != nil {
+		return nil, newRowID, "", err
+	}
+	return underZMK, newRowID, kcv, nil
 }
 
 // runSend0800161 sends the new key as a cryptogram under the ZMK in DE 48. Key type travels as a
@@ -213,29 +232,31 @@ func (r *Runner) runGenerate(ctx context.Context, id int64, keyType, ownerRef st
 // change out of scope for a feature branch. This must match issuer-jpos's ReceiveKeyChange
 // parsing byte-for-byte: prefix + ":" + lowercase hex of the cryptogram, no DE 53.
 //
-// store.EncryptBytes (not hsm.WrapUnderLMK, which is bound to the module's own LMK) wraps the
-// clear key under the ZMK directly - the same AES-256-GCM primitive Unwrap/WrapUnderLMK already
-// use internally, just keyed by r.zmk instead of the module's LMK.
-func (r *Runner) runSend0800161(ctx context.Context, id int64, keyType string, clearKey []byte) (map[int]string, error) {
-	wrappedUnderZMK, err := store.EncryptBytes(r.zmk, clearKey)
-	if err != nil {
-		return nil, fmt.Errorf("wrap under ZMK: %w", err)
+// A send with no 0810 is repeated up to sendAttempts times with the same cryptogram, so the
+// issuer never sees two different keys for one rotation (review S2).
+func (r *Runner) runSend0800161(ctx context.Context, id int64, keyType string, underZMK []byte) (map[int]string, error) {
+	de48 := keyType + ":" + hex.EncodeToString(underZMK)
+	var lastErr error
+	for attempt := 0; attempt < r.sendAttempts && ctx.Err() == nil; attempt++ {
+		stan, ok := r.mux.NextSTAN()
+		if !ok {
+			lastErr = errors.New("issuer link not signed on")
+			continue
+		}
+		resp, err := r.mux.Send(ctx, "0800", map[int]string{7: nowDE7(), 11: stan, 70: keyChangeDE70, 48: de48})
+		if err != nil {
+			lastErr = fmt.Errorf("send 0800 (attempt %d): %w", attempt+1, err)
+			continue
+		}
+		if err := r.completeStep(ctx, id, StepSend0800161); err != nil {
+			return nil, err
+		}
+		return resp, nil
 	}
-	stan, ok := r.mux.NextSTAN()
-	if !ok {
-		return nil, fmt.Errorf("issuer link not signed on")
+	if lastErr == nil {
+		lastErr = ctx.Err()
 	}
-	resp, err := r.mux.Send(ctx, "0800", map[int]string{
-		7: nowDE7(), 11: stan, 70: keyChangeDE70,
-		48: keyType + ":" + hex.EncodeToString(wrappedUnderZMK),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("send 0800: %w", err)
-	}
-	if err := r.completeStep(ctx, id, StepSend0800161); err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return nil, lastErr
 }
 
 // runPartnerConfirm checks the 0810's RC (DE 39) - "00" confirms.
