@@ -37,7 +37,7 @@ func TestTranLogRepository_overview_countsApprovalRateAndDeclineReasons__MCN_306
 	decline("626514000006", "62")
 	decline("626514000007", "") // a legacy row with no RC (OVW-G11)
 
-	stats, err := repo.Overview(ctx, now)
+	stats, err := repo.Overview(ctx, now, utcDay(now))
 	require.NoError(t, err)
 
 	require.Equal(t, int64(7), stats.TransactionsToday)
@@ -58,7 +58,7 @@ func TestTranLogRepository_overview_emptyIsZeroNotError__MCN_306(t *testing.T) {
 	pool := newTestPool(t)
 	repo := NewTranLogRepository(pool)
 
-	stats, err := repo.Overview(context.Background(), time.Now().UTC())
+	stats, err := repo.Overview(context.Background(), time.Now().UTC(), utcDay(time.Now()))
 	require.NoError(t, err)
 	require.Equal(t, int64(0), stats.TransactionsToday)
 	require.Equal(t, float64(0), stats.ApprovalRate)
@@ -81,7 +81,7 @@ func TestTranLogRepository_overview_p50AndP99FromControlledLatencies__MCN_306(t 
 		require.NoError(t, err)
 	}
 
-	stats, err := repo.Overview(ctx, time.Now().UTC())
+	stats, err := repo.Overview(ctx, time.Now().UTC(), utcDay(time.Now()))
 	require.NoError(t, err)
 	// percentile_cont interpolates: median of {100,200,300,1000} is 250; p99 is 300 + 0.97*700.
 	require.InDelta(t, 250, stats.P50LatencyMs, 25)
@@ -106,11 +106,11 @@ func TestTranLogRepository_overview_deltaVersusSameWindowYesterday__MCN_306(t *t
 	}
 	for _, rrn := range []string{"626514000211", "626514000212"} {
 		id := insert(rrn)
-		_, err := pool.Exec(ctx, `UPDATE tran_log SET created_at = $2 WHERE id = $1`, id, yesterdayMidWindow)
+		_, err := pool.Exec(ctx, `UPDATE tran_log SET created_at = $2, business_date = $3 WHERE id = $1`, id, yesterdayMidWindow, dayStart.AddDate(0, 0, -1))
 		require.NoError(t, err)
 	}
 
-	stats, err := repo.Overview(ctx, now)
+	stats, err := repo.Overview(ctx, now, utcDay(now))
 	require.NoError(t, err)
 	require.Equal(t, int64(3), stats.TransactionsToday)
 	require.NotNil(t, stats.TransactionsDeltaPct)
@@ -121,7 +121,7 @@ func TestTranLogRepository_overview_noDeltaWithoutYesterdayBaseline__MCN_306(t *
 	pool := newTestPool(t)
 	repo := NewTranLogRepository(pool)
 
-	stats, err := repo.Overview(context.Background(), time.Now().UTC())
+	stats, err := repo.Overview(context.Background(), time.Now().UTC(), utcDay(time.Now()))
 	require.NoError(t, err)
 	require.Nil(t, stats.TransactionsDeltaPct)
 	require.Equal(t, int64(0), stats.P50LatencyMs)
@@ -145,7 +145,7 @@ func TestTranLogRepository_overview_throughputIs24DenseBuckets__MCN_306(t *testi
 	at("626514000404", 59*time.Minute)  // oldest bucket
 	at("626514000405", 61*time.Minute)  // outside the window
 
-	stats, err := repo.Overview(ctx, now)
+	stats, err := repo.Overview(ctx, now, utcDay(now))
 	require.NoError(t, err)
 
 	require.Len(t, stats.Throughput, 24)
@@ -157,4 +157,49 @@ func TestTranLogRepository_overview_throughputIs24DenseBuckets__MCN_306(t *testi
 	require.InDelta(t, 1.0/150, stats.Throughput[22].TPS, 1e-9)
 	require.InDelta(t, 1.0/150, stats.Throughput[0].TPS, 1e-9)
 	require.Zero(t, stats.Throughput[10].TPS, "empty buckets are present as zero")
+}
+
+// utcDay is a business day that opens at UTC midnight, matching the CURRENT_DATE rows inserted
+// without a business date get.
+func utcDay(now time.Time) BusinessDay {
+	d := now.UTC().Truncate(24 * time.Hour)
+	return BusinessDay{Date: d, Previous: d.AddDate(0, 0, -1), OpenedAt: d, PreviousOpenedAt: d.AddDate(0, 0, -1)}
+}
+
+func TestTranLogRepository_overview_countsTheBusinessDateNotTheUTCDay__OVW_G7(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewTranLogRepository(pool)
+	ctx := context.Background()
+	// 01:00 local (UTC+7) on 26 Sep, one hour after the 25th's 23:59:59 cutover; still the 25th in UTC.
+	now := time.Date(2026, 9, 25, 18, 0, 0, 0, time.UTC)
+	today, previous := time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
+	biz := BusinessDay{
+		Date: today, Previous: previous,
+		OpenedAt: time.Date(2026, 9, 25, 16, 59, 59, 0, time.UTC), PreviousOpenedAt: time.Date(2026, 9, 24, 16, 59, 59, 0, time.UTC),
+	}
+	insert := func(rrn string, businessDate, createdAt time.Time, status, rc string) {
+		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: tranTypePurchase, Status: status, ResponseCode: rc, Amount: 1000, Currency: "704",
+			MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID, BusinessDate: businessDate})
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `UPDATE tran_log SET created_at = $2 WHERE id = $1`, id, createdAt)
+		require.NoError(t, err)
+	}
+	insert("626514000601", today, now.Add(-10*time.Minute), statusApproved, "00")
+	insert("626514000602", today, now.Add(-5*time.Minute), "DECLINED", "51")
+	insert("626514000603", previous, now.Add(-2*time.Hour), "DECLINED", "61")                              // same UTC day, before cutover
+	insert("626514000604", previous, time.Date(2026, 9, 24, 17, 30, 0, 0, time.UTC), statusApproved, "00") // 00:30 into the 25th
+
+	stats, err := repo.Overview(ctx, now, biz)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(2), stats.TransactionsToday)
+	require.InDelta(t, 0.5, stats.ApprovalRate, 0.001)
+	require.Len(t, stats.DeclineReasons, 1)
+	require.Equal(t, "51", stats.DeclineReasons[0].ResponseCode)
+	require.NotNil(t, stats.TransactionsDeltaPct)
+	require.InDelta(t, 1.0, *stats.TransactionsDeltaPct, 0.001, "(2 - 1) / 1: only the 25th's first hour counts")
+
+	got, err := repo.Get(ctx, "626514000601")
+	require.NoError(t, err)
+	require.Equal(t, today, got.BusinessDate, "the stored business date is the calendar's, not CURRENT_DATE")
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mcn/gateway-go/internal/bizdate"
 	"github.com/mcn/gateway-go/internal/journey"
 	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
@@ -181,7 +182,7 @@ func toTransactionDTO(row store.TranLogRow) transactionDTO {
 		AuthCode:              nullableString(row.AuthCode),
 		ApprovedAmount:        approvedAmountDTO(row),
 		Balance:               balanceDTO(row.Balance),
-		BusinessDate:          row.CreatedAt.Format("2006-01-02"),
+		BusinessDate:          bizdate.Format(row.BusinessDate),
 		OriginalRRN:           nullableString(row.OriginalRRN),
 		// Rows created before tran_log.trace_id existed have none; traceId is then omitted.
 		TraceID: row.TraceID,

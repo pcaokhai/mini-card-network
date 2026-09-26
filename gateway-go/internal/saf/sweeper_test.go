@@ -59,6 +59,7 @@ func orphan(id int64, tranType, status string) store.TranLogRow {
 func TestSweeper_followsUpEveryOrphanByType__POS_G16(t *testing.T) {
 	completion := orphan(3, "COMPLETION", "SENT")
 	completion.OriginalRRN = "626514000300"
+	completion.BusinessDate = time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
 	orphans := &fakeOrphans{rows: []store.TranLogRow{
 		orphan(1, "PURCHASE", "SENT"), orphan(2, "PREAUTH", "TIMED_OUT"), completion, orphan(4, "BALANCE", "SENT"),
 	}}
@@ -79,6 +80,7 @@ func TestSweeper_followsUpEveryOrphanByType__POS_G16(t *testing.T) {
 	require.Equal(t, "00000042", advice[41])
 	require.Equal(t, testMerchantID, advice[42])
 	require.Equal(t, "000000005000", advice[4])
+	require.Equal(t, "0925", advice[15], "the repeat keeps its original's DE 15 (ADR-007)")
 }
 
 func TestSweeper_oneFailureDoesNotStopTheSweep__POS_G16(t *testing.T) {

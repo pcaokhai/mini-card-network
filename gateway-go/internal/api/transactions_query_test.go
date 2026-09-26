@@ -86,7 +86,8 @@ func TestGetTransaction_returns404ForUnknownRrn__MCN_304_AC1(t *testing.T) {
 func TestGetTransaction_returnsTransaction__MCN_304_AC1(t *testing.T) {
 	r := chi.NewRouter()
 	reader := &fakeTranLogReader{byRRN: map[string]store.TranLogRow{
-		"626514000001": {RRN: "626514000001", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", AuthCode: "123456", Amount: 5000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: time.Now()},
+		"626514000001": {RRN: "626514000001", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", AuthCode: "123456", Amount: 5000, Currency: "704", MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantName: testMerchantName, CreatedAt: time.Date(2026, 9, 25, 17, 30, 0, 0, time.UTC),
+			BusinessDate: time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)},
 	}}
 	MountTransactionsQuery(r, reader, fakeReversals{})
 
@@ -96,6 +97,7 @@ func TestGetTransaction_returnsTransaction__MCN_304_AC1(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `"authCode":"123456"`)
+	require.Contains(t, rec.Body.String(), `"businessDate":"2026-09-26"`, "OVW-G7: the stored business date, not created_at's UTC day")
 }
 
 func TestGetTransactionJourney_returnsStepsAndMoney__MCN_304_AC2(t *testing.T) {

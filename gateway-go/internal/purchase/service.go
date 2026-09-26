@@ -12,6 +12,7 @@ import (
 
 	_ "time/tzdata" // Asia/Ho_Chi_Minh must resolve even on a minimal container image
 
+	"github.com/mcn/gateway-go/internal/bizdate"
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/iso8583"
 	"github.com/mcn/gateway-go/internal/isonet"
@@ -145,7 +146,7 @@ func transactionFromRow(row store.TranLogRow) Transaction {
 		ResponseLabel: ResponseLabel(row.ResponseCode), Amount: Money{Amount: row.Amount, Currency: row.Currency},
 		MaskedPAN: row.MaskedPAN, TerminalID: row.TerminalID, MerchantName: row.MerchantName,
 		LatencyMs: journey.LatencyMs(row), CreatedAt: row.CreatedAt, ReversalReason: store.ReversalReasonOf(row.ReversalReasonCode),
-		AuthCode: row.AuthCode, BusinessDate: row.CreatedAt.UTC().Format("2006-01-02"), TraceID: row.TraceID,
+		AuthCode: row.AuthCode, BusinessDate: bizdate.Format(row.BusinessDate), TraceID: row.TraceID,
 	}
 }
 
@@ -210,6 +211,7 @@ type Service struct {
 	hsm           hsm.Module
 	zak           []byte
 	mac           MACVerifier
+	calendar      bizdate.Calendar
 	events        NetworkEventRecorder
 	duplicateHook func() bool
 }
@@ -226,15 +228,15 @@ func (s *Service) SetChaosDuplicateHook(fn func() bool) { s.duplicateHook = fn }
 // once at construction - not per-request, matching how Service already holds its other
 // long-lived dependencies. keyStore backs the dual-key acceptance retry (MCN-504-AC2); a nil
 // keyStore simply disables the retry (existing single-key MAC verification, unchanged). events
-// persists the late-response network event.
+// persists the late-response network event. calendar is the acquirer's business date (ADR-007).
 func NewService(mux interface {
 	MuxSender
 	LinkStatusPort
 }, cardTokens *CardTokenRegistry, merchants MerchantResolver, tranLog interface {
 	TranLogPort
 	TranLogGetter
-}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder, events NetworkEventRecorder) *Service {
-	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, mac: NewMACVerifier(hsmModule, zak, keyStore), events: events}
+}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder, events NetworkEventRecorder, calendar bizdate.Calendar) *Service {
+	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, mac: NewMACVerifier(hsmModule, zak, keyStore), events: events, calendar: calendar}
 }
 
 // CreatePurchase builds a 0200, sends it through the live issuer connection, persists every
@@ -313,6 +315,8 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	now := time.Now().UTC()
 	local := now.In(terminalLocation)
 	rrn := BuildRRN(now, stan)
+	// The business date the 0200 is sent in, which it keeps even if answered after cutover (ADR-007 §2).
+	businessDate := s.calendar.Current(now)
 
 	fields := map[int]string{
 		2:  card.PAN,
@@ -323,7 +327,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 		12: local.Format("150405"),
 		13: local.Format("0102"),
 		14: card.ExpiryYYMM,
-		15: now.Format("0102"),
+		15: bizdate.MMDD(businessDate),
 		22: entryModeToDE22[req.EntryMode],
 		32: acquirerID,
 		37: rrn,
@@ -336,6 +340,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 		RRN: rrn, Type: tranTypePurchase, Status: statusCreated, Amount: req.Amount.Amount, Currency: req.Amount.Currency,
 		MaskedPAN: maskedPAN, TerminalID: req.TerminalID, MerchantID: merchant.MID, NetworkSTAN: stan, MTI: "0200",
 		ProcessingCode: fields[3], POSEntryMode: fields[22], SentAt: &now, CardToken: req.CardToken, TraceID: obs.TraceID(ctx),
+		BusinessDate: businessDate,
 	}
 	id, err := s.tranLog.Insert(ctx, row)
 	if err != nil {
@@ -368,7 +373,7 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	// outcome must be recorded, so nothing after the send may be cancelled with it.
 	ctx, cancelPersist := Detach(ctx)
 	defer cancelPersist()
-	txn := s.baseTransaction(ctx, req, merchant, rrn, stan, maskedPAN)
+	txn := s.baseTransaction(ctx, req, merchant, rrn, stan, maskedPAN, now)
 	macFailed := s.mapSendOutcome(ctx, &txn, resp, err)
 	if err == nil {
 		txn.LatencyMs = &latencyMs
@@ -497,12 +502,12 @@ func reversalReasonFor(status string, macFailed bool) string {
 	return ""
 }
 
-func (s *Service) baseTransaction(ctx context.Context, req PurchaseRequest, merchant store.Merchant, rrn, stan, maskedPAN string) Transaction {
-	now := time.Now().UTC()
+// baseTransaction describes a purchase created at now, in the business date open then.
+func (s *Service) baseTransaction(ctx context.Context, req PurchaseRequest, merchant store.Merchant, rrn, stan, maskedPAN string, now time.Time) Transaction {
 	return Transaction{
 		RRN: rrn, STAN: stan, Type: tranTypePurchase, Amount: req.Amount, MaskedPAN: maskedPAN,
 		TerminalID: req.TerminalID, MerchantName: merchant.Name, CreatedAt: now,
-		BusinessDate: now.Format("2006-01-02"), TraceID: obs.TraceID(ctx),
+		BusinessDate: bizdate.Format(s.calendar.Current(now)), TraceID: obs.TraceID(ctx),
 	}
 }
 
@@ -513,8 +518,8 @@ func (s *Service) baseTransaction(ctx context.Context, req PurchaseRequest, merc
 // link-down declines.
 func (s *Service) declinedTransaction(ctx context.Context, req PurchaseRequest, merchant store.Merchant, maskedPAN, responseCode string) Transaction {
 	const noStan = "000000"
-	rrn := BuildRRN(time.Now().UTC(), noStan)
-	txn := s.baseTransaction(ctx, req, merchant, rrn, noStan, maskedPAN)
+	now := time.Now().UTC()
+	txn := s.baseTransaction(ctx, req, merchant, BuildRRN(now, noStan), noStan, maskedPAN, now)
 	txn.Status = statusDeclined
 	txn.ResponseCode = responseCode
 	txn.ResponseLabel = ResponseLabel(responseCode)
@@ -528,6 +533,7 @@ func (s *Service) recordLinkDown(ctx context.Context, txn Transaction, req Purch
 		RRN: txn.RRN, Type: tranTypePurchase, Status: statusDeclined, MTI: "0200",
 		Amount: req.Amount.Amount, Currency: req.Amount.Currency, MaskedPAN: txn.MaskedPAN,
 		TerminalID: req.TerminalID, MerchantID: merchant.MID, ResponseCode: txn.ResponseCode, TraceID: txn.TraceID,
+		BusinessDate: s.calendar.Current(txn.CreatedAt),
 	}
 	if _, err := s.tranLog.Insert(ctx, row); err != nil {
 		return fmt.Errorf("insert tran_log for link-down decline: %w", err)

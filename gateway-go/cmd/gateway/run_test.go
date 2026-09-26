@@ -28,6 +28,7 @@ func TestRun_stopsCleanlyOnCancel__MCN_005_AC4(t *testing.T) {
 		ServiceName: "gateway-test", HTTPAddr: "127.0.0.1:0", MetricsAddr: "127.0.0.1:0",
 		ShutdownTimeout: 2 * time.Second, IssuerAddr: "127.0.0.1:0", DatabaseURL: dsn,
 		LMKTestValueHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+		CutoverTime:     23*time.Hour + 59*time.Minute + 59*time.Second, CutoverTZ: time.UTC,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

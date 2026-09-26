@@ -41,41 +41,46 @@ type DeclineReasonCount struct {
 	Count        int64
 }
 
-// Overview computes today's KPIs as of now. "Today" is a UTC calendar-day boundary anchored to
-// now - a dashboard read, not the financial business-date cutover other parts of this codebase
-// use for settlement.
-func (r *TranLogRepository) Overview(ctx context.Context, now time.Time) (OverviewStats, error) {
-	dayStart := now.Truncate(24 * time.Hour)
+// BusinessDay is the business date "today" counts and the one before it, with the instants each
+// opened (ADR-007 §3).
+type BusinessDay struct {
+	Date, Previous             time.Time
+	OpenedAt, PreviousOpenedAt time.Time
+}
 
-	stats, err := r.overviewCounts(ctx, dayStart)
+// Overview computes the KPIs of the business date day.Date as of now (ADR-007 §3). Only the
+// throughput chart is a rolling 60 minutes, since it isn't a per-day figure.
+func (r *TranLogRepository) Overview(ctx context.Context, now time.Time, day BusinessDay) (OverviewStats, error) {
+	stats, err := r.overviewCounts(ctx, day.Date)
 	if err != nil {
 		return OverviewStats{}, err
 	}
-	if stats.TransactionsDeltaPct, err = r.overviewDeltaPct(ctx, now, dayStart, stats.TransactionsToday); err != nil {
+	if stats.TransactionsDeltaPct, err = r.overviewDeltaPct(ctx, now, day, stats.TransactionsToday); err != nil {
 		return OverviewStats{}, err
 	}
-	if stats.P50LatencyMs, stats.P99LatencyMs, err = r.overviewLatencyPercentiles(ctx, dayStart); err != nil {
+	if stats.P50LatencyMs, stats.P99LatencyMs, err = r.overviewLatencyPercentiles(ctx, day.Date); err != nil {
 		return OverviewStats{}, err
 	}
 	if stats.Throughput, err = r.overviewThroughput(ctx, now); err != nil {
 		return OverviewStats{}, err
 	}
-	if stats.DeclineReasons, err = r.overviewDeclineReasons(ctx, dayStart); err != nil {
+	if stats.DeclineReasons, err = r.overviewDeclineReasons(ctx, day.Date); err != nil {
 		return OverviewStats{}, err
 	}
 	return stats, nil
 }
 
-func (r *TranLogRepository) overviewCounts(ctx context.Context, dayStart time.Time) (OverviewStats, error) {
+func (r *TranLogRepository) overviewCounts(ctx context.Context, businessDate time.Time) (OverviewStats, error) {
 	var stats OverviewStats
 	var approved, declined int64
 	err := r.pool.QueryRow(ctx, `
 		SELECT
-			count(*) FILTER (WHERE created_at >= $1),
-			count(*) FILTER (WHERE created_at >= $1 AND state = $2),
-			count(*) FILTER (WHERE created_at >= $1 AND state = $3)
+			count(*),
+			count(*) FILTER (WHERE state = $2),
+			count(*) FILTER (WHERE state = $3)
 		FROM tran_log
-	`, dayStart, stateApproved, stateDeclined).Scan(&stats.TransactionsToday, &approved, &declined)
+		WHERE business_date = $1
+	`, businessDate, stateApproved, stateDeclined).Scan(&stats.TransactionsToday, &approved, &declined)
 	if err != nil {
 		return OverviewStats{}, err
 	}
@@ -86,8 +91,8 @@ func (r *TranLogRepository) overviewCounts(ctx context.Context, dayStart time.Ti
 }
 
 // overviewLatencyPercentiles returns the p50 and p99 time from SENT to the first terminal state
-// (APPROVED/DECLINED/TIMED_OUT), in milliseconds, over today's transactions.
-func (r *TranLogRepository) overviewLatencyPercentiles(ctx context.Context, dayStart time.Time) (int64, int64, error) {
+// (APPROVED/DECLINED/TIMED_OUT), in milliseconds, over the business date's transactions.
+func (r *TranLogRepository) overviewLatencyPercentiles(ctx context.Context, businessDate time.Time) (int64, int64, error) {
 	var p50, p99 float64
 	err := r.pool.QueryRow(ctx, `
 		WITH latency AS (
@@ -95,26 +100,27 @@ func (r *TranLogRepository) overviewLatencyPercentiles(ctx context.Context, dayS
 			FROM tran_state_history sent
 			JOIN tran_state_history terminal
 				ON terminal.tran_id = sent.tran_id AND terminal.to_state IN ($2, $3, $4)
-			WHERE sent.to_state = 'SENT' AND sent.created_at >= $1
+			JOIN tran_log t ON t.id = sent.tran_id
+			WHERE sent.to_state = 'SENT' AND t.business_date = $1
 		)
 		SELECT
 			coalesce(percentile_cont(0.50) WITHIN GROUP (ORDER BY ms), 0),
 			coalesce(percentile_cont(0.99) WITHIN GROUP (ORDER BY ms), 0)
 		FROM latency
-	`, dayStart, stateApproved, stateDeclined, stateTimedOut).Scan(&p50, &p99)
+	`, businessDate, stateApproved, stateDeclined, stateTimedOut).Scan(&p50, &p99)
 	if err != nil {
 		return 0, 0, err
 	}
 	return int64(p50), int64(p99), nil
 }
 
-// overviewDeltaPct compares today's count with yesterday's over the same elapsed time, so a
-// morning read is not measured against yesterday's full day.
-func (r *TranLogRepository) overviewDeltaPct(ctx context.Context, now, dayStart time.Time, today int64) (*float64, error) {
+// overviewDeltaPct compares the business date's count with the previous business date's over the
+// same time elapsed since each opened, so an early read is not measured against a full day.
+func (r *TranLogRepository) overviewDeltaPct(ctx context.Context, now time.Time, day BusinessDay, today int64) (*float64, error) {
 	var yesterday int64
 	err := r.pool.QueryRow(ctx,
-		`SELECT count(*) FROM tran_log WHERE created_at >= $1 AND created_at <= $2`,
-		dayStart.Add(-24*time.Hour), now.Add(-24*time.Hour)).Scan(&yesterday)
+		`SELECT count(*) FROM tran_log WHERE business_date = $1 AND created_at <= $2`,
+		day.Previous, day.PreviousOpenedAt.Add(now.Sub(day.OpenedAt))).Scan(&yesterday)
 	if err != nil {
 		return nil, err
 	}
@@ -166,14 +172,14 @@ func (r *TranLogRepository) overviewThroughput(ctx context.Context, now time.Tim
 	return samples, nil
 }
 
-func (r *TranLogRepository) overviewDeclineReasons(ctx context.Context, dayStart time.Time) ([]DeclineReasonCount, error) {
+func (r *TranLogRepository) overviewDeclineReasons(ctx context.Context, businessDate time.Time) ([]DeclineReasonCount, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT response_code, count(*)
 		FROM tran_log
-		WHERE created_at >= $1 AND state = $2 AND response_code IS NOT NULL
+		WHERE business_date = $1 AND state = $2 AND response_code IS NOT NULL
 		GROUP BY response_code
 		ORDER BY count(*) DESC
-	`, dayStart, stateDeclined)
+	`, businessDate, stateDeclined)
 	if err != nil {
 		return nil, err
 	}

@@ -11,7 +11,10 @@ func env(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
-const envSafEncKey = "SAF_ENC_KEY"
+const (
+	envSafEncKey   = "SAF_ENC_KEY"
+	envCutoverTime = "CUTOVER_TIME"
+)
 
 // testLMKHex is a valid 32-byte (64 hex char) LMK, required by every Load call since MCN-501-AC3.
 const testLMKHex = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e"
@@ -203,5 +206,34 @@ func TestLoad_rotationSendAttempts__SEC_S2(t *testing.T) {
 	for _, bad := range []string{"0", "11", "x"} {
 		_, err = Load(env(withLMK(map[string]string{"ROTATION_SEND_ATTEMPTS": bad})))
 		require.ErrorContains(t, err, "ROTATION_SEND_ATTEMPTS", bad)
+	}
+}
+
+func TestLoad_cutoverDefaultsToOneSecondBeforeLocalMidnight__OVW_G7(t *testing.T) {
+	cfg, err := Load(env(withLMK(nil)))
+
+	require.NoError(t, err)
+	require.Equal(t, 23*time.Hour+59*time.Minute+59*time.Second, cfg.CutoverTime)
+	require.Equal(t, "Asia/Ho_Chi_Minh", cfg.CutoverTZ.String())
+}
+
+func TestLoad_cutoverOverrides__OVW_G7(t *testing.T) {
+	cfg, err := Load(env(withLMK(map[string]string{envCutoverTime: "18:30:00", "CUTOVER_TZ": "UTC"})))
+
+	require.NoError(t, err)
+	require.Equal(t, 18*time.Hour+30*time.Minute, cfg.CutoverTime)
+	require.Equal(t, "UTC", cfg.CutoverTZ.String())
+}
+
+func TestLoad_invalidCutoverFailsFast__OVW_G7(t *testing.T) {
+	for name, m := range map[string]map[string]string{
+		"time not HH:MM:SS": {envCutoverTime: "23:59"},
+		"time out of range": {envCutoverTime: "24:00:00"},
+		"unknown zone":      {"CUTOVER_TZ": "Mars/Olympus_Mons"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(env(withLMK(m)))
+			require.Error(t, err)
+		})
 	}
 }

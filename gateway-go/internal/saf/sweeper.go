@@ -116,6 +116,7 @@ func (s *Sweeper) followUp(ctx context.Context, row store.TranLogRow) error {
 // same STAN and DE 7, so every repeat is the same message the issuer dedupes.
 func completionAdvice(row store.TranLogRow) map[int]string {
 	return map[int]string{
+		15: originalDE15(row),
 		3:  row.ProcessingCode,
 		4:  fmt.Sprintf("%012d", row.Amount),
 		7:  row.SentAt.UTC().Format("0102150405"),

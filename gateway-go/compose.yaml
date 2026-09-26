@@ -26,6 +26,9 @@ services:
       # yet (docs/09-risk-register.md R-10), so the browser calls this gateway directly and
       # needs CORS to do it. Never set in a topology with a real server-side proxy.
       CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-}
+      # The business date rolls at this local time (ADR-007, docs/03 §7.6).
+      CUTOVER_TIME: ${CUTOVER_TIME:-23:59:59}
+      CUTOVER_TZ: ${CUTOVER_TZ:-Asia/Ho_Chi_Minh}
     ports: ["8080:8080", "9464:9464"]
     stop_grace_period: 35s
     depends_on: [otel-collector, postgres]
