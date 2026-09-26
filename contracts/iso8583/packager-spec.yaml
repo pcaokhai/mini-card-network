@@ -33,7 +33,7 @@ fields:
   53:  { name: Security control info,         type: n,   length: 16 }
   54:  { name: Additional amounts,            type: an,  length: 120, prefix: LLL }
   55:  { name: ICC data,                      type: b,   length: 255, prefix: LLL, sensitive: emv }
-  64:  { name: MAC,                           type: b,   length: 8 }
+  64:  { name: MAC,                           type: b,   length: 8, sensitive: mac }
   70:  { name: Network management code,       type: n,   length: 3 }
   74:  { name: Credits number,                type: n,   length: 10 }
   75:  { name: Credits reversal number,       type: n,   length: 10 }
@@ -45,4 +45,4 @@ fields:
   89:  { name: Debits reversal amount,        type: n,   length: 16 }
   90:  { name: Original data elements,        type: n,   length: 42 }
   97:  { name: Net settlement amount,         type: an,  length: 17 }
-  128: { name: MAC secondary,                 type: b,   length: 8 }
+  128: { name: MAC secondary,                 type: b,   length: 8, sensitive: mac }
