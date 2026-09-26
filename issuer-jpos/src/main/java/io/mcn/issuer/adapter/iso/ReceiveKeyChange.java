@@ -4,6 +4,7 @@ import io.mcn.issuer.adapter.persistence.AuditLogRepository;
 import io.mcn.issuer.adapter.persistence.KeyStoreRepository;
 import io.mcn.issuer.adapter.persistence.KeyStoreRow;
 import io.mcn.issuer.application.SecurityModule;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HexFormat;
 import org.jpos.iso.ISOMsg;
@@ -12,7 +13,8 @@ import org.jpos.iso.ISOMsg;
  * Handles the 0800 key-change advice (DE 70 = {@code 161}, docs/03 §7.3/§11, MCN-504): unwraps DE
  * 48's cryptogram under ZMK, stores the new key as {@code PENDING}, then immediately activates it
  * (this class's caller answers 0810 RC {@code 00}, which *is* {@code PARTNER_CONFIRM} from the
- * issuer's perspective - no separate confirm round-trip, per {@code MCN-504-ISS.md}'s Ruling 1).
+ * issuer's perspective - no separate confirm round-trip, per {@code MCN-504-ISS.md}'s Ruling 1). A
+ * resent advice carrying the key that is already ACTIVE is acknowledged without a new row.
  *
  * <p>Ruling (deviates from {@code MCN-504-ISS.md}'s Task 2): the plan's DE 123 key-type carrier
  * does not exist in this project's packager ({@code cfg/iso87ascii.xml} defines no field 123), and
@@ -58,6 +60,9 @@ public final class ReceiveKeyChange {
       byte[] cryptogramUnderZmk = HexFormat.of().parseHex(field48.substring(sep + 1));
 
       clearKey = securityModule.unwrapUnderKey(cryptogramUnderZmk, zmk);
+      if (isAlreadyActive(keyType, clearKey)) {
+        return true; // a resent advice (SEC-G15): 0810 00, no new row, the retired key unchanged
+      }
       byte[] wrappedUnderLmk = securityModule.wrapUnderLmk(clearKey);
       String kcv = securityModule.computeKcv(clearKey);
 
@@ -96,5 +101,25 @@ public final class ReceiveKeyChange {
       }
       request.unset(48);
     }
+  }
+
+  /**
+   * Whether {@code clearKey} is the ACTIVE key of that type already - the gateway resends an
+   * unanswered 0800 with the same key (#121). Compares the keys themselves, in constant time: a
+   * 3-byte KCV match alone could swallow a genuinely new key.
+   */
+  private boolean isAlreadyActive(String keyType, byte[] clearKey) {
+    return keyStoreRepository
+        .findActive(keyType, counterpartyId)
+        .map(
+            row -> {
+              byte[] active = securityModule.unwrap(HexFormat.of().parseHex(row.keyUnderLmkHex()));
+              try {
+                return MessageDigest.isEqual(active, clearKey);
+              } finally {
+                Arrays.fill(active, (byte) 0);
+              }
+            })
+        .orElse(false);
   }
 }

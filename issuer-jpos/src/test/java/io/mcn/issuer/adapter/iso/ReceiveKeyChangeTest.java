@@ -81,4 +81,46 @@ class ReceiveKeyChangeTest {
   private static <T> T argThat(org.mockito.ArgumentMatcher<T> matcher) {
     return org.mockito.ArgumentMatchers.argThat(matcher);
   }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName(
+      "SEC-G15: a resent 0800/161 carrying the key that is already ACTIVE answers 00 and changes"
+          + " nothing, so the retired key stays the one before it")
+  void should_acknowledgeWithoutANewRow_when_theKeyIsAlreadyActive() throws Exception {
+    SecurityModule securityModule = mock(SecurityModule.class);
+    KeyStoreRepository keyStoreRepository = mock(KeyStoreRepository.class);
+    AuditLogRepository auditLogRepository = mock(AuditLogRepository.class);
+    byte[] zmk = HexFormat.of().parseHex("00".repeat(16));
+    byte[] cryptogramUnderZmk = HexFormat.of().parseHex("22".repeat(16));
+    byte[] activeUnderLmk = HexFormat.of().parseHex("ee".repeat(16));
+    when(securityModule.unwrapUnderKey(eq(cryptogramUnderZmk), eq(zmk)))
+        .thenReturn(HexFormat.of().parseHex("11".repeat(16)));
+    when(securityModule.unwrap(activeUnderLmk))
+        .thenReturn(HexFormat.of().parseHex("11".repeat(16)));
+    when(keyStoreRepository.findActive("ZAK", "970499"))
+        .thenReturn(
+            java.util.Optional.of(
+                new KeyStoreRow(
+                    7,
+                    "ZAK",
+                    "970499",
+                    HexFormat.of().formatHex(activeUnderLmk),
+                    "DDEEFF",
+                    "ACTIVE",
+                    java.time.Instant.now(),
+                    null,
+                    null)));
+    ReceiveKeyChange receiveKeyChange =
+        new ReceiveKeyChange(securityModule, keyStoreRepository, auditLogRepository, zmk, "970499");
+
+    ISOMsg request = new ISOMsg("0800");
+    request.set(70, "161");
+    request.set(48, "ZAK:" + HexFormat.of().formatHex(cryptogramUnderZmk));
+
+    assertThat(receiveKeyChange.receive(request)).isTrue();
+    verify(keyStoreRepository, org.mockito.Mockito.never()).insert(any());
+    verify(keyStoreRepository, org.mockito.Mockito.never())
+        .activate(org.mockito.ArgumentMatchers.anyLong());
+    org.mockito.Mockito.verifyNoInteractions(auditLogRepository);
+  }
 }

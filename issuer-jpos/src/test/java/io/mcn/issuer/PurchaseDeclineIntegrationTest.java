@@ -642,6 +642,17 @@ class PurchaseDeclineIntegrationTest {
     return unpack(send(request.pack()));
   }
 
+  private static long keyStoreRows(String keyType) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement("SELECT count(*) FROM key_store WHERE key_type = ?")) {
+      stmt.setString(1, keyType);
+      try (ResultSet rs = stmt.executeQuery()) {
+        rs.next();
+        return rs.getLong(1);
+      }
+    }
+  }
+
   private static boolean responseMacVerifiesUnder(ISOMsg response, byte[] zak) throws Exception {
     ISOMsg unsigned = (ISOMsg) response.clone();
     unsigned.unset(64);
@@ -656,6 +667,10 @@ class PurchaseDeclineIntegrationTest {
           + " response is MACed under it")
   void newZakVerifiesAndSignsTheResponse() throws Exception {
     assertThat(keyChange(50, "ZAK", ZAK2).getString(39)).isEqualTo("00");
+    // The gateway resends an unanswered 0800 (#121): same key, new STAN/DE 7. It must change
+    // nothing, or the "recently retired" key would become ZAK2 itself instead of ZAK.
+    assertThat(keyChange(57, "ZAK", ZAK2).getString(39)).isEqualTo("00");
+    assertThat(keyStoreRows("ZAK")).isEqualTo(2);
 
     ISOMsg response = purchaseUnder(51, "9704360000005540", 1_000L, ZAK2, ZPK);
 
