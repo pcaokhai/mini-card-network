@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/network-page.md` |
-| Version | 1.0 |
+| Version | 1.5 |
 | Status | Approved for integration (links, events, SAF, echo); Draft for `/v1/network/switch` and `/v1/terminals`, which the provider doesn't have yet |
 | Date | 2026-09-25 |
 | Screen | route `/network`, container `web-next/src/app/(console)/network/NetworkScreen.tsx` |
@@ -507,6 +507,8 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | NET-G16 | `p99LatencyMs` is always null and `inFlight` always 0: nothing writes those columns. The "Độ trễ" column is always "—" on the real stack. | `migrations/00001_link_state_and_network_event.sql`; no writer in `internal/` | GW | **Fixed** in #121: `p99LatencyMs` over the last 1000 echo/request round trips and `inFlight` from the MUX, computed live rather than stored |
 | NET-G17 | Problem `type` values are bare slugs (`unknown-link`, `link-not-ready`), not docs/04 URIs, and `link-not-ready` isn't in the docs/04 §3 catalogue (the nearest is `link-down` 503). | `internal/api/lab.go` `problem()`; `network.go:162` | GW | Shared URI problem writer; align with the catalogue |
 | NET-G18 | A manual sign-off does not last: the next request that gets RC 91 makes the supervisor sign on again automatically (`resignOn`), so the operator's choice is silently undone. | `internal/isonet/supervisor.go` `Send` → `signOnAgain` | GW | Remember a manual sign-off and suppress the automatic re-sign-on until a manual sign-on (or reconnect) |
+| NET-G19 | The issuer's 0430 (reversal acknowledgement) carried no MAC of its own: `RespondReversal` cloned the 0420 and sent it back with the acquirer's own DE 128 MAC echoed, although docs/03 §4 makes 64/128 mandatory on the 0430 | `RespondReversal.buildResponse` | ISS | **Fixed** in #122: every 0430 from the reversal chain (00, and the 96 that makes the SAF repeat) is MACed under the ACTIVE ZAK from `key_store`, in DE 128 because the echoed DE 90 sets the secondary bitmap (the gateway's own rule for its 0420, MCN-502 Ruling 2), through the shared `ResponseMac` Respond also uses. The gateway ignores the 0430's MAC (`saf/worker.go` checks only DE 39), so this can't break delivery. The two 0430s `ReversalListener` answers itself are MACed through the same `ResponseMac` too: the 91 on a link that isn't signed on (the key store doesn't depend on the link, so the active ZAK is always there), and the fallback when an advice can't be queued, which now says 96 (not recorded, repeat) instead of echoing the 0420's reason code. If signing itself fails (key store unreachable), that 0430 still goes out unsigned rather than not at all |
+| NET-G20 | The gateway never verifies the 0430's MAC: the SAF worker marks an advice ACKED on DE 39 = "00" alone, so a forged or corrupted 0430 would complete a reversal the issuer never recorded | `saf.Worker.deliverRow` | GW | Verify the 0430 like a 0210 (`purchase.MACVerifier`, DE 128 because of DE 90, with dual-key acceptance), and treat a failure as not acknowledged (retry). Possible now that the issuer MACs every 0430 (NET-G19). Open |
 
 ## 10. Change log
 
@@ -517,3 +519,4 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | 1.2 | 2026-09-26 | NET-G18 added; `ECHO_TIMEOUT` is validated (≤ 15 s) so manual triggers stay under the HTTP WriteTimeout (#121 review) |
 | 1.3 | 2026-09-26 | NET-G8, NET-G10, NET-G11 fixed on the web side (#124) |
 | 1.4 | 2026-09-26 | NET-G15 web half fixed (#125) |
+| 1.5 | 2026-09-26 | NET-G19 (issuer 0430 unsigned) Fixed in #122; NET-G20 (gateway doesn't verify the 0430 MAC) added, open. |

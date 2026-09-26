@@ -2,11 +2,14 @@ package io.mcn.issuer.adapter.txn;
 
 import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.crypto.JCESecurityModule;
+import io.mcn.issuer.adapter.crypto.KeyStoreSessionKeys;
 import io.mcn.issuer.adapter.crypto.PvvCalculator;
 import io.mcn.issuer.adapter.persistence.CardRepository;
 import io.mcn.issuer.adapter.persistence.KeyStoreRepository;
 import io.mcn.issuer.application.SecurityModule;
+import io.mcn.issuer.application.SessionKeys;
 import java.io.Serializable;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Optional;
@@ -36,41 +39,35 @@ public class VerifySecurity implements TransactionParticipant, Configurable, Des
 
   private SecurityModule securityModule;
   private CardRepository cardRepository;
-  private KeyStoreRepository keyStoreRepository;
-  private byte[] zak;
-  private byte[] zpk;
+  private SessionKeys sessionKeys;
   private HikariDataSource dataSource;
 
   /** No-arg constructor for Q2's {@code QFactory.newInstance}; see {@link #setConfiguration}. */
   public VerifySecurity() {}
 
   public VerifySecurity(
-      SecurityModule securityModule, CardRepository cardRepository, byte[] zak, byte[] zpk) {
-    this(securityModule, cardRepository, null, zak, zpk);
-  }
-
-  /** {@code keyStoreRepository} may be {@code null} to skip the dual-key retry (MCN-504-AC2). */
-  public VerifySecurity(
-      SecurityModule securityModule,
-      CardRepository cardRepository,
-      KeyStoreRepository keyStoreRepository,
-      byte[] zak,
-      byte[] zpk) {
+      SecurityModule securityModule, CardRepository cardRepository, SessionKeys sessionKeys) {
     this.securityModule = securityModule;
     this.cardRepository = cardRepository;
-    this.keyStoreRepository = keyStoreRepository;
-    this.zak = zak;
-    this.zpk = zpk;
+    this.sessionKeys = sessionKeys;
   }
 
+  /**
+   * Reads the ZAK and ZPK from {@code key_store} on every message (SEC-G15), seeding them from
+   * {@code ZAK_HEX}/{@code ZPK_HEX} only when no key is ACTIVE yet - after a rotation the stored
+   * key wins over the environment.
+   */
   @Override
   public void setConfiguration(Configuration cfg) throws ConfigurationException {
     this.dataSource = TxnDataSource.fromConfig(cfg);
     this.cardRepository = new CardRepository(dataSource);
-    this.keyStoreRepository = new KeyStoreRepository(dataSource);
     this.securityModule = new JCESecurityModule(env("LMK_TEST_VALUE_HEX"));
-    this.zak = HexFormat.of().parseHex(env("ZAK_HEX"));
-    this.zpk = HexFormat.of().parseHex(env("ZPK_HEX"));
+    var keys =
+        new KeyStoreSessionKeys(
+            new KeyStoreRepository(dataSource), securityModule, LAB_ACQUIRER_ID);
+    keys.ensureActive("ZAK", HexFormat.of().parseHex(env("ZAK_HEX")));
+    keys.ensureActive("ZPK", HexFormat.of().parseHex(env("ZPK_HEX")));
+    this.sessionKeys = keys;
   }
 
   @Override
@@ -113,38 +110,35 @@ public class VerifySecurity implements TransactionParticipant, Configurable, Des
     }
   }
 
+  /**
+   * The active ZAK, then (dual-key acceptance, MCN-504-AC2, docs/03 §9) the key the last change
+   * retired, if within the window and it was ever active.
+   */
   private boolean verifyMac(ISOMsg request) throws Exception {
     byte[] receivedMac = request.getBytes(64);
     request.unset(64);
     byte[] packed = request.pack();
-    if (Arrays.equals(receivedMac, securityModule.computeMac(packed, zak))) {
-      return true;
-    }
-    return recentlyRetiredKey("ZAK")
-        .map(
-            retiredZak -> Arrays.equals(receivedMac, securityModule.computeMac(packed, retiredZak)))
-        .orElse(false);
+    return macMatches(receivedMac, packed, sessionKeys.active("ZAK"))
+        || sessionKeys
+            .recentlyRetired("ZAK")
+            .map(retired -> macMatches(receivedMac, packed, retired))
+            .orElse(false);
   }
 
-  /**
-   * Dual-key acceptance (MCN-504-AC2, docs/03 §9): on a mismatch against the active key, retry once
-   * against the most recently retired key of the same type, within the shared {@link
-   * KeyStoreRepository#DUAL_KEY_WINDOW}.
-   */
-  private Optional<byte[]> recentlyRetiredKey(String keyType) {
-    if (keyStoreRepository == null) {
-      return Optional.empty();
+  /** Compares in constant time and zeroes {@code zak}, a copy this call owns. */
+  private boolean macMatches(byte[] receivedMac, byte[] packed, byte[] zak) {
+    try {
+      return MessageDigest.isEqual(receivedMac, securityModule.computeMac(packed, zak));
+    } finally {
+      Arrays.fill(zak, (byte) 0);
     }
-    return keyStoreRepository
-        .findRecentlyRetired(keyType, LAB_ACQUIRER_ID, KeyStoreRepository.DUAL_KEY_WINDOW)
-        .map(row -> securityModule.unwrap(HexFormat.of().parseHex(row.keyUnderLmkHex())));
   }
 
   private int verifyPin(Context ctx, ISOMsg request, long cardId, String pan) throws Exception {
     byte[] pinBlockUnderZpk = request.getBytes(52);
     String storedPvv = cardRepository.findPvv(cardId).orElse(null);
 
-    if (pvvMatches(pinBlockUnderZpk, pan, zpk, storedPvv)) {
+    if (pvvMatches(pinBlockUnderZpk, pan, storedPvv)) {
       cardRepository.resetPinTryCount(cardId);
       return PREPARED;
     }
@@ -159,21 +153,29 @@ public class VerifySecurity implements TransactionParticipant, Configurable, Des
     return ABORTED;
   }
 
-  private boolean pvvMatches(byte[] pinBlockUnderZpk, String pan, byte[] key, String storedPvv)
+  /** The active ZPK, then the one the last change retired (same dual-key rule as the MAC). */
+  private boolean pvvMatches(byte[] pinBlockUnderZpk, String pan, String storedPvv)
       throws Exception {
-    if (pvvMatchesUnder(pinBlockUnderZpk, pan, key, storedPvv)) {
+    if (pvvMatchesUnder(pinBlockUnderZpk, pan, sessionKeys.active("ZPK"), storedPvv)) {
       return true;
     }
-    Optional<byte[]> retiredZpk = recentlyRetiredKey("ZPK");
+    Optional<byte[]> retiredZpk = sessionKeys.recentlyRetired("ZPK");
     return retiredZpk.isPresent()
         && pvvMatchesUnder(pinBlockUnderZpk, pan, retiredZpk.get(), storedPvv);
   }
 
-  private boolean pvvMatchesUnder(byte[] pinBlockUnderZpk, String pan, byte[] key, String storedPvv)
+  /** Zeroes {@code zpk} and the clear PIN block, both owned by this call. */
+  private boolean pvvMatchesUnder(byte[] pinBlockUnderZpk, String pan, byte[] zpk, String storedPvv)
       throws Exception {
-    byte[] clearPinBlock = securityModule.decryptPinBlock(pinBlockUnderZpk, key);
-    String pin = extractPin(clearPinBlock, pan);
-    return PvvCalculator.computePvv(pan, pin).equals(storedPvv);
+    byte[] clearPinBlock = null;
+    try {
+      clearPinBlock = securityModule.decryptPinBlock(pinBlockUnderZpk, zpk);
+      String pin = extractPin(clearPinBlock, pan);
+      return PvvCalculator.computePvv(pan, pin).equals(storedPvv);
+    } finally {
+      Arrays.fill(zpk, (byte) 0);
+      if (clearPinBlock != null) Arrays.fill(clearPinBlock, (byte) 0);
+    }
   }
 
   /**

@@ -45,7 +45,10 @@ public class KeyStoreRepository {
 
   /**
    * Retires any other ACTIVE row sharing {@code (key_type, counterparty)}, then activates {@code
-   * id}.
+   * id}. An ACTIVE row with the same KCV is never retired: that is a concurrent copy of the same
+   * key change (SF2), so this activation hits the one-ACTIVE index (V8) and fails instead of
+   * retiring the very key it carries. A different key colliding on KCV (1 in 2^24) fails safe the
+   * same way - it is declined, never activated over the wrong key - and needs a fresh rotation.
    */
   public void activate(long id) {
     String retirePrevious =
@@ -53,13 +56,15 @@ public class KeyStoreRepository {
         UPDATE key_store SET status = 'RETIRED', retired_at = now()
         WHERE key_type = (SELECT key_type FROM key_store WHERE id = ?)
           AND COALESCE(counterparty, '') = (SELECT COALESCE(counterparty, '') FROM key_store WHERE id = ?)
-          AND status = 'ACTIVE'""";
+          AND status = 'ACTIVE'
+          AND kcv <> (SELECT kcv FROM key_store WHERE id = ?)""";
     String activate = "UPDATE key_store SET status = 'ACTIVE', activated_at = now() WHERE id = ?";
     try (var conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
       try (PreparedStatement retireStmt = conn.prepareStatement(retirePrevious)) {
         retireStmt.setLong(1, id);
         retireStmt.setLong(2, id);
+        retireStmt.setLong(3, id);
         retireStmt.executeUpdate();
       }
       try (PreparedStatement activateStmt = conn.prepareStatement(activate)) {
@@ -75,7 +80,8 @@ public class KeyStoreRepository {
   /**
    * Dual-key acceptance window (MCN-504-AC2): the most recently {@code RETIRED} row for {@code
    * (keyType, counterparty)}, if it retired within {@code within} of now - a time-boxed read, not a
-   * second {@code ACTIVE} row, per {@code MCN-504-GW.md}'s Ruling 2.
+   * second {@code ACTIVE} row, per {@code MCN-504-GW.md}'s Ruling 2. A row that was never activated
+   * is never returned, whatever its status (SEC-G15, as the gateway's S1 fix).
    */
   public Optional<KeyStoreRow> findRecentlyRetired(
       String keyType, String counterparty, Duration within) {
@@ -85,6 +91,7 @@ public class KeyStoreRepository {
                created_at
         FROM key_store
         WHERE key_type = ? AND COALESCE(counterparty, '') = ? AND status = 'RETIRED'
+          AND activated_at IS NOT NULL
           AND retired_at > now() - (? || ' seconds')::interval
         ORDER BY retired_at DESC LIMIT 1""";
     try (var conn = dataSource.getConnection();
@@ -97,6 +104,74 @@ public class KeyStoreRepository {
       }
     } catch (SQLException e) {
       throw new IllegalStateException("find recently retired key_store row failed", e);
+    }
+  }
+
+  /** The ACTIVE row for {@code (keyType, counterparty)} (at most one: {@code V8}). */
+  public Optional<KeyStoreRow> findActive(String keyType, String counterparty) {
+    String sql =
+        """
+        SELECT id, key_type, counterparty, key_under_lmk, kcv, status, activated_at, retired_at,
+               created_at
+        FROM key_store
+        WHERE key_type = ? AND COALESCE(counterparty, '') = ? AND status = 'ACTIVE'""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, keyType);
+      stmt.setString(2, counterparty == null ? "" : counterparty);
+      try (ResultSet rs = stmt.executeQuery()) {
+        return rs.next() ? Optional.of(mapRow(rs)) : Optional.empty();
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException("find active key_store row failed", e);
+    }
+  }
+
+  /**
+   * Inserts {@code row} as ACTIVE unless an ACTIVE key of that type and counterparty exists
+   * (startup seeding, like the gateway's {@code EnsureActive}); the partial unique index makes a
+   * concurrent seed a no-op. Returns whether this call inserted it.
+   */
+  public boolean ensureActive(KeyStoreRow row) {
+    String sql =
+        """
+        INSERT INTO key_store (key_type, counterparty, key_under_lmk, kcv, status, activated_at)
+        VALUES (?, ?, ?, ?, 'ACTIVE', now())
+        ON CONFLICT (key_type, COALESCE(counterparty, '')) WHERE status = 'ACTIVE' DO NOTHING""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, row.keyType());
+      stmt.setString(2, row.counterparty());
+      stmt.setString(3, row.keyUnderLmkHex());
+      stmt.setString(4, row.kcv());
+      return stmt.executeUpdate() == 1;
+    } catch (SQLException e) {
+      throw new IllegalStateException("ensure active key_store row failed", e);
+    }
+  }
+
+  /** Every RETIRED row for {@code (keyType, counterparty)}, newest first (replay check). */
+  public List<KeyStoreRow> findRetired(String keyType, String counterparty) {
+    String sql =
+        """
+        SELECT id, key_type, counterparty, key_under_lmk, kcv, status, activated_at, retired_at,
+               created_at
+        FROM key_store
+        WHERE key_type = ? AND COALESCE(counterparty, '') = ? AND status = 'RETIRED'
+        ORDER BY id DESC""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, keyType);
+      stmt.setString(2, counterparty == null ? "" : counterparty);
+      try (ResultSet rs = stmt.executeQuery()) {
+        List<KeyStoreRow> rows = new ArrayList<>();
+        while (rs.next()) {
+          rows.add(mapRow(rs));
+        }
+        return rows;
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException("find retired key_store rows failed", e);
     }
   }
 

@@ -38,7 +38,7 @@ class RespondTest {
     ctx.put(TxnContextKeys.AUTH_CODE, "123456");
     JCESecurityModule hsm = new JCESecurityModule(LMK_HEX);
 
-    ISOMsg response = new Respond(hsm, ZAK).signedResponse(ctx);
+    ISOMsg response = new Respond(hsm, FixedSessionKeys.of(ZAK, ZAK)).signedResponse(ctx);
 
     assertThat(response.hasField(64)).isTrue();
     ISOMsg unsigned = (ISOMsg) response.clone();
@@ -55,7 +55,9 @@ class RespondTest {
     ctx.put(TxnContextKeys.IS_DUPLICATE, true);
     ctx.put(TxnContextKeys.STORED_RESPONSE, stored);
 
-    ISOMsg response = new Respond(new JCESecurityModule(LMK_HEX), ZAK).signedResponse(ctx);
+    ISOMsg response =
+        new Respond(new JCESecurityModule(LMK_HEX), FixedSessionKeys.of(ZAK, ZAK))
+            .signedResponse(ctx);
 
     assertThat(response.hasField(64)).isTrue();
   }

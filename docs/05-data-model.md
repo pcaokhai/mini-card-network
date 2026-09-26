@@ -56,6 +56,7 @@ The baseline file shows all three schemas together for review. MCN-301 (issuer),
 | issuer | `tran_log.status` add `REVERSAL_WITHOUT_ORIGINAL` | Reversal before original (ISO §7.3) | MCN-402 |
 | issuer | `idempotency_record(key, route, request_hash, status, body, created_at)` | Admin API idempotency | MCN-308 |
 | issuer | V7: drop `account.chk_available_floor`; add `tran_log.balance BIGINT NULL` | A reversal is an advice and must post even past the overdraft floor (the floor moved into Authorize's debit path); a duplicate balance inquiry replays its DE 54 | #119 (POS-G17/G19) |
+| issuer | V8: unique index `ux_key_store_one_active (key_type, COALESCE(counterparty, '')) WHERE status = 'ACTIVE'` | The MAC/PIN participants read the one ACTIVE key and seed it from the environment at startup; concurrent seeding must not create two | SEC-G15 |
 | acquirer | `outbox_event` (same shape as issuer) | Acquirer events for settlement | MCN-703 |
 | acquirer | `idempotency_record` | REST idempotency | MCN-303 |
 | acquirer | `network_event(id, occurred_at, severity, easy_text, technical_text)` | Network screen timeline | MCN-204 |
