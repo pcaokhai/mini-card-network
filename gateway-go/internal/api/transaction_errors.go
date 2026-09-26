@@ -21,7 +21,7 @@ func transactionProblem(w http.ResponseWriter, req *http.Request, err error, fal
 		problem(w, http.StatusUnprocessableEntity, "unknown-card-token", "cardToken is not a simulator card")
 	case errors.Is(err, store.ErrIdempotencyKeyMismatch):
 		problem(w, http.StatusUnprocessableEntity, "idempotency-key-mismatch", "Idempotency-Key was used for a different request")
-	case errors.Is(err, store.ErrIdempotencyInProgress):
+	case errors.Is(err, store.ErrIdempotencyInProgress), errors.Is(err, store.ErrReservationLost):
 		problem(w, http.StatusConflict, "conflict", "A request with this Idempotency-Key is still in progress")
 	case errors.Is(err, advtxn.ErrNotCompletable), errors.Is(err, advtxn.ErrExceedsHold):
 		problem(w, http.StatusConflict, "conflict", err.Error())

@@ -13,11 +13,11 @@ import (
 // IdempotencyPort persists idempotency_record (docs/04 §2). *store.IdempotencyRepository
 // satisfies it.
 type IdempotencyPort interface {
-	Reserve(ctx context.Context, key, route, requestHash string) (*store.StoredResponse, error)
-	AttachRRN(ctx context.Context, key, route, rrn string) error
-	Reclaim(ctx context.Context, key, route, requestHash string, staleAfter time.Duration) (bool, error)
+	Reserve(ctx context.Context, key, route, requestHash string) (stored *store.StoredResponse, token string, err error)
+	AttachRRN(ctx context.Context, key, route, token, rrn string) error
+	Reclaim(ctx context.Context, key, route, requestHash string, staleAfter time.Duration) (token string, err error)
 	Store(ctx context.Context, key, route, requestHash string, status int, body []byte) error
-	Release(ctx context.Context, key, route string) error
+	Release(ctx context.Context, key, route, token string) error
 }
 
 // staleAfter is how long a reserved key may stay in flight before a retry answers from what its
@@ -30,25 +30,28 @@ type Recover[T any] func(ctx context.Context, rrn string) (txn T, final bool, er
 
 type reservationKey struct{}
 
-// reservation is the idempotency key a create call holds, carried in its context.
+// reservation is the idempotency key a create call holds, carried in its context. token fences
+// it: if another request reclaimed the key, this one can neither record an RRN nor release it.
 type reservation struct {
 	port       IdempotencyPort
 	key, route string
+	token      string
 	rrn        string
 }
 
 // AttachRRN records, on the idempotency key ctx's request holds, the RRN it is about to send, so
 // a retry can learn the outcome from tran_log if this request never finishes (#117 review S1).
-// Call it before the send; outside Idempotent it does nothing.
+// Call it before the send, and abort without sending when it fails: store.ErrReservationLost means
+// the key was reclaimed by a retry that may send instead. Outside Idempotent it does nothing.
 func AttachRRN(ctx context.Context, rrn string) error {
 	r, ok := ctx.Value(reservationKey{}).(*reservation)
 	if !ok {
 		return nil
 	}
-	r.rrn = rrn
-	if err := r.port.AttachRRN(ctx, r.key, r.route, rrn); err != nil {
+	if err := r.port.AttachRRN(ctx, r.key, r.route, r.token, rrn); err != nil {
 		return fmt.Errorf("attach RRN %s to idempotency key: %w", rrn, err)
 	}
+	r.rrn = rrn
 	return nil
 }
 
@@ -79,16 +82,17 @@ type idemKey struct {
 // answered by fromLog from the RRN it sent; fromLog may be nil for a route that sends nothing.
 func Idempotent[T any](ctx context.Context, port IdempotencyPort, key, route, requestHash string, status int, create func(ctx context.Context) (T, error), fromLog Recover[T]) (T, error) {
 	k := idemKey{port: port, key: key, route: route, requestHash: requestHash, status: status}
-	if answer, done, err := begin(ctx, k, fromLog); done || err != nil {
+	answer, token, err := begin(ctx, k, fromLog)
+	if token == "" || err != nil {
 		return answer, err
 	}
-	held := &reservation{port: port, key: key, route: route}
+	held := &reservation{port: port, key: key, route: route, token: token}
 	result, err := create(context.WithValue(ctx, reservationKey{}, held))
 	// Whatever happened to the caller, the key's fate must be recorded.
 	ctx, cancel := Detach(ctx)
 	defer cancel()
 	if err != nil {
-		return failed(ctx, k, held.rrn, fromLog, err)
+		return failed(ctx, k, held, fromLog, err)
 	}
 	if err := storeResponse(ctx, k, result); err != nil {
 		return result, afterSend(err)
@@ -96,52 +100,60 @@ func Idempotent[T any](ctx context.Context, port IdempotencyPort, key, route, re
 	return result, nil
 }
 
-// begin reserves the key; done means the answer is a replay (or, for a stale key, the recovered
-// outcome) and create must not run.
-func begin[T any](ctx context.Context, k idemKey, fromLog Recover[T]) (answer T, done bool, err error) {
-	stored, err := k.port.Reserve(ctx, k.key, k.route, k.requestHash)
+// begin reserves the key and returns the token that holds it. No token means the answer is a
+// replay (or, for a stale key, the recovered outcome) and create must not run.
+func begin[T any](ctx context.Context, k idemKey, fromLog Recover[T]) (answer T, token string, err error) {
+	stored, token, err := k.port.Reserve(ctx, k.key, k.route, k.requestHash)
 	var pending *store.InProgressError
 	if errors.As(err, &pending) && time.Since(pending.ReservedAt) > staleAfter {
 		return takeOverStale(ctx, k, pending.RRN, fromLog)
 	}
 	if err != nil {
-		return answer, true, fmt.Errorf("reserve idempotency key: %w", err)
+		return answer, "", fmt.Errorf("reserve idempotency key: %w", err)
 	}
 	if stored == nil {
-		return answer, false, nil
+		return answer, token, nil
 	}
 	if err := json.Unmarshal(stored.Body, &answer); err != nil {
-		return answer, true, fmt.Errorf("decode stored response: %w", err)
+		return answer, "", fmt.Errorf("decode stored response: %w", err)
 	}
-	return answer, true, nil
+	return answer, "", nil
 }
 
 // takeOverStale settles a key still in flight past staleAfter. With an RRN it may have been sent,
 // so it is answered from tran_log; without one nothing was sent (AttachRRN runs before every send),
 // so the caller takes the key over and sends. Either way a retry never waits out the 24 h TTL.
-func takeOverStale[T any](ctx context.Context, k idemKey, rrn string, fromLog Recover[T]) (answer T, done bool, err error) {
+//
+// A holder that was only slow keeps running with the old token, so it can neither record an RRN
+// (and send) nor release the new reservation.
+func takeOverStale[T any](ctx context.Context, k idemKey, rrn string, fromLog Recover[T]) (answer T, token string, err error) {
 	if rrn != "" {
 		if fromLog == nil {
-			return answer, true, fmt.Errorf("reserve idempotency key: %w", store.ErrIdempotencyInProgress)
+			return answer, "", fmt.Errorf("reserve idempotency key: %w", store.ErrIdempotencyInProgress)
 		}
 		answer, err = answerFromLog(ctx, k, rrn, fromLog)
-		return answer, true, err
+		return answer, "", err
 	}
-	reclaimed, err := k.port.Reclaim(ctx, k.key, k.route, k.requestHash, staleAfter)
+	token, err = k.port.Reclaim(ctx, k.key, k.route, k.requestHash, staleAfter)
 	switch {
 	case err != nil:
-		return answer, true, fmt.Errorf("reclaim idempotency key: %w", err)
-	case !reclaimed: // another retry took it over first
-		return answer, true, fmt.Errorf("reserve idempotency key: %w", store.ErrIdempotencyInProgress)
+		return answer, "", fmt.Errorf("reclaim idempotency key: %w", err)
+	case token == "": // another retry took it over first
+		return answer, "", fmt.Errorf("reserve idempotency key: %w", store.ErrIdempotencyInProgress)
 	}
-	return answer, false, nil
+	return answer, token, nil
 }
 
 // failed releases the key when nothing was sent; otherwise it answers from the RRN sent, if any.
-func failed[T any](ctx context.Context, k idemKey, sentRRN string, fromLog Recover[T], err error) (T, error) {
+// A holder whose key was reclaimed releases nothing: the key belongs to the retry now.
+func failed[T any](ctx context.Context, k idemKey, held *reservation, fromLog Recover[T], err error) (T, error) {
 	var zero T
+	sentRRN := held.rrn
+	if errors.Is(err, store.ErrReservationLost) {
+		return zero, err
+	}
 	if !errors.Is(err, ErrAfterSend) {
-		if releaseErr := k.port.Release(ctx, k.key, k.route); releaseErr != nil {
+		if releaseErr := k.port.Release(ctx, k.key, k.route, held.token); releaseErr != nil {
 			return zero, errors.Join(err, fmt.Errorf("release idempotency key: %w", releaseErr))
 		}
 		return zero, err

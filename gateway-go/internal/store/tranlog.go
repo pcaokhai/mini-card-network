@@ -423,22 +423,26 @@ func NewIdempotencyRepository(pool *Pool) *IdempotencyRepository {
 }
 
 // Reserve claims (key, route) for the request hashed requestHash, atomically: exactly one of
-// several concurrent callers gets (nil, nil) and may go on to send. A later caller gets the stored
-// response to replay, ErrIdempotencyInProgress while the first hasn't finished, or
-// ErrIdempotencyKeyMismatch for a different request. A key older than 24 h is claimed afresh.
-func (r *IdempotencyRepository) Reserve(ctx context.Context, key, route, requestHash string) (*StoredResponse, error) {
-	tag, err := r.pool.Exec(ctx,
-		`INSERT INTO idempotency_record (key, route, request_hash, status, body, created_at)
-		 VALUES ($1, $2, $3, $4, 'null', now())
+// several concurrent callers gets (nil, token, nil) and may go on to send, fencing everything it
+// does with the key by token. A later caller gets the stored response to replay, an
+// *InProgressError while the first hasn't finished, or ErrIdempotencyKeyMismatch for a different
+// request. A key older than 24 h is claimed afresh.
+func (r *IdempotencyRepository) Reserve(ctx context.Context, key, route, requestHash string) (*StoredResponse, string, error) {
+	var token string
+	err := r.pool.QueryRow(ctx,
+		`INSERT INTO idempotency_record (key, route, request_hash, status, body, created_at, reservation_token)
+		 VALUES ($1, $2, $3, $4, 'null', now(), gen_random_uuid())
 		 ON CONFLICT (key, route) DO UPDATE
-		   SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status, body = EXCLUDED.body, created_at = EXCLUDED.created_at, rrn = NULL
-		   WHERE idempotency_record.created_at < now() - interval '`+idempotencyTTL+`'`,
-		key, route, requestHash, pendingStatus)
-	if err != nil {
-		return nil, err
+		   SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status, body = EXCLUDED.body, created_at = EXCLUDED.created_at,
+		       rrn = NULL, reservation_token = EXCLUDED.reservation_token
+		   WHERE idempotency_record.created_at < now() - interval '`+idempotencyTTL+`'
+		 RETURNING reservation_token::text`,
+		key, route, requestHash, pendingStatus).Scan(&token)
+	if err == nil {
+		return nil, token, nil
 	}
-	if tag.RowsAffected() == 1 {
-		return nil, nil
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", err
 	}
 	var storedHash string
 	var resp StoredResponse
@@ -448,16 +452,16 @@ func (r *IdempotencyRepository) Reserve(ctx context.Context, key, route, request
 	).Scan(&storedHash, &resp.Status, &resp.Body, &pending.RRN, &pending.ReservedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return nil, ErrIdempotencyInProgress // released between the two statements
+		return nil, "", ErrIdempotencyInProgress // released between the two statements
 	case err != nil:
-		return nil, err
+		return nil, "", err
 	case storedHash != requestHash:
-		return nil, ErrIdempotencyKeyMismatch
+		return nil, "", ErrIdempotencyKeyMismatch
 	case resp.Status == pendingStatus:
 		pending.RRN = strings.TrimSpace(pending.RRN)
-		return nil, &pending
+		return nil, "", &pending
 	}
-	return &resp, nil
+	return &resp, "", nil
 }
 
 // Store records the response returned for (key, route) so a replay can return it unchanged.
@@ -469,18 +473,32 @@ func (r *IdempotencyRepository) Store(ctx context.Context, key, route, requestHa
 	return err
 }
 
-// AttachRRN records the RRN a reserved key's request is about to send, before it is sent.
-func (r *IdempotencyRepository) AttachRRN(ctx context.Context, key, route, rrn string) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE idempotency_record SET rrn = $3 WHERE key = $1 AND route = $2 AND status = $4`, key, route, rrn, pendingStatus)
-	return err
+// ErrReservationLost means a reservation's token no longer holds its key: another request
+// reclaimed it while this one was slow. The holder must abort without sending or releasing.
+var ErrReservationLost = errors.New("idempotency reservation was reclaimed by another request")
+
+// AttachRRN records the RRN a reserved key's request is about to send, before it is sent. It is
+// ErrReservationLost unless token still holds the key, so a holder that lost its key never sends.
+func (r *IdempotencyRepository) AttachRRN(ctx context.Context, key, route, token, rrn string) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE idempotency_record SET rrn = $3
+		 WHERE key = $1 AND route = $2 AND status = $4 AND reservation_token::text = $5`, key, route, rrn, pendingStatus, token)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrReservationLost
+	}
+	return nil
 }
 
 // Release frees a reservation whose request failed before anything was sent, so the key can be
-// retried. A stored response is never released.
-func (r *IdempotencyRepository) Release(ctx context.Context, key, route string) error {
+// retried. Only token's own reservation is freed: a stored response, or a reservation another
+// request reclaimed, is left alone.
+func (r *IdempotencyRepository) Release(ctx context.Context, key, route, token string) error {
 	_, err := r.pool.Exec(ctx,
-		`DELETE FROM idempotency_record WHERE key = $1 AND route = $2 AND status = $3`, key, route, pendingStatus)
+		`DELETE FROM idempotency_record WHERE key = $1 AND route = $2 AND status = $3 AND reservation_token::text = $4`,
+		key, route, pendingStatus, token)
 	return err
 }
 
@@ -548,18 +566,20 @@ func (r *TranLogRepository) ReleaseCompletion(ctx context.Context, preAuthRRN, c
 }
 
 // Reclaim takes over a reservation of (key, route) for the same request that has been pending
-// longer than staleAfter without recording an RRN. AttachRRN always runs before the send, so such
-// a key sent nothing: its request failed or crashed before sending, and may be retried. It
-// reports whether the key is now held by the caller; reclaiming refreshes its age, so of several
-// concurrent retries exactly one wins.
-func (r *IdempotencyRepository) Reclaim(ctx context.Context, key, route, requestHash string, staleAfter time.Duration) (bool, error) {
-	tag, err := r.pool.Exec(ctx,
-		`UPDATE idempotency_record SET created_at = now()
+// longer than staleAfter without recording an RRN, returning the new token ("" when not
+// reclaimed). AttachRRN always runs before the send, so such a key sent nothing yet; its holder,
+// if only slow, now holds a stale token and can neither send nor release. Reclaiming refreshes
+// the reservation's age, so of several concurrent retries exactly one wins.
+func (r *IdempotencyRepository) Reclaim(ctx context.Context, key, route, requestHash string, staleAfter time.Duration) (string, error) {
+	var token string
+	err := r.pool.QueryRow(ctx,
+		`UPDATE idempotency_record SET created_at = now(), reservation_token = gen_random_uuid()
 		 WHERE key = $1 AND route = $2 AND request_hash = $3 AND status = $4 AND rrn IS NULL
-		   AND created_at < now() - make_interval(secs => $5)`,
-		key, route, requestHash, pendingStatus, staleAfter.Seconds())
-	if err != nil {
-		return false, err
+		   AND created_at < now() - make_interval(secs => $5)
+		 RETURNING reservation_token::text`,
+		key, route, requestHash, pendingStatus, staleAfter.Seconds()).Scan(&token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
 	}
-	return tag.RowsAffected() == 1, nil
+	return token, err
 }

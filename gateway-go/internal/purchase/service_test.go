@@ -134,57 +134,85 @@ const stdMACHex = "0102030405060708"
 
 func stdHSM() *fakeHSM { return &fakeHSM{macToReturn: []byte{1, 2, 3, 4, 5, 6, 7, 8}} }
 
-// fakeIdempotency mirrors store.IdempotencyRepository's reserve/store/release contract.
+// fakeIdempotency mirrors store.IdempotencyRepository's reserve/store/release contract,
+// including its reservation tokens.
 type fakeIdempotency struct {
-	stored   map[string]store.StoredResponse
-	storeCtx context.Context // the context the last Store ran on
-	hashes   map[string]string
-	pending  map[string]bool
-	released []string
-	rrns     map[string]string    // AttachRRN, by key+route
-	reserved map[string]time.Time // when each pending key was reserved
+	stored    map[string]store.StoredResponse
+	storeCtx  context.Context // the context the last Store ran on
+	hashes    map[string]string
+	pending   map[string]bool
+	released  []string
+	rrns      map[string]string    // AttachRRN, by key+route
+	reserved  map[string]time.Time // when each pending key was reserved
+	tokens    map[string]string    // the token holding each pending key
+	issued    int
+	attachErr error
+	// reclaimOnAttach makes another request reclaim the key just before AttachRRN, as when the
+	// holder was slow, not dead.
+	reclaimOnAttach bool
+}
+
+func (f *fakeIdempotency) init() {
+	if f.hashes == nil {
+		f.stored, f.hashes, f.pending = map[string]store.StoredResponse{}, map[string]string{}, map[string]bool{}
+		f.rrns, f.reserved, f.tokens = map[string]string{}, map[string]time.Time{}, map[string]string{}
+	}
+}
+
+func (f *fakeIdempotency) newToken(k string) string {
+	f.issued++
+	f.tokens[k] = fmt.Sprintf("token-%d", f.issued)
+	return f.tokens[k]
 }
 
 // pendAt makes key a reservation made at reservedAt that sent rrn, as a crashed request leaves it.
 func (f *fakeIdempotency) pendAt(key, route, hash, rrn string, reservedAt time.Time) {
-	_, _ = f.Reserve(context.Background(), key, route, hash)
+	_, _, _ = f.Reserve(context.Background(), key, route, hash)
 	k := key + route
 	f.rrns[k], f.reserved[k] = rrn, reservedAt
 }
 
-func (f *fakeIdempotency) Reclaim(_ context.Context, key, route, hash string, staleAfter time.Duration) (bool, error) {
+func (f *fakeIdempotency) Reclaim(_ context.Context, key, route, hash string, staleAfter time.Duration) (string, error) {
 	k := key + route
 	if !f.pending[k] || f.hashes[k] != hash || f.rrns[k] != "" || time.Since(f.reserved[k]) < staleAfter {
-		return false, nil
+		return "", nil
 	}
 	f.reserved[k] = time.Now()
-	return true, nil
+	return f.newToken(k), nil
 }
 
-func (f *fakeIdempotency) AttachRRN(_ context.Context, key, route, rrn string) error {
-	f.rrns[key+route] = rrn
+func (f *fakeIdempotency) AttachRRN(_ context.Context, key, route, token, rrn string) error {
+	if f.attachErr != nil {
+		return f.attachErr
+	}
+	k := key + route
+	if f.reclaimOnAttach {
+		f.newToken(k)
+	}
+	if f.tokens[k] != token {
+		return store.ErrReservationLost
+	}
+	f.rrns[k] = rrn
 	return nil
 }
 
-func (f *fakeIdempotency) Reserve(_ context.Context, key, route, hash string) (*store.StoredResponse, error) {
-	if f.hashes == nil {
-		f.stored, f.hashes, f.pending = map[string]store.StoredResponse{}, map[string]string{}, map[string]bool{}
-		f.rrns, f.reserved = map[string]string{}, map[string]time.Time{}
-	}
+func (f *fakeIdempotency) Reserve(_ context.Context, key, route, hash string) (*store.StoredResponse, string, error) {
+	f.init()
 	k := key + route
 	if h, ok := f.hashes[k]; ok {
 		switch {
 		case h != hash:
-			return nil, store.ErrIdempotencyKeyMismatch
+			return nil, "", store.ErrIdempotencyKeyMismatch
 		case f.pending[k]:
-			return nil, &store.InProgressError{RRN: f.rrns[k], ReservedAt: f.reserved[k]}
+			return nil, "", &store.InProgressError{RRN: f.rrns[k], ReservedAt: f.reserved[k]}
 		}
 		stored := f.stored[k]
-		return &stored, nil
+		return &stored, "", nil
 	}
 	f.hashes[k], f.pending[k], f.reserved[k] = hash, true, time.Now()
-	return nil, nil
+	return nil, f.newToken(k), nil
 }
+
 func (f *fakeIdempotency) Store(ctx context.Context, key, route, hash string, status int, body []byte) error {
 	f.storeCtx = ctx
 	if ctx.Err() != nil {
@@ -196,9 +224,9 @@ func (f *fakeIdempotency) Store(ctx context.Context, key, route, hash string, st
 	return nil
 }
 
-func (f *fakeIdempotency) Release(_ context.Context, key, route string) error {
+func (f *fakeIdempotency) Release(_ context.Context, key, route, token string) error {
 	k := key + route
-	if f.pending[k] {
+	if f.pending[k] && f.tokens[k] == token {
 		delete(f.pending, k)
 		delete(f.hashes, k)
 		f.released = append(f.released, key)
@@ -795,4 +823,17 @@ func TestCreatePurchase_aPreSendFailureLeavesNoSentRow__N2(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, mux.lastFields, "nothing was sent")
 	require.NotEqual(t, statusSent, tranLog.rows[0].Status, "a SENT row would be swept into a 0420 for a request that never left")
+}
+
+func TestCreatePurchase_aHolderWhoseKeyWasReclaimedNeverSends__S1(t *testing.T) {
+	idem := &fakeIdempotency{reclaimOnAttach: true}
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 64: stdMACHex}}
+	svc := newIdemTestService(mux, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{})
+
+	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-slow")
+
+	require.ErrorIs(t, err, store.ErrReservationLost)
+	require.Nil(t, mux.lastFields, "a second 0200 under one key would be a double charge")
+	require.Empty(t, idem.released, "the new holder's reservation is left alone")
+	require.True(t, idem.pending["key-slow"+purchaseRoute])
 }
