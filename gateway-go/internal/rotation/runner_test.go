@@ -25,6 +25,7 @@ type fakeMux struct {
 	sendErr    error
 	errs       []error // per attempt, before sendErr
 	rc         string
+	rcs        []string // per answered attempt, before rc
 	sentFields map[int]string
 	de48s      []string
 }
@@ -45,6 +46,9 @@ func (f *fakeMux) Send(_ context.Context, _ string, fields map[int]string) (map[
 	}
 	f.confirmed = true
 	rc := f.rc
+	if len(f.rcs) > 0 {
+		rc, f.rcs = f.rcs[0], f.rcs[1:]
+	}
 	if rc == "" {
 		rc = "00"
 	}
@@ -77,7 +81,7 @@ func TestRunner_run_marksFailedWhenPartnerConfirmErrors__MCN_504_AC1(t *testing.
 	pool := newTestPool(t)
 	repo := NewRepository(pool)
 	keyStore := store.NewKeyStoreRepository(pool)
-	mux := &fakeMux{rc: "96"}
+	mux := &fakeMux{rc: rcDeclined}
 	runner := NewRunner(repo, keyStore, fakeHSM{}, mux, []byte("zmk-test-key-32-bytes-----------"))
 
 	row, err := runner.Run(context.Background(), "ZAK", "gw-link-01")

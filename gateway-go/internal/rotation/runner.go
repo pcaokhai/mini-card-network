@@ -60,6 +60,10 @@ type Runner struct {
 // Option configures optional Runner behaviour.
 type Option func(*Runner)
 
+// rcOutcomeUnknown is the 0810 RC ("system malfunction") the issuer answers for any exception,
+// even one after the key's activation committed; only another non-"00" RC is a decline.
+const rcOutcomeUnknown = "96"
+
 // defaultSendAttempts is how often an unanswered 0800/161 is sent before the outcome is unknown.
 const defaultSendAttempts = 3
 
@@ -241,7 +245,9 @@ func (r *Runner) runGenerate(ctx context.Context, id int64, keyType, ownerRef st
 // parsing byte-for-byte: prefix + ":" + lowercase hex of the cryptogram, no DE 53.
 //
 // A send with no 0810 is repeated up to sendAttempts times with the same cryptogram, so the
-// issuer never sees two different keys for one rotation (review S2).
+// issuer never sees two different keys for one rotation (review S2). An 0810 with RC 96 is
+// treated the same way: the issuer answers 96 for any exception, including one after it committed
+// the key's activation (SEC-G23), so 96 proves nothing and must never retire the key.
 func (r *Runner) runSend0800161(ctx context.Context, id int64, keyType string, underZMK []byte) (map[int]string, error) {
 	de48 := keyType + ":" + hex.EncodeToString(underZMK)
 	var lastErr error
@@ -256,6 +262,10 @@ func (r *Runner) runSend0800161(ctx context.Context, id int64, keyType string, u
 		cancel()
 		if err != nil {
 			lastErr = fmt.Errorf("send 0800 (attempt %d): %w", attempt+1, err)
+			continue
+		}
+		if resp[39] == rcOutcomeUnknown {
+			lastErr = fmt.Errorf("0810 RC %s (attempt %d): the issuer may have activated the key", rcOutcomeUnknown, attempt+1)
 			continue
 		}
 		if err := r.completeStep(ctx, id, StepSend0800161); err != nil {
