@@ -22,6 +22,9 @@ type fakeLinkStore struct {
 	mu       sync.Mutex
 	statuses []string
 	events   []string
+	codes    []string
+	echoes   int
+	nextID   int64
 }
 
 func (f *fakeLinkStore) SetStatus(_ context.Context, _ string, status string) error {
@@ -30,13 +33,38 @@ func (f *fakeLinkStore) SetStatus(_ context.Context, _ string, status string) er
 	f.statuses = append(f.statuses, status)
 	return nil
 }
-func (f *fakeLinkStore) RecordEvent(_ context.Context, _, easyText, _ string) error {
+func (f *fakeLinkStore) AppendEvent(_ context.Context, e store.NetworkEvent) (store.NetworkEvent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.events = append(f.events, easyText)
+	f.events = append(f.events, e.EasyText)
+	f.codes = append(f.codes, e.Code)
+	f.nextID++
+	e.ID, e.OccurredAt = f.nextID, time.Now()
+	return e, nil
+}
+
+func (f *fakeLinkStore) RecordEcho(context.Context, string, int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.echoes++
 	return nil
 }
-func (f *fakeLinkStore) RecordEcho(context.Context, string, int) error { return nil }
+
+func (f *fakeLinkStore) Get(_ context.Context, endpoint string) (store.Link, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	status := ""
+	if len(f.statuses) > 0 {
+		status = f.statuses[len(f.statuses)-1]
+	}
+	return store.Link{Endpoint: endpoint, Status: status}, nil
+}
+
+func (f *fakeLinkStore) recorded() (codes []string, echoes int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.codes...), f.echoes
+}
 
 func (f *fakeLinkStore) lastStatus() string {
 	f.mu.Lock()
@@ -61,6 +89,12 @@ func (f *fakeLinkStore) hasStatus(status string) bool {
 // fakeIssuer answers every 0800 with 0810 RC 00, framed the same way the real issuer will be.
 func fakeIssuer(t *testing.T) (addr string, closeFn func()) {
 	t.Helper()
+	return fakeIssuerSilentOn(t, "")
+}
+
+// fakeIssuerSilentOn is fakeIssuer, except it never answers a 0800 whose DE 70 is silentDE70.
+func fakeIssuerSilentOn(t *testing.T, silentDE70 string) (addr string, closeFn func()) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	go func() {
@@ -79,6 +113,9 @@ func fakeIssuer(t *testing.T) (addr string, closeFn func()) {
 					_, fields, err := iso8583.Unpack(string(payload))
 					if err != nil {
 						return
+					}
+					if silentDE70 != "" && fields[70] == silentDE70 {
+						continue
 					}
 					fields[39] = "00"
 					packed, err := iso8583.Pack("0810", fields)
@@ -345,4 +382,111 @@ func TestSupervisor_reconnectsWhenTheConnectionDiesDuringSignOn__MCN_202(t *test
 	require.Eventually(t, func() bool { return store.lastStatus() == signedOn }, 2*time.Second, 10*time.Millisecond)
 	cancel()
 	require.NoError(t, <-done)
+}
+
+func runSignedOn(t *testing.T, addr string, cfg Config) (*Supervisor, *fakeLinkStore, *fakeHub) {
+	t.Helper()
+	cfg.Addr = addr
+	if cfg.EchoInterval == 0 {
+		cfg.EchoInterval = time.Hour
+	}
+	cfg.EchoFailureLimit = 3
+	links := &fakeLinkStore{}
+	sup := NewSupervisor(cfg, links)
+	hub := &fakeHub{}
+	sup.SetHub(hub)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = sup.Run(ctx) }()
+	require.Eventually(t, func() bool { return links.lastStatus() == signedOn }, time.Second, 10*time.Millisecond)
+	return sup, links, hub
+}
+
+func (h *fakeHub) recorded() ([]store.Link, []store.NetworkEvent) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]store.Link(nil), h.statuses...), append([]store.NetworkEvent(nil), h.events...)
+}
+
+func TestSupervisor_manualEchoRecordsAndBroadcasts__NET_G1_G2(t *testing.T) {
+	addr, closeFn := fakeIssuer(t)
+	defer closeFn()
+	sup, links, hub := runSignedOn(t, addr, Config{})
+	_, eventsBefore := hub.recorded()
+	statusesBefore, _ := hub.recorded()
+
+	result, err := sup.TriggerEcho(context.Background())
+	require.NoError(t, err)
+	require.True(t, result.OK)
+
+	codes, echoes := links.recorded()
+	require.Equal(t, 1, echoes, "a manual echo moves lastEchoAt")
+	require.Equal(t, "ECHO_OK", codes[len(codes)-1])
+	statuses, events := hub.recorded()
+	require.Len(t, statuses, len(statusesBefore)+1)
+	require.Len(t, events, len(eventsBefore)+1)
+	require.Equal(t, "ECHO_OK", events[len(events)-1].Code)
+	require.NotZero(t, events[len(events)-1].ID, "broadcast carries the stored row")
+}
+
+func TestSupervisor_manualSignOffAndSignOnWriteStatusAndEvents__NET_G2_G3(t *testing.T) {
+	addr, closeFn := fakeIssuer(t)
+	defer closeFn()
+	sup, links, hub := runSignedOn(t, addr, Config{})
+
+	require.NoError(t, sup.TriggerSignOff(context.Background()))
+	require.Equal(t, "CONNECTED", links.lastStatus())
+	last, _ := hub.lastStatus()
+	require.Equal(t, "CONNECTED", last.Status)
+
+	require.NoError(t, sup.TriggerSignOn(context.Background()))
+	require.Equal(t, signedOn, links.lastStatus())
+
+	codes, _ := links.recorded()
+	require.Equal(t, []string{"SIGNED_OFF", "SIGNED_ON"}, codes[len(codes)-2:])
+}
+
+func TestSupervisor_signOffIsBoundedByTheEchoTimeout__NET_G9(t *testing.T) {
+	addr, closeFn := fakeIssuerSilentOn(t, "002")
+	defer closeFn()
+	sup, links, _ := runSignedOn(t, addr, Config{EchoTimeout: 100 * time.Millisecond})
+
+	start := time.Now()
+	require.Error(t, sup.TriggerSignOff(context.Background()))
+	require.Less(t, time.Since(start), time.Second)
+	require.Equal(t, signedOn, links.lastStatus(), "a sign-off the issuer never confirmed changes nothing")
+}
+
+func TestNewSupervisor_capsTheDefaultEchoTimeoutBelowTheHTTPWriteTimeout__NET_G9(t *testing.T) {
+	sup := NewSupervisor(Config{EchoInterval: time.Minute}, &fakeLinkStore{})
+	require.Equal(t, 10*time.Second, sup.cfg.EchoTimeout)
+}
+
+func TestSupervisor_everyRecordedEventCarriesACode__NET_G15(t *testing.T) {
+	addr, closeFn := fakeIssuer(t)
+	defer closeFn()
+	sup, links, _ := runSignedOn(t, addr, Config{})
+	_, _ = sup.TriggerEcho(context.Background())
+	_ = sup.TriggerSignOff(context.Background())
+	_ = sup.TriggerSignOn(context.Background())
+
+	codes, _ := links.recorded()
+	require.NotEmpty(t, codes)
+	for _, c := range codes {
+		require.NotEmpty(t, c)
+	}
+}
+
+func TestSupervisor_reportsLatencyAndInFlight__NET_G16(t *testing.T) {
+	addr, closeFn := fakeIssuer(t)
+	defer closeFn()
+	sup, _, _ := runSignedOn(t, addr, Config{})
+
+	_, err := sup.TriggerEcho(context.Background())
+	require.NoError(t, err)
+
+	p99, inFlight := sup.LinkMetrics()
+	require.NotNil(t, p99)
+	require.GreaterOrEqual(t, *p99, 0)
+	require.Equal(t, 0, inFlight)
 }

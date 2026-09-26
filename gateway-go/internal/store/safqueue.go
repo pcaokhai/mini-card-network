@@ -209,30 +209,41 @@ type SafItemRow struct {
 	LastError   string
 }
 
-// ListItems returns every non-ACKED saf_queue row (PENDING, IN_FLIGHT, DEAD) with its
-// transaction's rrn/amount, plus the DEAD count, backing GET /v1/network/saf.
-func (r *SafRepository) ListItems(ctx context.Context) ([]SafItemRow, int, error) {
+// SafItemsCap bounds GET /v1/network/saf's items (NET-G7); Depth and DeadCount still count
+// every row.
+const SafItemsCap = 200
+
+// SafSnapshot backs GET /v1/network/saf.
+type SafSnapshot struct {
+	Items     []SafItemRow
+	Depth     int // PENDING + IN_FLIGHT: advices still owed
+	DeadCount int
+}
+
+// ListItems returns up to SafItemsCap non-ACKED saf_queue rows (owed advices first, then DEAD)
+// with their transaction's rrn/amount, plus the full depth and DEAD counts.
+func (r *SafRepository) ListItems(ctx context.Context) (SafSnapshot, error) {
+	var snap SafSnapshot
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FILTER (WHERE status IN ('PENDING', 'IN_FLIGHT')), count(*) FILTER (WHERE status = 'DEAD')
+		 FROM saf_queue`).Scan(&snap.Depth, &snap.DeadCount); err != nil {
+		return SafSnapshot{}, err
+	}
 	rows, err := r.pool.Query(ctx,
 		`SELECT s.id, s.mti, t.rrn, t.amount, t.currency, s.attempts, s.status, s.next_retry_at, coalesce(s.last_error, '')
 		 FROM saf_queue s JOIN tran_log t ON t.id = s.tran_id
-		 WHERE s.status IN ('PENDING', 'IN_FLIGHT', 'DEAD') ORDER BY s.id`)
+		 WHERE s.status IN ('PENDING', 'IN_FLIGHT', 'DEAD') ORDER BY s.status = 'DEAD', s.id LIMIT $1`, SafItemsCap)
 	if err != nil {
-		return nil, 0, err
+		return SafSnapshot{}, err
 	}
 	defer rows.Close()
-
-	var items []SafItemRow
-	deadCount := 0
 	for rows.Next() {
 		var row SafItemRow
 		if err := rows.Scan(&row.ID, &row.MTI, &row.RRN, &row.AmountMinor, &row.Currency,
 			&row.Attempts, &row.Status, &row.NextRetryAt, &row.LastError); err != nil {
-			return nil, 0, err
+			return SafSnapshot{}, err
 		}
-		if row.Status == "DEAD" {
-			deadCount++
-		}
-		items = append(items, row)
+		snap.Items = append(snap.Items, row)
 	}
-	return items, deadCount, rows.Err()
+	return snap, rows.Err()
 }

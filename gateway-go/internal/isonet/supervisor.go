@@ -18,8 +18,30 @@ import (
 type LinkStore interface {
 	SetStatus(ctx context.Context, endpoint, status string) error
 	RecordEcho(ctx context.Context, endpoint string, latencyMs int) error
-	RecordEvent(ctx context.Context, severity, easyText, technicalText string) error
+	AppendEvent(ctx context.Context, evt store.NetworkEvent) (store.NetworkEvent, error)
+	Get(ctx context.Context, endpoint string) (store.Link, error)
 }
+
+// Event codes (contracts NetworkEventCode, NET-G15).
+const (
+	codeLinkUp        = "LINK_UP"
+	codeLinkDown      = "LINK_DOWN"
+	codeSignedOn      = "SIGNED_ON"
+	codeSignedOff     = "SIGNED_OFF"
+	codeSignedOnAgain = "SIGNED_ON_AGAIN"
+	codeSignOnFailed  = "SIGN_ON_FAILED"
+	codeEchoOK        = "ECHO_OK"
+	codeEchoFailed    = "ECHO_FAILED"
+
+	statusConnected = "CONNECTED"
+	statusSignedOn  = "SIGNED_ON"
+	severityInfo    = "INFO"
+	severityWarn    = "WARN"
+)
+
+// maxDefaultEchoTimeout keeps a manual trigger (lock wait + round trip) well inside the HTTP
+// server's 35 s WriteTimeout (NET-G9); docs/03 §9 puts network-management timeouts at ~10 s.
+const maxDefaultEchoTimeout = 10 * time.Second
 
 // Hub is the broadcast port; internal/ws.Hub satisfies it.
 type Hub interface {
@@ -27,7 +49,7 @@ type Hub interface {
 	BroadcastNetworkEvent(evt store.NetworkEvent)
 }
 
-// Config configures one Supervisor. Zero EchoTimeout means EchoInterval is used as the timeout.
+// Config configures one Supervisor. Zero EchoTimeout means EchoInterval, capped at 10 s.
 type Config struct {
 	Addr             string
 	EchoInterval     time.Duration
@@ -73,13 +95,18 @@ type Supervisor struct {
 	// signOnAgain asks the connection loop to sign on again: the issuer answered 91 because it
 	// holds the acquirer signed off (another session's sign-off does that), which echoes can't see.
 	signOnAgain chan struct{}
+
+	latencies latencyWindow
 }
 
 // NewSupervisor builds a Supervisor that reports link state through store.
 func NewSupervisor(cfg Config, store LinkStore) *Supervisor {
 	signOnAgain := make(chan struct{}, 1)
 	if cfg.EchoTimeout == 0 {
-		cfg.EchoTimeout = cfg.EchoInterval
+		cfg.EchoTimeout = min(cfg.EchoInterval, maxDefaultEchoTimeout)
+		if cfg.EchoTimeout <= 0 {
+			cfg.EchoTimeout = maxDefaultEchoTimeout
+		}
 	}
 	if cfg.Backoff == (Backoff{}) {
 		cfg.Backoff = Backoff{Base: time.Second, Cap: 30 * time.Second}
@@ -97,44 +124,91 @@ func (s *Supervisor) SetLateResponseHandler(fn func(mti string, fields map[int]s
 	s.onLateResponse = fn
 }
 
-// TriggerEcho sends an out-of-band echo now, using the live connection's Mux.
-// If the link is not currently signed on, it reports OK=false rather than an error.
+// TriggerEcho sends an out-of-band echo now, using the live connection's Mux, then records and
+// broadcasts the outcome like any other link change (NET-G1/G2). If the link is not currently
+// signed on, it reports OK=false rather than an error.
 func (s *Supervisor) TriggerEcho(ctx context.Context) (EchoResult, error) {
+	result := s.sendManualEcho(ctx)
+	if !result.OK {
+		s.recordEvent(ctx, codeEchoFailed, severityWarn, "Echo to issuer failed", "manual 0800 DE70=301 got no RC 00")
+		return result, nil
+	}
+	_ = s.store.RecordEcho(ctx, endpointName, *result.LatencyMs)
+	s.broadcastLink(ctx)
+	s.recordEvent(ctx, codeEchoOK, severityInfo, "Echo to issuer answered", fmt.Sprintf("manual 0800 DE70=301 → RC 00 in %d ms", *result.LatencyMs))
+	return result, nil
+}
+
+func (s *Supervisor) sendManualEcho(ctx context.Context) EchoResult {
 	s.triggerMu.Lock()
 	defer s.triggerMu.Unlock()
 	if s.mux == nil {
-		return EchoResult{OK: false}, nil
+		return EchoResult{OK: false}
 	}
 	start := time.Now()
 	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.EchoTimeout)
 	defer cancel()
 	fields, err := s.mux.Send(sendCtx, "0800", map[int]string{7: nowDE7(), 11: s.mux.NextSTAN(), 70: "301"})
 	if err != nil {
-		return EchoResult{OK: false}, nil
+		return EchoResult{OK: false}
 	}
+	elapsed := time.Since(start)
+	s.latencies.add(elapsed)
 	rc := fields[39]
-	latencyMs := int(time.Since(start).Milliseconds())
-	return EchoResult{OK: rc == "00", LatencyMs: &latencyMs, ResponseCode: &rc}, nil
+	latencyMs := int(elapsed.Milliseconds())
+	return EchoResult{OK: rc == "00", LatencyMs: &latencyMs, ResponseCode: &rc}
 }
 
-// TriggerSignOn sends an out-of-band sign-on now, using the live connection's Mux.
+// TriggerSignOn sends an out-of-band sign-on now, using the live connection's Mux, and marks the
+// link SIGNED_ON (NET-G3).
 func (s *Supervisor) TriggerSignOn(ctx context.Context) error {
 	s.triggerMu.Lock()
-	defer s.triggerMu.Unlock()
 	if s.mux == nil {
+		s.triggerMu.Unlock()
 		return ErrNotSignedOn
 	}
-	return s.signOn(ctx)
+	err := s.signOn(ctx)
+	s.triggerMu.Unlock()
+	if err != nil {
+		s.recordEvent(ctx, codeSignOnFailed, severityWarn, "Sign-on to issuer failed", "manual 0800 DE70=001: "+err.Error())
+		return err
+	}
+	s.setStatus(ctx, statusSignedOn)
+	s.recordEvent(ctx, codeSignedOn, severityInfo, "Signed on to issuer", "manual 0800 DE70=001 → RC 00")
+	return nil
 }
 
-// TriggerSignOff sends an out-of-band sign-off now, using the live connection's Mux.
+// TriggerSignOff sends an out-of-band sign-off now, bounded by EchoTimeout (NET-G9). The
+// connection stays up, so the link goes back to CONNECTED: the enum has no SIGNED_OFF (NET-G3).
 func (s *Supervisor) TriggerSignOff(ctx context.Context) error {
 	s.triggerMu.Lock()
-	defer s.triggerMu.Unlock()
 	if s.mux == nil {
+		s.triggerMu.Unlock()
 		return ErrNotSignedOn
 	}
-	return s.signOff(ctx)
+	sendCtx, cancel := context.WithTimeout(ctx, s.cfg.EchoTimeout)
+	err := s.signOff(sendCtx)
+	cancel()
+	s.triggerMu.Unlock()
+	if err != nil {
+		return err
+	}
+	s.setStatus(ctx, statusConnected)
+	s.recordEvent(ctx, codeSignedOff, severityInfo, "Signed off from issuer", "manual 0800 DE70=002")
+	return nil
+}
+
+// LinkMetrics reports the link's live p99 round-trip latency over recent echoes and requests,
+// and the requests currently awaiting a response (NET-G16). Computed live rather than stored:
+// inFlight changes per request, and the row would always be stale.
+func (s *Supervisor) LinkMetrics() (p99LatencyMs *int, inFlight int) {
+	s.triggerMu.Lock()
+	mux := s.mux
+	s.triggerMu.Unlock()
+	if mux != nil {
+		inFlight = mux.Pending()
+	}
+	return s.latencies.p99Ms(), inFlight
 }
 
 // IsSignedOn reports whether a connection is currently live. Callers outside the supervision
@@ -173,7 +247,11 @@ func (s *Supervisor) Send(ctx context.Context, mti string, fields map[int]string
 	if mux == nil {
 		return nil, ErrNotSignedOn
 	}
+	start := time.Now()
 	resp, err := mux.Send(ctx, mti, fields)
+	if err == nil {
+		s.latencies.add(time.Since(start))
+	}
 	if err == nil && resp[39] == rcNotSignedOn && mti[:2] != "08" {
 		select {
 		case s.signOnAgain <- struct{}{}:
@@ -186,20 +264,32 @@ func (s *Supervisor) Send(ctx context.Context, mti string, fields map[int]string
 // rcNotSignedOn is the issuer's answer to a message on a link it holds signed off.
 const rcNotSignedOn = "91"
 
-// setStatus updates the store and, if a Hub is wired, broadcasts the new link state.
+// setStatus updates the store and, if a Hub is wired, broadcasts the stored link.
 func (s *Supervisor) setStatus(ctx context.Context, status string) {
 	_ = s.store.SetStatus(ctx, endpointName, status)
-	if s.hub != nil {
-		s.hub.BroadcastLinkStatus(store.Link{Endpoint: endpointName, Status: status})
-	}
+	s.broadcastLink(ctx)
 }
 
-// recordEvent inserts a network_event row and, if a Hub is wired, broadcasts it.
-func (s *Supervisor) recordEvent(ctx context.Context, severity, easyText, technicalText string) {
-	_ = s.store.RecordEvent(ctx, severity, easyText, technicalText)
-	if s.hub != nil {
-		s.hub.BroadcastNetworkEvent(store.NetworkEvent{Severity: severity, EasyText: easyText, TechnicalText: technicalText})
+// broadcastLink sends link.status with the link as GET /v1/network/links serves it (NET-G4).
+func (s *Supervisor) broadcastLink(ctx context.Context) {
+	if s.hub == nil {
+		return
 	}
+	link, err := s.store.Get(ctx, endpointName)
+	if err != nil {
+		return // the next change broadcasts again; a half-filled Link would mislead consumers
+	}
+	link.P99LatencyMs, link.InFlight = s.LinkMetrics()
+	s.hub.BroadcastLinkStatus(link)
+}
+
+// recordEvent inserts a network_event row and, if a Hub is wired, broadcasts the stored row.
+func (s *Supervisor) recordEvent(ctx context.Context, code, severity, easyText, technicalText string) {
+	evt, err := s.store.AppendEvent(ctx, store.NetworkEvent{Code: code, Severity: severity, EasyText: easyText, TechnicalText: technicalText})
+	if err != nil || s.hub == nil {
+		return
+	}
+	s.hub.BroadcastNetworkEvent(evt)
 }
 
 // Run supervises the link until ctx is cancelled.
@@ -228,7 +318,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		_ = err // connection lifecycle errors are expected (reconnect loop); logging is the caller's job via obs
 		obs.LinkUp.WithLabelValues(endpointName).Set(0)
 		s.setStatus(ctx, "DOWN")
-		s.recordEvent(ctx, "WARN", "Link to issuer is down", "reconnecting with backoff")
+		s.recordEvent(ctx, codeLinkDown, severityWarn, "Link to issuer is down", "reconnecting with backoff")
 		delay := s.cfg.Backoff.Delay(attempt)
 		attempt++
 		select {
@@ -259,7 +349,7 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	s.setStatus(ctx, "CONNECTED")
+	s.setStatus(ctx, statusConnected)
 
 	mux := s.newMux(conn)
 	mux.OnLateResponse(func(mti string, fields map[int]string) {
@@ -294,8 +384,8 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		return err
 	}
 	obs.LinkUp.WithLabelValues(endpointName).Set(1)
-	s.setStatus(ctx, "SIGNED_ON")
-	s.recordEvent(ctx, "INFO", "Link to issuer is up", "signed on")
+	s.setStatus(ctx, statusSignedOn)
+	s.recordEvent(ctx, codeLinkUp, severityInfo, "Link to issuer is up", "signed on")
 
 	failures := 0
 	ticker := time.NewTicker(s.cfg.EchoInterval)
@@ -343,10 +433,11 @@ func (s *Supervisor) resignOn(ctx, connCtx context.Context) {
 	err := s.signOn(connCtx)
 	s.triggerMu.Unlock()
 	if err != nil {
-		s.recordEvent(ctx, "WARN", "Issuer still holds the link signed off", "0800 sign-on after RC 91 failed: "+err.Error())
+		s.recordEvent(ctx, codeSignOnFailed, severityWarn, "Issuer still holds the link signed off", "0800 sign-on after RC 91 failed: "+err.Error())
 		return
 	}
-	s.recordEvent(ctx, "WARN", "Signed on again: the issuer had the link signed off", "RC 91 on a request → 0800 sign-on")
+	s.setStatus(ctx, statusSignedOn)
+	s.recordEvent(ctx, codeSignedOnAgain, severityWarn, "Signed on again: the issuer had the link signed off", "RC 91 on a request → 0800 sign-on")
 }
 
 func (s *Supervisor) signOn(ctx context.Context) error {
@@ -378,7 +469,9 @@ func (s *Supervisor) echo(ctx context.Context) (time.Duration, error) {
 	if fields[39] != "00" {
 		return 0, errRC(fields[39])
 	}
-	return time.Since(start), nil
+	elapsed := time.Since(start)
+	s.latencies.add(elapsed)
+	return elapsed, nil
 }
 
 // nowDE7 formats the current time as DE 7 (MMDDhhmmss UTC, docs/03 §3).

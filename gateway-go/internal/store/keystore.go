@@ -86,6 +86,16 @@ func (r *KeyStoreRepository) Activate(ctx context.Context, id int64) error {
 		`UPDATE key_store SET status = 'ACTIVE', activated_at = now() WHERE id = $1`, id); err != nil {
 		return err
 	}
+	// A PENDING key of the same type left by an unknown-outcome rotation is superseded: the
+	// issuer has just confirmed this one, so the stale key must not linger (review of #121).
+	if _, err := tx.Exec(ctx,
+		`UPDATE key_store SET status = 'RETIRED', retired_at = now()
+		 WHERE status = 'PENDING' AND id <> $1
+		   AND key_type = (SELECT key_type FROM key_store WHERE id = $1)
+		   AND coalesce(owner_ref, '') = (SELECT coalesce(owner_ref, '') FROM key_store WHERE id = $1)`,
+		id); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -111,6 +121,49 @@ func (r *KeyStoreRepository) List(ctx context.Context) ([]KeyRow, error) {
 	return result, rows.Err()
 }
 
+// Get returns the key_store row id.
+func (r *KeyStoreRepository) Get(ctx context.Context, id int64) (KeyRow, error) {
+	var row KeyRow
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
+		 FROM key_store WHERE id = $1`, id,
+	).Scan(&row.ID, &row.KeyType, &row.OwnerRef, &row.KeyUnderLMKHex, &row.KCV,
+		&row.Status, &row.ActivatedAt, &row.RetiredAt, &row.CreatedAt)
+	return row, err
+}
+
+// ListCurrent returns the keys in use: every ACTIVE row plus a PENDING one while its rotation runs.
+// RETIRED rows stay in the table for the dual-key window and the audit trail, but never reach
+// GET /v1/keys/acquirer (SEC-G8).
+func (r *KeyStoreRepository) ListCurrent(ctx context.Context) ([]KeyRow, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
+		 FROM key_store WHERE status IN ('ACTIVE', 'PENDING') ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []KeyRow
+	for rows.Next() {
+		var row KeyRow
+		if err := rows.Scan(&row.ID, &row.KeyType, &row.OwnerRef, &row.KeyUnderLMKHex, &row.KCV,
+			&row.Status, &row.ActivatedAt, &row.RetiredAt, &row.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+// RetirePending retires id if it is still PENDING: a rotation that failed after GENERATE must not
+// leave its never-activated key listed forever (SEC-G8). An ACTIVE or RETIRED row is untouched.
+func (r *KeyStoreRepository) RetirePending(ctx context.Context, id int64) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE key_store SET status = 'RETIRED', retired_at = now() WHERE id = $1 AND status = 'PENDING'`, id)
+	return err
+}
+
 // FindRecentlyRetired returns the most recently RETIRED row for (keyType, ownerRef) if it
 // retired within the last `within` duration, or nil if none qualifies (not an error - "no
 // recently-retired key" is the expected steady state outside a rotation's grace window).
@@ -120,6 +173,7 @@ func (r *KeyStoreRepository) FindRecentlyRetired(ctx context.Context, keyType, o
 		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
 		 FROM key_store
 		 WHERE key_type = $1 AND coalesce(owner_ref, '') = $2 AND status = 'RETIRED'
+		   AND activated_at IS NOT NULL -- a key retired without ever being used is never a fallback
 		   AND retired_at > now() - $3::interval
 		 ORDER BY retired_at DESC LIMIT 1`,
 		keyType, ownerRef, within.String(),
@@ -132,6 +186,60 @@ func (r *KeyStoreRepository) FindRecentlyRetired(ctx context.Context, keyType, o
 		return nil, err
 	}
 	return &row, nil
+}
+
+// FindPending returns the newest PENDING row of (keyType, ownerRef), or nil if there is none.
+func (r *KeyStoreRepository) FindPending(ctx context.Context, keyType, ownerRef string) (*KeyRow, error) {
+	var row KeyRow
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, key_type, coalesce(owner_ref, ''), key_under_lmk, kcv, status, activated_at, retired_at, created_at
+		 FROM key_store WHERE key_type = $1 AND coalesce(owner_ref, '') = $2 AND status = 'PENDING'
+		 ORDER BY id DESC LIMIT 1`,
+		keyType, ownerRef,
+	).Scan(&row.ID, &row.KeyType, &row.OwnerRef, &row.KeyUnderLMKHex, &row.KCV,
+		&row.Status, &row.ActivatedAt, &row.RetiredAt, &row.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// MACFallbackKeys lists the keys a response MAC is retried under after the ACTIVE one fails: a
+// PENDING key first (it only survives a rotation whose 0810 never arrived, and the issuer may
+// already MAC with it, review S2 of #121), then the key retired within the dual-key window
+// (MCN-504-AC2). It satisfies purchase.RetiredKeyFinder and purchase.FallbackKeyFinder.
+type MACFallbackKeys struct{ repo *KeyStoreRepository }
+
+// MACFallback adapts r for the MAC verifier.
+func (r *KeyStoreRepository) MACFallback() MACFallbackKeys { return MACFallbackKeys{repo: r} }
+
+// FallbackKeys returns the PENDING key of (keyType, ownerRef), if any, then the key retired within
+// the window, if any.
+func (f MACFallbackKeys) FallbackKeys(ctx context.Context, keyType, ownerRef string, within time.Duration) ([]KeyRow, error) {
+	var keys []KeyRow
+	pending, err := f.repo.FindPending(ctx, keyType, ownerRef)
+	if err != nil {
+		return nil, err
+	}
+	if pending != nil {
+		keys = append(keys, *pending)
+	}
+	retired, err := f.repo.FindRecentlyRetired(ctx, keyType, ownerRef, within)
+	if err != nil {
+		return nil, err
+	}
+	if retired != nil {
+		keys = append(keys, *retired)
+	}
+	return keys, nil
+}
+
+// FindRecentlyRetired is the single-key form for callers that only know RetiredKeyFinder.
+func (f MACFallbackKeys) FindRecentlyRetired(ctx context.Context, keyType, ownerRef string, within time.Duration) (*KeyRow, error) {
+	return f.repo.FindRecentlyRetired(ctx, keyType, ownerRef, within)
 }
 
 func nullableOwnerRef(ownerRef string) any {

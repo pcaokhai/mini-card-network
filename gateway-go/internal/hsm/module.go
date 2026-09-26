@@ -17,3 +17,9 @@ type Module interface {
 	// PIN block exists only inside this call's body and is never returned (MCN-502-AC1).
 	TranslatePIN(pinBlockUnderTPK []byte, tpk, zpk []byte) ([]byte, error)
 }
+
+// ZAKSource yields the clear ZAK to MAC under. It is read per message, so a rotation's new ZAK
+// is used as soon as it is activated (SEC-G10). rotation.ActiveKeys implements it.
+type ZAKSource interface {
+	ActiveZAK() []byte
+}

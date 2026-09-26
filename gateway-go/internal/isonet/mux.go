@@ -48,6 +48,13 @@ func (m *Mux) NextSTAN() string {
 	return fmt.Sprintf("%06d", n)
 }
 
+// Pending is the number of requests awaiting their response on this connection (NET-G16 inFlight).
+func (m *Mux) Pending() int {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	return len(m.pending)
+}
+
 // OnLateResponse registers a callback invoked when a response arrives with no matching pending
 // request — the caller already gave up (docs/03 §5: late-response detection, MCN-203-AC3).
 func (m *Mux) OnLateResponse(fn func(mti string, fields map[int]string)) {

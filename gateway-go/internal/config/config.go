@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,6 +28,13 @@ type Config struct {
 	ChaosFakeIssuerAddr string
 	// IssuerAdminURL is the Issuer Admin API base URL; chaos runs read card balances from it (CHA-G1).
 	IssuerAdminURL string
+	// EchoTimeout bounds each network-management round trip (ECHO_TIMEOUT, default 10s). A manual
+	// trigger can wait one echo plus its own round trip, so it is capped at half the API server's
+	// 35 s WriteTimeout, less margin (NET-G9, review N2).
+	EchoTimeout time.Duration
+	// RotationSendAttempts is how often an unanswered 0800/161 is resent with the same key before
+	// the rotation's outcome is unknown (ROTATION_SEND_ATTEMPTS, 1-10, default 3).
+	RotationSendAttempts int
 	// ChaosRunMaxDuration caps a chaos run's wall-clock time (CHAOS_RUN_MAX_DURATION, default 10m).
 	ChaosRunMaxDuration time.Duration
 	LMKTestValueHex     string
@@ -39,7 +49,16 @@ type Config struct {
 	// where web-next talks to the gateway straight from the browser (docs/09-risk-register.md
 	// R-10 - the real BFF proxy this workaround stands in for doesn't exist yet).
 	CORSAllowedOrigin string
+	// KeyLifetimeDays is the rotation policy per key type (KEY_LIFETIME_DAYS, e.g. "ZPK=30,ZAK=30"),
+	// behind GET /v1/keys/acquirer's lifetimeDays and daysRemaining (SEC-G9).
+	KeyLifetimeDays map[string]int
 }
+
+// defaultKeyLifetimes: working keys rotate monthly, the ZMK yearly (the Security page's canvas).
+const defaultKeyLifetimes = "ZMK=365,ZPK=30,ZAK=30"
+
+// maxKeyLifetimeDays rejects a typo like 3000 → 30000; ten years is beyond any key policy here.
+const maxKeyLifetimeDays = 3650
 
 // Load reads configuration through getenv (os.Getenv in production, a map in tests).
 func Load(getenv func(string) string) (Config, error) {
@@ -60,6 +79,9 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.ChaosRunMaxDuration, err = positiveDuration(getenv, "CHAOS_RUN_MAX_DURATION", "10m"); err != nil {
+		return Config{}, err
+	}
+	if err := loadLinkTimings(getenv, &cfg); err != nil {
 		return Config{}, err
 	}
 
@@ -106,7 +128,11 @@ func loadOptionalKeys(getenv func(string) string, cfg *Config) error {
 		}
 		cfg.SafEncKey = key
 	}
-	var err error
+	lifetimes, err := keyLifetimes(valueOr(getenv("KEY_LIFETIME_DAYS"), defaultKeyLifetimes))
+	if err != nil {
+		return fmt.Errorf("KEY_LIFETIME_DAYS: %w", err)
+	}
+	cfg.KeyLifetimeDays = lifetimes
 	if cfg.InitialZAK, err = optionalAESKeyHex(getenv, "ZAK_HEX"); err != nil {
 		return err
 	}
@@ -132,6 +158,27 @@ func optionalAESKeyHex(getenv func(string) string, name string) ([]byte, error) 
 	}
 }
 
+// maxEchoTimeout keeps two network-management round trips inside the 35 s HTTP WriteTimeout.
+const maxEchoTimeout = 15 * time.Second
+
+// loadLinkTimings reads ECHO_TIMEOUT and ROTATION_SEND_ATTEMPTS.
+func loadLinkTimings(getenv func(string) string, cfg *Config) error {
+	echo, err := positiveDuration(getenv, "ECHO_TIMEOUT", "10s")
+	if err != nil {
+		return err
+	}
+	if echo > maxEchoTimeout {
+		return fmt.Errorf("ECHO_TIMEOUT must be at most %s, got %s", maxEchoTimeout, echo)
+	}
+	cfg.EchoTimeout = echo
+	attempts, err := strconv.Atoi(valueOr(getenv("ROTATION_SEND_ATTEMPTS"), "3"))
+	if err != nil || attempts < 1 || attempts > 10 {
+		return fmt.Errorf("ROTATION_SEND_ATTEMPTS must be an integer from 1 to 10, got %q", getenv("ROTATION_SEND_ATTEMPTS"))
+	}
+	cfg.RotationSendAttempts = attempts
+	return nil
+}
+
 // positiveDuration reads name as a Go duration (fallback when unset) that must be above zero.
 func positiveDuration(getenv func(string) string, name, fallback string) (time.Duration, error) {
 	d, err := time.ParseDuration(valueOr(getenv(name), fallback))
@@ -151,6 +198,29 @@ func httpURL(raw string) (string, error) {
 		return "", fmt.Errorf("want an http(s) URL with a host, got %q", raw)
 	}
 	return raw, nil
+}
+
+// keyLifetimes parses "TYPE=days,..." for the contract's KeyInfo key types.
+func keyLifetimes(raw string) (map[string]int, error) {
+	known := map[string]bool{"ZMK": true, "ZPK": true, "ZAK": true, "TPK": true, "TAK": true, "CVK": true, "PVK": true}
+	out := map[string]int{}
+	for _, pair := range strings.Split(raw, ",") {
+		keyType, daysText, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		days, err := strconv.Atoi(daysText)
+		switch {
+		case !ok || err != nil:
+			return nil, fmt.Errorf("want TYPE=days pairs, got %q", pair)
+		case !known[keyType]:
+			return nil, fmt.Errorf("unknown key type %q", keyType)
+		case days < 1 || days > maxKeyLifetimeDays:
+			return nil, fmt.Errorf("%s: days must be 1-%d, got %d", keyType, maxKeyLifetimeDays, days)
+		}
+		if _, dup := out[keyType]; dup {
+			return nil, fmt.Errorf("%s listed twice", keyType)
+		}
+		out[keyType] = days
+	}
+	return out, nil
 }
 
 func valueOr(v, fallback string) string {
