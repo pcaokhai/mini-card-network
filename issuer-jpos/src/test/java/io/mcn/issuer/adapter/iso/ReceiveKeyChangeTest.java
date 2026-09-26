@@ -180,4 +180,74 @@ class ReceiveKeyChangeTest {
         "RETIRED".equals(status) ? java.time.Instant.now() : null,
         null);
   }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName(
+      "SF2: when activation loses to a concurrent resend of the same key, the advice still answers"
+          + " 00 - the key it carries is ACTIVE")
+  void should_acknowledge_when_activationLostToAConcurrentResendOfTheSameKey() throws Exception {
+    SecurityModule securityModule = mock(SecurityModule.class);
+    KeyStoreRepository keyStoreRepository = mock(KeyStoreRepository.class);
+    AuditLogRepository auditLogRepository = mock(AuditLogRepository.class);
+    byte[] zmk = HexFormat.of().parseHex("00".repeat(16));
+    byte[] cryptogramUnderZmk = HexFormat.of().parseHex("22".repeat(16));
+    byte[] winnerUnderLmk = HexFormat.of().parseHex("cc".repeat(16));
+    when(securityModule.unwrapUnderKey(eq(cryptogramUnderZmk), eq(zmk)))
+        .thenReturn(HexFormat.of().parseHex("11".repeat(16)));
+    when(securityModule.wrapUnderLmk(any())).thenReturn(HexFormat.of().parseHex("ff".repeat(16)));
+    when(securityModule.computeKcv(any())).thenReturn("DDEEFF");
+    when(securityModule.unwrap(winnerUnderLmk))
+        .thenReturn(HexFormat.of().parseHex("11".repeat(16)));
+    // before our activation the old key is ACTIVE; after it fails, the resend's row (same key) is
+    when(keyStoreRepository.findActive("ZAK", "970499"))
+        .thenReturn(java.util.Optional.empty())
+        .thenReturn(java.util.Optional.of(row(9, winnerUnderLmk, "ACTIVE")));
+    when(keyStoreRepository.findRetired("ZAK", "970499")).thenReturn(java.util.List.of());
+    when(keyStoreRepository.insert(any())).thenReturn(10L);
+    org.mockito.Mockito.doThrow(new IllegalStateException("activate key_store failed"))
+        .when(keyStoreRepository)
+        .activate(10L);
+    ReceiveKeyChange receiveKeyChange =
+        new ReceiveKeyChange(securityModule, keyStoreRepository, auditLogRepository, zmk, "970499");
+
+    ISOMsg request = new ISOMsg("0800");
+    request.set(70, "161");
+    request.set(48, "ZAK:" + HexFormat.of().formatHex(cryptogramUnderZmk));
+
+    assertThat(receiveKeyChange.receive(request)).isTrue();
+    verify(auditLogRepository, org.mockito.Mockito.never())
+        .record(any(), eq("key_change.replay_rejected"), any(), any(), any(), any());
+  }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName(
+      "SF2: when activation fails and the ACTIVE key is a different one, it is still a 96")
+  void should_fail_when_activationFailsForAnotherReason() throws Exception {
+    SecurityModule securityModule = mock(SecurityModule.class);
+    KeyStoreRepository keyStoreRepository = mock(KeyStoreRepository.class);
+    byte[] zmk = HexFormat.of().parseHex("00".repeat(16));
+    byte[] cryptogramUnderZmk = HexFormat.of().parseHex("22".repeat(16));
+    byte[] otherUnderLmk = HexFormat.of().parseHex("dd".repeat(16));
+    when(securityModule.unwrapUnderKey(eq(cryptogramUnderZmk), eq(zmk)))
+        .thenReturn(HexFormat.of().parseHex("11".repeat(16)));
+    when(securityModule.wrapUnderLmk(any())).thenReturn(HexFormat.of().parseHex("ff".repeat(16)));
+    when(securityModule.computeKcv(any())).thenReturn("DDEEFF");
+    when(securityModule.unwrap(otherUnderLmk)).thenReturn(HexFormat.of().parseHex("99".repeat(16)));
+    when(keyStoreRepository.findActive("ZAK", "970499"))
+        .thenReturn(java.util.Optional.of(row(9, otherUnderLmk, "ACTIVE")));
+    when(keyStoreRepository.findRetired("ZAK", "970499")).thenReturn(java.util.List.of());
+    when(keyStoreRepository.insert(any())).thenReturn(10L);
+    org.mockito.Mockito.doThrow(new IllegalStateException("activate key_store failed"))
+        .when(keyStoreRepository)
+        .activate(10L);
+    ReceiveKeyChange receiveKeyChange =
+        new ReceiveKeyChange(
+            securityModule, keyStoreRepository, mock(AuditLogRepository.class), zmk, "970499");
+
+    ISOMsg request = new ISOMsg("0800");
+    request.set(70, "161");
+    request.set(48, "ZAK:" + HexFormat.of().formatHex(cryptogramUnderZmk));
+
+    assertThat(receiveKeyChange.receive(request)).isFalse();
+  }
 }

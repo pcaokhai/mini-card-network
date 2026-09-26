@@ -85,7 +85,14 @@ public final class ReceiveKeyChange {
                   null,
                   null,
                   null));
-      keyStoreRepository.activate(id);
+      try {
+        keyStoreRepository.activate(id);
+      } catch (RuntimeException e) {
+        // SF2: a concurrent copy of this advice (the gateway resends an unanswered 0800, #121)
+        // activated the same key first, so this activation hit the one-ACTIVE index (V8). If the
+        // key it carries is now ACTIVE the change took effect: 00, and the winner has audited it.
+        return isAlreadyActive(keyType, clearKey);
+      }
       auditLogRepository.record(
           "issuer",
           "key_change.activated",

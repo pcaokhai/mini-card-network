@@ -45,7 +45,10 @@ public class KeyStoreRepository {
 
   /**
    * Retires any other ACTIVE row sharing {@code (key_type, counterparty)}, then activates {@code
-   * id}.
+   * id}. An ACTIVE row with the same KCV is never retired: that is a concurrent copy of the same
+   * key change (SF2), so this activation hits the one-ACTIVE index (V8) and fails instead of
+   * retiring the very key it carries. A different key colliding on KCV (1 in 2^24) fails safe the
+   * same way - it is declined, never activated over the wrong key - and needs a fresh rotation.
    */
   public void activate(long id) {
     String retirePrevious =
@@ -53,13 +56,15 @@ public class KeyStoreRepository {
         UPDATE key_store SET status = 'RETIRED', retired_at = now()
         WHERE key_type = (SELECT key_type FROM key_store WHERE id = ?)
           AND COALESCE(counterparty, '') = (SELECT COALESCE(counterparty, '') FROM key_store WHERE id = ?)
-          AND status = 'ACTIVE'""";
+          AND status = 'ACTIVE'
+          AND kcv <> (SELECT kcv FROM key_store WHERE id = ?)""";
     String activate = "UPDATE key_store SET status = 'ACTIVE', activated_at = now() WHERE id = ?";
     try (var conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
       try (PreparedStatement retireStmt = conn.prepareStatement(retirePrevious)) {
         retireStmt.setLong(1, id);
         retireStmt.setLong(2, id);
+        retireStmt.setLong(3, id);
         retireStmt.executeUpdate();
       }
       try (PreparedStatement activateStmt = conn.prepareStatement(activate)) {
