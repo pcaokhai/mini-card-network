@@ -52,6 +52,8 @@ type TranLogRow struct {
 	TraceID        string // W3C trace id of the request that created the row
 	// ReversalReasonCode is DE 39 of the 0420 queued for this row, empty when none was.
 	ReversalReasonCode string
+	// CompletedBy is the RRN of the completion that consumed this pre-authorization.
+	CompletedBy string
 }
 
 // Money is an amount in integer minor units and its ISO 4217 numeric currency.
@@ -111,10 +113,50 @@ type TranLogRepository struct{ pool *Pool }
 // NewTranLogRepository builds a TranLogRepository backed by pool.
 func NewTranLogRepository(pool *Pool) *TranLogRepository { return &TranLogRepository{pool: pool} }
 
+// ErrNotCompletable means a completion names a transaction that is not an approved
+// pre-authorization, or one another completion already consumed.
+var ErrNotCompletable = errors.New("only an approved, uncompleted pre-authorization can be completed")
+
 // Insert records a new tran_log row and returns its id.
 func (r *TranLogRepository) Insert(ctx context.Context, row TranLogRow) (int64, error) {
+	return insertTranLog(ctx, r.pool, row)
+}
+
+// InsertCompletion records completion and claims the pre-authorization preAuthRRN for it in one
+// DB transaction, so a pre-auth is completed at most once even under concurrent requests. A
+// pre-auth that isn't APPROVED, or was already completed, is ErrNotCompletable and nothing is
+// recorded.
+func (r *TranLogRepository) InsertCompletion(ctx context.Context, completion TranLogRow, preAuthRRN string) (int64, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	claimed, err := tx.Exec(ctx,
+		`UPDATE tran_log SET completed_by = $2
+		 WHERE rrn = $1 AND tran_type = 'PREAUTH' AND state = 'APPROVED' AND completed_by IS NULL`,
+		preAuthRRN, completion.RRN)
+	if err != nil {
+		return 0, err
+	}
+	if claimed.RowsAffected() == 0 {
+		return 0, fmt.Errorf("complete %s: %w", preAuthRRN, ErrNotCompletable)
+	}
+	id, err := insertTranLog(ctx, tx, completion)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit(ctx)
+}
+
+// rowQuerier is what insertTranLog needs: a pool or a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func insertTranLog(ctx context.Context, q rowQuerier, row TranLogRow) (int64, error) {
 	var id int64
-	err := r.pool.QueryRow(ctx,
+	err := q.QueryRow(ctx,
 		`INSERT INTO tran_log (business_date, client_request_id, tran_type, tid, mid, network_stan, rrn, masked_pan, amount, currency, state, response_code, auth_code,
 		                       processing_code, pos_entry_mode, sent_at, card_token, mti, original_rrn, trace_id)
 		 VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''),
@@ -190,7 +232,7 @@ func (r *TranLogRepository) ListStateHistory(ctx context.Context, id int64) ([]S
 }
 
 const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at, coalesce(t.network_stan, ''), coalesce(t.processing_code, ''), coalesce(t.pos_entry_mode, ''), t.sent_at, coalesce(t.card_token, ''), t.responded_at, coalesce(t.mti, ''),
-	t.approved_amount, t.balance_amount, coalesce(t.balance_currency, ''), coalesce(t.original_rrn, ''), coalesce(t.trace_id, ''), coalesce(t.reversal_reason, '')`
+	t.approved_amount, t.balance_amount, coalesce(t.balance_currency, ''), coalesce(t.original_rrn, ''), coalesce(t.trace_id, ''), coalesce(t.reversal_reason, ''), coalesce(t.completed_by, '')`
 
 // Get reads the tran_log row for the given RRN.
 func (r *TranLogRepository) Get(ctx context.Context, rrn string) (TranLogRow, error) {
@@ -209,7 +251,7 @@ func scanTranLogRow(scanner pgx.Row) (TranLogRow, error) {
 	var balanceCurrency string
 	err := scanner.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
 		&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken, &row.RespondedAt, &row.MTI,
-		&row.ApprovedAmount, &balanceAmount, &balanceCurrency, &row.OriginalRRN, &row.TraceID, &row.ReversalReasonCode)
+		&row.ApprovedAmount, &balanceAmount, &balanceCurrency, &row.OriginalRRN, &row.TraceID, &row.ReversalReasonCode, &row.CompletedBy)
 	if err != nil {
 		return TranLogRow{}, err
 	}
@@ -218,6 +260,7 @@ func scanTranLogRow(scanner pgx.Row) (TranLogRow, error) {
 	}
 	row.RRN = strings.TrimSpace(row.RRN)
 	row.OriginalRRN = strings.TrimSpace(row.OriginalRRN)
+	row.CompletedBy = strings.TrimSpace(row.CompletedBy)
 	return row, nil
 }
 
@@ -348,6 +391,18 @@ type StoredResponse struct {
 	Body   []byte
 }
 
+// InProgressError is ErrIdempotencyInProgress with what the first request recorded: the RRN it
+// sent (empty until it sent) and when it reserved the key.
+type InProgressError struct {
+	RRN        string
+	ReservedAt time.Time
+}
+
+func (e *InProgressError) Error() string { return ErrIdempotencyInProgress.Error() }
+
+// Is makes an InProgressError match ErrIdempotencyInProgress.
+func (e *InProgressError) Is(target error) bool { return target == ErrIdempotencyInProgress }
+
 // Idempotency errors (docs/04 §2).
 var (
 	ErrIdempotencyKeyMismatch = errors.New("idempotency key reused with a different request")
@@ -377,7 +432,7 @@ func (r *IdempotencyRepository) Reserve(ctx context.Context, key, route, request
 		`INSERT INTO idempotency_record (key, route, request_hash, status, body, created_at)
 		 VALUES ($1, $2, $3, $4, 'null', now())
 		 ON CONFLICT (key, route) DO UPDATE
-		   SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status, body = EXCLUDED.body, created_at = EXCLUDED.created_at
+		   SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status, body = EXCLUDED.body, created_at = EXCLUDED.created_at, rrn = NULL
 		   WHERE idempotency_record.created_at < now() - interval '`+idempotencyTTL+`'`,
 		key, route, requestHash, pendingStatus)
 	if err != nil {
@@ -388,9 +443,10 @@ func (r *IdempotencyRepository) Reserve(ctx context.Context, key, route, request
 	}
 	var storedHash string
 	var resp StoredResponse
+	var pending InProgressError
 	err = r.pool.QueryRow(ctx,
-		`SELECT request_hash, status, body FROM idempotency_record WHERE key = $1 AND route = $2`, key, route,
-	).Scan(&storedHash, &resp.Status, &resp.Body)
+		`SELECT request_hash, status, body, coalesce(rrn, ''), created_at FROM idempotency_record WHERE key = $1 AND route = $2`, key, route,
+	).Scan(&storedHash, &resp.Status, &resp.Body, &pending.RRN, &pending.ReservedAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil, ErrIdempotencyInProgress // released between the two statements
@@ -399,7 +455,8 @@ func (r *IdempotencyRepository) Reserve(ctx context.Context, key, route, request
 	case storedHash != requestHash:
 		return nil, ErrIdempotencyKeyMismatch
 	case resp.Status == pendingStatus:
-		return nil, ErrIdempotencyInProgress
+		pending.RRN = strings.TrimSpace(pending.RRN)
+		return nil, &pending
 	}
 	return &resp, nil
 }
@@ -410,6 +467,13 @@ func (r *IdempotencyRepository) Store(ctx context.Context, key, route, requestHa
 		`INSERT INTO idempotency_record (key, route, request_hash, status, body, created_at) VALUES ($1, $2, $3, $4, $5, now())
 		 ON CONFLICT (key, route) DO UPDATE SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status, body = EXCLUDED.body`,
 		key, route, requestHash, status, body)
+	return err
+}
+
+// AttachRRN records the RRN a reserved key's request is about to send, before it is sent.
+func (r *IdempotencyRepository) AttachRRN(ctx context.Context, key, route, rrn string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE idempotency_record SET rrn = $3 WHERE key = $1 AND route = $2 AND status = $4`, key, route, rrn, pendingStatus)
 	return err
 }
 

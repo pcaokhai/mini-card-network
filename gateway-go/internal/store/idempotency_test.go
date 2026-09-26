@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -86,4 +87,20 @@ func TestIdempotencyRepository_concurrentRequestsReserveOnce__POS_G3(t *testing.
 	}
 	wg.Wait()
 	require.Equal(t, int32(1), reserved.Load())
+}
+
+func TestIdempotencyRepository_aPendingKeyReportsItsRRNAndAge__POS_G3(t *testing.T) {
+	repo := NewIdempotencyRepository(newTestPool(t))
+	ctx := context.Background()
+	_, err := repo.Reserve(ctx, "key-p", testIdemRoute, testIdemHash)
+	require.NoError(t, err)
+	require.NoError(t, repo.AttachRRN(ctx, "key-p", testIdemRoute, "626514000801"))
+
+	_, err = repo.Reserve(ctx, "key-p", testIdemRoute, testIdemHash)
+
+	require.ErrorIs(t, err, ErrIdempotencyInProgress)
+	var pending *InProgressError
+	require.ErrorAs(t, err, &pending)
+	require.Equal(t, "626514000801", pending.RRN, "a retry can find what the first request sent")
+	require.WithinDuration(t, time.Now(), pending.ReservedAt, time.Minute)
 }

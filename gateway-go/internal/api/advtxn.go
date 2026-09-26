@@ -38,7 +38,7 @@ func handleCreatePreAuth(svc AdvancedTransactor) http.HandlerFunc {
 		}
 		txn, err := svc.CreatePreAuth(req.Context(), body, key)
 		if err != nil {
-			transactionProblem(w, err, "pre-authorization-failed")
+			transactionProblem(w, req, err, "pre-authorization-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)
@@ -61,7 +61,7 @@ func handleCreateCompletion(svc AdvancedTransactor) http.HandlerFunc {
 		}
 		txn, err := svc.CreateCompletion(req.Context(), rrn, body, key)
 		if err != nil {
-			transactionProblem(w, err, "completion-failed")
+			transactionProblem(w, req, err, "completion-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)
@@ -80,7 +80,7 @@ func handleCreateRefund(svc AdvancedTransactor) http.HandlerFunc {
 		}
 		txn, err := svc.CreateRefund(req.Context(), body, key)
 		if err != nil {
-			transactionProblem(w, err, "refund-failed")
+			transactionProblem(w, req, err, "refund-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)
@@ -99,7 +99,7 @@ func handleCreateBalanceInquiry(svc AdvancedTransactor) http.HandlerFunc {
 		}
 		txn, err := svc.CreateBalanceInquiry(req.Context(), body, key)
 		if err != nil {
-			transactionProblem(w, err, "balance-inquiry-failed")
+			transactionProblem(w, req, err, "balance-inquiry-failed")
 			return
 		}
 		writeJSONBody(w, http.StatusCreated, txn)

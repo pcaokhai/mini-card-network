@@ -27,9 +27,12 @@ var (
 )
 
 const (
+	// maxAmount is the largest amount DE 4 (n 12) can carry.
+	maxAmount = 999_999_999_999
+	// maxBodyBytes bounds a POST body: every transaction request is well under 1 KiB.
+	maxBodyBytes     = 16 << 10
 	maxListLimit     = 200
 	terminalIDLength = 8
-	slugValidation   = "validation-error"
 )
 
 func set(values ...string) map[string]bool {
@@ -70,7 +73,7 @@ func validationProblem(w http.ResponseWriter, errs fieldErrors) {
 func idempotencyKey(w http.ResponseWriter, req *http.Request) (string, bool) {
 	key := req.Header.Get("Idempotency-Key")
 	if _, err := uuid.Parse(key); err != nil {
-		problem(w, http.StatusBadRequest, "insufficient-idempotency-key", "Idempotency-Key header must be a UUID")
+		problem(w, http.StatusBadRequest, slugIdempotencyKey, "Idempotency-Key header must be a UUID")
 		return "", false
 	}
 	return key, true
@@ -79,6 +82,7 @@ func idempotencyKey(w http.ResponseWriter, req *http.Request) (string, bool) {
 // decodeBody decodes req's JSON body into dst and validates it with check, writing the 400
 // validation-error when either fails.
 func decodeBody[T any](w http.ResponseWriter, req *http.Request, dst *T, check func(T) fieldErrors) bool {
+	req.Body = http.MaxBytesReader(w, req.Body, maxBodyBytes)
 	if err := json.NewDecoder(req.Body).Decode(dst); err != nil {
 		validationProblem(w, fieldErrors{{Field: "body", Message: "must be a JSON object matching the schema"}})
 		return false
@@ -101,7 +105,7 @@ func pathRRN(w http.ResponseWriter, req *http.Request) (string, bool) {
 }
 
 func checkMoney(errs *fieldErrors, m purchase.Money) {
-	errs.check(m.Amount > 0, "amount.amount", "must be > 0")
+	errs.check(m.Amount > 0 && m.Amount <= maxAmount, "amount.amount", "must be > 0 and fit DE 4 (at most 999999999999)")
 	errs.check(currencyPattern.MatchString(m.Currency), "amount.currency", "must be an ISO 4217 numeric code")
 }
 

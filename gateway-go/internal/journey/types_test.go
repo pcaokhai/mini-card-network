@@ -47,7 +47,8 @@ func TestBuildJourney_moneyFollowsTheTransactionType__JRN_G2(t *testing.T) {
 
 func TestBuildJourney_messagesCarryOnlyWhatTheTypeSends__JRN_G2(t *testing.T) {
 	completion := typedRow(tranTypeCompletion, "000000")
-	require.Equal(t, []string{deMTI, "3", "4", "7", "11", "37", "49"}, fieldDEs(completion.Steps[1].Message), "a 0220 carries no card-present data")
+	require.Equal(t, []string{deMTI, "3", "4", "7", "11", "37", "41", "42", "49"}, fieldDEs(completion.Steps[1].Message),
+		"a 0220 carries no card data, but names the terminal and merchant the issuer dedupes on")
 	require.Equal(t, "626514000100", fieldValue(completion.Steps[1].Message, "37"), "DE 37 references the pre-auth")
 
 	balance := typedRow(tranTypeBalance, "310000")

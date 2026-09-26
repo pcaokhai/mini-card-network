@@ -21,7 +21,7 @@ func (s *Service) CreateCompletion(ctx context.Context, rrn string, req Completi
 		OriginalRRN string `json:"originalRrn"`
 		CompletionRequest
 	}{rrn, req}
-	return s.idempotent(ctx, routeCompletion, idempotencyKey, hashed, func() (Transaction, error) { return s.createCompletion(ctx, rrn, req) })
+	return s.idempotent(ctx, routeCompletion, idempotencyKey, hashed, func(ctx context.Context) (Transaction, error) { return s.createCompletion(ctx, rrn, req) })
 }
 
 func (s *Service) createCompletion(ctx context.Context, rrn string, req CompletionRequest) (Transaction, error) {
@@ -30,8 +30,12 @@ func (s *Service) createCompletion(ctx context.Context, rrn string, req Completi
 	if err != nil {
 		return Transaction{}, fmt.Errorf("look up pre-authorization %s: %w", rrn, err)
 	}
-	if preAuth.Type != tranTypePreAuth || preAuth.Status != statusApproved {
+	// A quick refusal for the common cases; InsertCompletion makes the claim itself atomic.
+	if preAuth.Type != tranTypePreAuth || preAuth.Status != statusApproved || preAuth.CompletedBy != "" {
 		return Transaction{}, fmt.Errorf("complete %s (%s %s): %w", rrn, preAuth.Type, preAuth.Status, ErrNotCompletable)
+	}
+	if req.Amount.Amount > preAuth.Amount {
+		return Transaction{}, fmt.Errorf("complete %s for %d of %d: %w", rrn, req.Amount.Amount, preAuth.Amount, ErrExceedsHold)
 	}
 	stan, linkUp := s.nextSTAN()
 	now := time.Now().UTC()

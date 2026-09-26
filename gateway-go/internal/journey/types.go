@@ -45,11 +45,12 @@ func (b builder) requestPath() string {
 }
 
 // carries reports whether the type's request (and so its response) holds de: a completion's
-// 0220 carries no card-present data, and a balance inquiry requests no amount.
+// 0220 carries no card data (it names its terminal and merchant), and a balance inquiry requests
+// no amount.
 func (b builder) carries(de string) bool {
 	switch b.txn.Type {
 	case tranTypeCompletion:
-		return de != "2" && de != "22" && de != "41" && de != "42"
+		return de != "2" && de != "22"
 	case tranTypeBalance:
 		return de != "4" && de != "49"
 	}

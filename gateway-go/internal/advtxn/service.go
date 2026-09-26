@@ -24,6 +24,7 @@ import (
 
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/iso8583"
+	"github.com/mcn/gateway-go/internal/journey"
 	"github.com/mcn/gateway-go/internal/obs"
 	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
@@ -55,8 +56,11 @@ const (
 )
 
 // ErrNotCompletable means a completion names a transaction that is not an approved
-// pre-authorization (POS-G13).
-var ErrNotCompletable = errors.New("only an approved pre-authorization can be completed")
+// pre-authorization, or one already completed (POS-G13).
+var ErrNotCompletable = store.ErrNotCompletable
+
+// ErrExceedsHold means a completion asks for more than its pre-authorization held.
+var ErrExceedsHold = errors.New("completion amount exceeds the pre-authorized amount")
 
 // Money mirrors contracts/openapi.yaml's Money schema; reused directly from purchase per DRY
 // (docs/plans/MCN-603.md Task 1) since the shape is identical.
@@ -131,6 +135,7 @@ type TranLogPort interface {
 	Get(ctx context.Context, rrn string) (store.TranLogRow, error)
 	UpdateStatus(ctx context.Context, id int64, status, responseCode, authCode string) error
 	UpdateAmounts(ctx context.Context, id int64, approvedAmount *int64, balance *store.Money) error
+	InsertCompletion(ctx context.Context, completion store.TranLogRow, preAuthRRN string) (int64, error)
 	RecordStateTransition(ctx context.Context, id int64, fromStatus, toStatus string) error
 }
 
@@ -217,8 +222,31 @@ func (s *Service) finalizeFields(ctx context.Context, p sendParams) (store.Merch
 
 // idempotent runs create once per (key, route), before any STAN is allocated, so a replay never
 // consumes one (POS-G3).
-func (s *Service) idempotent(ctx context.Context, route, key string, req any, create func() (Transaction, error)) (Transaction, error) {
-	return purchase.Idempotent(ctx, s.idempotency, key, route, hashRequest(req), http.StatusCreated, create)
+func (s *Service) idempotent(ctx context.Context, route, key string, req any, create func(ctx context.Context) (Transaction, error)) (Transaction, error) {
+	return purchase.Idempotent(ctx, s.idempotency, key, route, hashRequest(req), http.StatusCreated, create, s.fromLog)
+}
+
+// fromLog answers a request whose response was never recorded from its tran_log row; the answer
+// is final once the row has left CREATED/SENT.
+func (s *Service) fromLog(ctx context.Context, rrn string) (Transaction, bool, error) {
+	row, err := s.tranLog.Get(ctx, rrn)
+	if err != nil {
+		return Transaction{}, false, err
+	}
+	txn := Transaction{
+		RRN: row.RRN, STAN: row.NetworkSTAN, Type: row.Type, Status: row.Status, ResponseCode: row.ResponseCode,
+		Amount: Money{Amount: row.Amount, Currency: row.Currency}, MaskedPAN: row.MaskedPAN, TerminalID: row.TerminalID,
+		MerchantName: row.MerchantName, AuthCode: row.AuthCode, OriginalRRN: row.OriginalRRN,
+		BusinessDate: row.CreatedAt.UTC().Format(time.DateOnly), CreatedAt: row.CreatedAt,
+		ResponseLabel: purchase.ResponseLabel(row.ResponseCode), LatencyMs: journey.LatencyMs(row), TraceID: row.TraceID,
+	}
+	if row.ApprovedAmount != nil {
+		txn.ApprovedAmount = &Money{Amount: *row.ApprovedAmount, Currency: row.Currency}
+	}
+	if row.Balance != nil {
+		txn.Balance = &Money{Amount: row.Balance.Amount, Currency: row.Balance.Currency}
+	}
+	return txn, row.Status != statusCreated && row.Status != statusSent, nil
 }
 
 // send MACs and sends p.fields, persists the outcome and broadcasts it - the one place every
@@ -256,11 +284,14 @@ func (s *Service) sendAndRecord(ctx context.Context, p sendParams, merchant stor
 		ProcessingCode: p.fields[3], POSEntryMode: p.posEntryMode, SentAt: &p.sentAt, CardToken: p.cardToken,
 		OriginalRRN: p.originalRRN, TraceID: obs.TraceID(ctx),
 	}
-	id, err := s.tranLog.Insert(ctx, row)
+	id, err := s.insert(ctx, p, row)
 	if err != nil {
-		return Transaction{}, fmt.Errorf("insert tran_log: %w", err)
+		return Transaction{}, err
 	}
 	if err := s.transition(ctx, id, statusCreated, statusSent, "", ""); err != nil {
+		return Transaction{}, err
+	}
+	if err := purchase.AttachRRN(ctx, p.rrn); err != nil {
 		return Transaction{}, err
 	}
 
@@ -306,6 +337,23 @@ func afterSend(err error) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %w", purchase.ErrAfterSend, err)
+}
+
+// insert logs row about to be sent. A completion also claims its pre-authorization in the same
+// DB transaction, so a pre-auth is completed at most once (#117 review S2).
+func (s *Service) insert(ctx context.Context, p sendParams, row store.TranLogRow) (int64, error) {
+	if p.txnType != tranTypeCompletion {
+		id, err := s.tranLog.Insert(ctx, row)
+		if err != nil {
+			return 0, fmt.Errorf("insert tran_log: %w", err)
+		}
+		return id, nil
+	}
+	id, err := s.tranLog.InsertCompletion(ctx, row, p.originalRRN)
+	if err != nil {
+		return 0, fmt.Errorf("insert completion of %s: %w", p.originalRRN, err)
+	}
+	return id, nil
 }
 
 // outcome maps mux.Send's result onto a Transaction, verifying the response's MAC. A completion's

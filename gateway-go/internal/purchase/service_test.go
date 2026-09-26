@@ -141,11 +141,26 @@ type fakeIdempotency struct {
 	hashes   map[string]string
 	pending  map[string]bool
 	released []string
+	rrns     map[string]string    // AttachRRN, by key+route
+	reserved map[string]time.Time // when each pending key was reserved
+}
+
+// pendAt makes key a reservation made at reservedAt that sent rrn, as a crashed request leaves it.
+func (f *fakeIdempotency) pendAt(key, route, hash, rrn string, reservedAt time.Time) {
+	_, _ = f.Reserve(context.Background(), key, route, hash)
+	k := key + route
+	f.rrns[k], f.reserved[k] = rrn, reservedAt
+}
+
+func (f *fakeIdempotency) AttachRRN(_ context.Context, key, route, rrn string) error {
+	f.rrns[key+route] = rrn
+	return nil
 }
 
 func (f *fakeIdempotency) Reserve(_ context.Context, key, route, hash string) (*store.StoredResponse, error) {
 	if f.hashes == nil {
 		f.stored, f.hashes, f.pending = map[string]store.StoredResponse{}, map[string]string{}, map[string]bool{}
+		f.rrns, f.reserved = map[string]string{}, map[string]time.Time{}
 	}
 	k := key + route
 	if h, ok := f.hashes[k]; ok {
@@ -153,12 +168,12 @@ func (f *fakeIdempotency) Reserve(_ context.Context, key, route, hash string) (*
 		case h != hash:
 			return nil, store.ErrIdempotencyKeyMismatch
 		case f.pending[k]:
-			return nil, store.ErrIdempotencyInProgress
+			return nil, &store.InProgressError{RRN: f.rrns[k], ReservedAt: f.reserved[k]}
 		}
 		stored := f.stored[k]
 		return &stored, nil
 	}
-	f.hashes[k], f.pending[k] = hash, true
+	f.hashes[k], f.pending[k], f.reserved[k] = hash, true, time.Now()
 	return nil, nil
 }
 func (f *fakeIdempotency) Store(ctx context.Context, key, route, hash string, status int, body []byte) error {
@@ -304,8 +319,8 @@ func TestCreatePurchase_everyPostSendFailureQueuesReversal__POS_G4(t *testing.T)
 			require.NoError(t, err, "an unknown outcome is not an HTTP error")
 			require.Equal(t, "REVERSAL_PENDING", txn.Status)
 			require.Equal(t, []string{reasonTimeout}, reversal.calls)
-			require.Equal(t, "TIMED_OUT", reversal.queued[0].Status, "queued from the state the row holds")
-			require.Equal(t, "TIMED_OUT", tranLog.rows[0].Status)
+			require.Equal(t, statusTimedOut, reversal.queued[0].Status, "queued from the state the row holds")
+			require.Equal(t, statusTimedOut, tranLog.rows[0].Status)
 		})
 	}
 }
@@ -325,13 +340,15 @@ func TestCreatePurchase_linkDroppedBeforeSendDeclinesRc91WithoutReversal__POS_G4
 	require.Equal(t, "DECLINED", tranLog.rows[0].Status)
 }
 
-func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC1(t *testing.T) {
+func TestCreatePurchase_timeoutWhoseReversalCantBeQueuedReportsTheRowAsIs__MCN_401_AC1(t *testing.T) {
 	mux := &fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}
 	reversal := &fakeReversal{err: errors.New("boom")}
 	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil, &fakeEvents{})
 
-	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-timeout-fail")
-	require.Error(t, err)
+	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-timeout-fail")
+
+	require.NoError(t, err, "answered from tran_log (S1); the sweeper queues the reversal later (POS-G16)")
+	require.Equal(t, statusTimedOut, txn.Status, "never REVERSAL_PENDING when nothing was queued")
 }
 
 func TestCancelPurchase_queuesReversalWithReasonSeventeen__MCN_401_AC5(t *testing.T) {
@@ -390,7 +407,7 @@ func TestCancelPurchase_refusesAnApprovedNonPurchase__MCN_401(t *testing.T) {
 }
 
 func TestRecordLateResponse_setsColumnsWithoutChangingStatus__MCN_403_AC1(t *testing.T) {
-	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "z", Status: "TIMED_OUT"}}}
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "z", Status: statusTimedOut}}}
 	hub := &fakeHub{}
 	events := &fakeEvents{}
 	svc := NewService(&fakeMux{}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, hub, &fakeReversal{}, stdHSM(), testZAK, nil, events)
@@ -398,7 +415,7 @@ func TestRecordLateResponse_setsColumnsWithoutChangingStatus__MCN_403_AC1(t *tes
 	err := svc.RecordLateResponse(context.Background(), "z", "00")
 
 	require.NoError(t, err)
-	require.Equal(t, "TIMED_OUT", tranLog.rows[0].Status)
+	require.Equal(t, statusTimedOut, tranLog.rows[0].Status)
 	require.Equal(t, "00", tranLog.rows[0].LateResponseCode)
 	require.Len(t, hub.networkEvents, 1)
 	require.Equal(t, "WARN", hub.networkEvents[0].Severity)
@@ -597,7 +614,7 @@ func TestCreatePurchase_reversalIsQueuedEvenWhenTheStatusUpdateFails__POS_G4(t *
 		fail   string
 		reason string
 	}{
-		"timeout": {&fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}, "TIMED_OUT", reasonTimeout},
+		"timeout": {&fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}, statusTimedOut, reasonTimeout},
 		"bad MAC": {&fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 64: badMACHex}}, "DECLINED", reasonMacFailure},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -607,7 +624,7 @@ func TestCreatePurchase_reversalIsQueuedEvenWhenTheStatusUpdateFails__POS_G4(t *
 
 			_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-status-fails")
 
-			require.Error(t, err, "the failed update is still reported")
+			require.NoError(t, err, "a failure after the send is answered from tran_log (S1)")
 			require.Equal(t, []string{tc.reason}, reversal.calls)
 			require.Equal(t, "SENT", reversal.queued[0].Status, "queued from the state the row still holds")
 		})
@@ -645,9 +662,8 @@ func TestCreatePurchase_releasesTheKeyOnlyWhenNothingWasSent__POS_G3(t *testing.
 	require.Error(t, err)
 	require.Equal(t, []string{"key-unknown-card"}, idem.released, "nothing was sent, so the key may be retried")
 
-	svc = newIdemTestService(&fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{err: errors.New("boom")})
-	_, err = svc.CreatePurchase(context.Background(), newTestRequest(), "key-sent")
-	require.ErrorIs(t, err, ErrAfterSend)
+	svc = newIdemTestService(&fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}, &fakeTranLog{failStatus: statusTimedOut}, idem, &fakeHub{}, &fakeReversal{err: errors.New("boom")})
+	_, _ = svc.CreatePurchase(context.Background(), newTestRequest(), "key-sent")
 	require.NotContains(t, idem.released, "key-sent", "the request may be at the issuer: a retry must never resend it")
 }
 
@@ -706,4 +722,42 @@ func tracedContext() context.Context {
 	traceID, _ := trace.TraceIDFromHex(testTraceID)
 	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
 	return trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID}))
+}
+
+func TestCreatePurchase_aRetryOfAStaleKeyAnswersFromTheTransaction__S1(t *testing.T) {
+	tranLog := &fakeTranLog{rows: []store.TranLogRow{{RRN: "626514000801", Type: tranTypePurchase, Status: statusApproved, ResponseCode: "00", Amount: 10000, Currency: "704", MaskedPAN: "970436******4417"}}}
+	idem := &fakeIdempotency{}
+	idem.pendAt("key-crashed", purchaseRoute, hashRequest(newTestRequest()), "626514000801", time.Now().Add(-2*time.Minute))
+	mux := &fakeMux{linkSignedOn: true}
+	svc := newIdemTestService(mux, tranLog, idem, &fakeHub{}, &fakeReversal{})
+
+	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-crashed")
+
+	require.NoError(t, err, "a retry learns the outcome instead of a 409 for 24 h")
+	require.Equal(t, statusApproved, txn.Status)
+	require.Equal(t, "626514000801", txn.RRN)
+	require.Nil(t, mux.lastFields, "never resent")
+	require.Contains(t, idem.stored, "key-crashed"+purchaseRoute, "the answer becomes the key's response")
+}
+
+func TestCreatePurchase_aRetryWhileTheFirstIsStillInFlightIsAConflict__S1(t *testing.T) {
+	idem := &fakeIdempotency{}
+	idem.pendAt("key-busy", purchaseRoute, hashRequest(newTestRequest()), "626514000802", time.Now())
+	svc := newIdemTestService(&fakeMux{linkSignedOn: true}, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{})
+
+	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-busy")
+
+	require.ErrorIs(t, err, store.ErrIdempotencyInProgress)
+}
+
+func TestCreatePurchase_aFailureAfterTheSendAnswersFromTheTransaction__S1(t *testing.T) {
+	idem := &fakeIdempotency{}
+	tranLog := &fakeTranLog{}
+	svc := newIdemTestService(&fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}, tranLog, idem, &fakeHub{}, &fakeReversal{err: errors.New("db down")})
+
+	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-after-send")
+
+	require.NoError(t, err)
+	require.Equal(t, statusTimedOut, txn.Status, "the row's real status")
+	require.Equal(t, tranLog.rows[0].RRN, idem.rrns["key-after-send"+purchaseRoute], "the RRN was attached before the send")
 }

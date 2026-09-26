@@ -16,7 +16,7 @@ const (
 // CreateBalanceInquiry sends a 0200 with DE 3=310000 (docs/03 "C6 balance inquiry"), no DE 4
 // (no amount requested), and parses the response's DE 54 into Transaction.Balance.
 func (s *Service) CreateBalanceInquiry(ctx context.Context, req BalanceInquiryRequest, idempotencyKey string) (Transaction, error) {
-	return s.idempotent(ctx, routeBalance, idempotencyKey, req, func() (Transaction, error) { return s.createBalanceInquiry(ctx, req) })
+	return s.idempotent(ctx, routeBalance, idempotencyKey, req, func(ctx context.Context) (Transaction, error) { return s.createBalanceInquiry(ctx, req) })
 }
 
 func (s *Service) createBalanceInquiry(ctx context.Context, req BalanceInquiryRequest) (Transaction, error) {

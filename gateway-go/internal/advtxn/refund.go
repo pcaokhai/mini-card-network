@@ -16,7 +16,7 @@ const (
 
 // CreateRefund sends a 0200 with DE 3=200000 (docs/03 §6 refund processing code).
 func (s *Service) CreateRefund(ctx context.Context, req RefundRequest, idempotencyKey string) (Transaction, error) {
-	return s.idempotent(ctx, routeRefund, idempotencyKey, req, func() (Transaction, error) { return s.createRefund(ctx, req) })
+	return s.idempotent(ctx, routeRefund, idempotencyKey, req, func(ctx context.Context) (Transaction, error) { return s.createRefund(ctx, req) })
 }
 
 func (s *Service) createRefund(ctx context.Context, req RefundRequest) (Transaction, error) {

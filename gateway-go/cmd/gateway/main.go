@@ -40,6 +40,8 @@ func main() {
 		os.Exit(2)
 	}
 	logger := obs.NewLogger(os.Stdout, cfg.ServiceName, slog.LevelInfo)
+	// Handlers that have no logger of their own (api.transactionProblem) log through the default.
+	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	if err := run(ctx, cfg, logger); err != nil {

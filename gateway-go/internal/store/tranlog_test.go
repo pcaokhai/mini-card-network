@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -302,4 +304,53 @@ func TestTranLogRepository_listRejectsAMalformedCursor__JRN_G6(t *testing.T) {
 	_, _, err := repo.List(context.Background(), TransactionFilter{Cursor: "zzz"})
 
 	require.ErrorIs(t, err, ErrInvalidCursor)
+}
+
+func insertPreAuth(ctx context.Context, t *testing.T, repo *TranLogRepository, rrn, status string) {
+	t.Helper()
+	_, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: "PREAUTH", Status: status, Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID})
+	require.NoError(t, err)
+}
+
+func completionOf(rrn string) TranLogRow {
+	return TranLogRow{RRN: rrn, Type: "COMPLETION", Status: statusApproved, Amount: 5000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID}
+}
+
+func TestTranLogRepository_aPreAuthIsCompletedOnce__S2(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	insertPreAuth(ctx, t, repo, "626514000901", statusApproved)
+	insertPreAuth(ctx, t, repo, "626514000902", "DECLINED")
+
+	_, err := repo.InsertCompletion(ctx, completionOf("626514000911"), "626514000901")
+	require.NoError(t, err)
+	_, err = repo.InsertCompletion(ctx, completionOf("626514000912"), "626514000901")
+	require.ErrorIs(t, err, ErrNotCompletable, "a second completion of the same pre-auth")
+	_, err = repo.InsertCompletion(ctx, completionOf("626514000913"), "626514000902")
+	require.ErrorIs(t, err, ErrNotCompletable, "a declined pre-auth holds nothing")
+
+	preAuth, err := repo.Get(ctx, "626514000901")
+	require.NoError(t, err)
+	require.Equal(t, "626514000911", preAuth.CompletedBy)
+	_, err = repo.Get(ctx, "626514000912")
+	require.ErrorIs(t, err, ErrNotFound, "the refused completion leaves no row")
+}
+
+func TestTranLogRepository_concurrentCompletionsClaimThePreAuthOnce__S2(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	insertPreAuth(ctx, t, repo, "626514000921", statusApproved)
+	var won atomic.Int32
+	var wg sync.WaitGroup
+	for i := range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := repo.InsertCompletion(ctx, completionOf(fmt.Sprintf("62651400093%d", i)), "626514000921"); err == nil {
+				won.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int32(1), won.Load())
 }

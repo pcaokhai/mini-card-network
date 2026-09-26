@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ const (
 	pathPurchases  = "/v1/transactions/purchases"
 	statusReversed = "REVERSED"
 	fieldAmount    = "amount.amount"
+	slugConflict   = "conflict"
 )
 
 type problemBody struct {
@@ -59,6 +61,8 @@ func TestPostTransactions_invalidBodyIsValidationError__POS_G2(t *testing.T) {
 		{"not JSON", pathPurchases, `{`, "body"},
 		{"malformed original rrn", "/v1/transactions/bad!!/completions", `{"amount":{"amount":1,"currency":"704"}}`, "rrn"},
 		{"malformed cancelled rrn", "/v1/transactions/12/cancellations", `{}`, "rrn"},
+		{"amount beyond DE 4", pathPurchases, `{"terminalId":"00000042","cardToken":"tok_normal","entryMode":"CHIP_PIN","amount":{"amount":1000000000000,"currency":"704"}}`, fieldAmount},
+		{"oversized body", pathPurchases, `{"terminalId":"00000042","cardToken":"tok_normal","entryMode":"CHIP_PIN","emvData":"` + strings.Repeat("A", 1<<20) + `"}`, "body"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,8 +101,9 @@ func TestTransactionProblem_mapsDomainErrorsToTheCatalogue__POS_G1_G3_G13(t *tes
 	}{
 		{fmt.Errorf("resolve: %w", purchase.ErrUnknownCardToken), http.StatusUnprocessableEntity, "unknown-card-token"},
 		{fmt.Errorf("reserve: %w", store.ErrIdempotencyKeyMismatch), http.StatusUnprocessableEntity, "idempotency-key-mismatch"},
-		{fmt.Errorf("reserve: %w", store.ErrIdempotencyInProgress), http.StatusConflict, "conflict"},
-		{fmt.Errorf("complete: %w", advtxn.ErrNotCompletable), http.StatusConflict, "conflict"},
+		{fmt.Errorf("reserve: %w", store.ErrIdempotencyInProgress), http.StatusConflict, slugConflict},
+		{fmt.Errorf("complete: %w", advtxn.ErrNotCompletable), http.StatusConflict, slugConflict},
+		{fmt.Errorf("complete: %w", advtxn.ErrExceedsHold), http.StatusConflict, slugConflict},
 		{fmt.Errorf("look up: %w", store.ErrNotFound), http.StatusNotFound, "not-found"},
 	}
 	for _, tc := range cases {
@@ -216,4 +221,14 @@ func TestGetTransaction_reportsTheDetailFields__JRN_G3(t *testing.T) {
 		require.Contains(t, body, field)
 	}
 	requireMatchesSpec(t, req, rec)
+}
+
+func TestTransactionProblem_anUnexpectedErrorKeepsItsDetailInTheLog__N2(t *testing.T) {
+	r := chi.NewRouter()
+	MountPurchases(r, &fakePurchaseService{err: errors.New("pq: connection to 10.0.0.7 refused")})
+
+	rec := postJSON(r, pathPurchases, validPurchaseBody)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.NotContains(t, rec.Body.String(), "10.0.0.7", "a raw driver error never reaches the client (docs/04 §3)")
 }

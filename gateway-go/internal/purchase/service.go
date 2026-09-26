@@ -240,9 +240,19 @@ func NewService(mux interface {
 // state transition, and returns the resulting Transaction. A replayed idempotencyKey with the
 // same route returns the previously stored Transaction unchanged, without resending anything.
 func (s *Service) CreatePurchase(ctx context.Context, req PurchaseRequest, idempotencyKey string) (Transaction, error) {
-	return Idempotent(ctx, s.idempotency, idempotencyKey, purchaseRoute, hashRequest(req), statusCreatedHTTP, func() (Transaction, error) {
+	return Idempotent(ctx, s.idempotency, idempotencyKey, purchaseRoute, hashRequest(req), statusCreatedHTTP, func(ctx context.Context) (Transaction, error) {
 		return s.createPurchase(ctx, req)
-	})
+	}, s.fromLog)
+}
+
+// fromLog answers a purchase whose response was never recorded from its tran_log row; the answer
+// is final once the row has left CREATED/SENT.
+func (s *Service) fromLog(ctx context.Context, rrn string) (Transaction, bool, error) {
+	row, err := s.tranLogGet.Get(ctx, rrn)
+	if err != nil {
+		return Transaction{}, false, err
+	}
+	return transactionFromRow(row), row.Status != statusCreated && row.Status != statusSent, nil
 }
 
 func (s *Service) createPurchase(ctx context.Context, req PurchaseRequest) (Transaction, error) {
@@ -335,6 +345,9 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	}
 	if err := s.tranLog.RecordStateTransition(ctx, id, statusCreated, statusSent); err != nil {
 		return Transaction{}, fmt.Errorf("record %s->%s: %w", statusCreated, statusSent, err)
+	}
+	if err := AttachRRN(ctx, rrn); err != nil {
+		return Transaction{}, err
 	}
 
 	if err := s.attachMAC(fields); err != nil {
@@ -518,9 +531,10 @@ func (s *Service) recordLinkDown(ctx context.Context, txn Transaction, req Purch
 // CancelPurchase queues a POS-initiated reversal (DE 39 = "17") for the transaction identified
 // by rrn, through the same atomic path CreatePurchase's timeout branch uses.
 func (s *Service) CancelPurchase(ctx context.Context, rrn string, idempotencyKey string) (Transaction, error) {
-	return Idempotent(ctx, s.idempotency, idempotencyKey, cancelRoute, sha256Hex(rrn), statusAcceptedHTTP, func() (Transaction, error) {
+	// A cancellation sends nothing itself (the SAF worker does), so there is nothing to recover.
+	return Idempotent(ctx, s.idempotency, idempotencyKey, cancelRoute, sha256Hex(rrn), statusAcceptedHTTP, func(ctx context.Context) (Transaction, error) {
 		return s.cancelPurchase(ctx, rrn)
-	})
+	}, nil)
 }
 
 func (s *Service) cancelPurchase(ctx context.Context, rrn string) (Transaction, error) {
