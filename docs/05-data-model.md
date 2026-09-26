@@ -59,6 +59,8 @@ The baseline file shows all three schemas together for review. MCN-301 (issuer),
 | issuer | V8: unique index `ux_key_store_one_active (key_type, COALESCE(counterparty, '')) WHERE status = 'ACTIVE'` | The MAC/PIN participants read the one ACTIVE key and seed it from the environment at startup; concurrent seeding must not create two | SEC-G15 |
 | acquirer | `outbox_event` (same shape as issuer) | Acquirer events for settlement | MCN-703 |
 | acquirer | `idempotency_record` | REST idempotency | MCN-303 |
+| acquirer | `tran_log.approved_amount`, `balance_amount`, `balance_currency`, `original_rrn`, `trace_id`, `reversal_reason` (migration 00010) | Transaction detail, W3C trace id, the 0420's DE 39 reason for `reversalReason` | POS-G8, JRN-G3, JRN-G7 |
+| acquirer | `idempotency_record.rrn`, `idempotency_record.reservation_token`, `tran_log.completed_by` (migration 00011) | The RRN a reserved key sent, so a retry answers from `tran_log`; the token that fences a reservation against a reclaimed holder; the completion that consumed a pre-auth | #117 review S1, S2 |
 | acquirer | `network_event(id, occurred_at, severity, easy_text, technical_text)` | Network screen timeline | MCN-204 |
 | acquirer | `chaos_run(id, status, requested, completed, result JSONB)` | Chaos run tracking | MCN-404 |
 | acquirer | `key_rotation(id, key_type, status, steps JSONB)` | Rotation workflow | MCN-504 |

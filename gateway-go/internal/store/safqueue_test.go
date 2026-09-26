@@ -131,6 +131,9 @@ func TestSafRepository_ackOf0420CompletesTheReversal__MCN_002(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "REVERSAL_PENDING", history[len(history)-1].FromStatus)
 	require.Equal(t, "REVERSED", history[len(history)-1].ToStatus)
+	rrn, err := saf.TranRRN(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "626514000501", rrn, "OVW-G3: the acknowledged row can be announced")
 }
 
 func TestSafRepository_ackOfAnAdviceLeavesTheTransactionState__MCN_002(t *testing.T) {

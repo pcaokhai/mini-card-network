@@ -168,9 +168,9 @@ func (r *TranLogRepository) overviewThroughput(ctx context.Context, now time.Tim
 
 func (r *TranLogRepository) overviewDeclineReasons(ctx context.Context, dayStart time.Time) ([]DeclineReasonCount, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT coalesce(response_code, ''), count(*)
+		SELECT response_code, count(*)
 		FROM tran_log
-		WHERE created_at >= $1 AND state = $2
+		WHERE created_at >= $1 AND state = $2 AND response_code IS NOT NULL
 		GROUP BY response_code
 		ORDER BY count(*) DESC
 	`, dayStart, stateDeclined)

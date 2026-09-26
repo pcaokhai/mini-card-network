@@ -98,8 +98,8 @@ Body: `PurchaseRequest`.
 The balance in "Số dư còn {balance} ₫" comes from §4.6, not from this response.
 
 - **Provider rules.**
-  1. An Idempotency-Key already stored for the route `purchases` returns the stored `Transaction` unchanged, without sending anything. The stored response has no expiry.
-  2. `cardToken` resolves to a fixture card and `terminalId` to its merchant (DE 42) before anything is sent. Unknown terminal ⇒ 422; unknown token ⇒ 500 (POS-G1).
+  1. The Idempotency-Key must be a UUID (else 400 `insufficient-idempotency-key`). It is reserved atomically before anything is sent. A replay of the same body within 24 h returns the stored `Transaction` unchanged, without sending anything. The same key with a different body ⇒ 422 `idempotency-key-mismatch`. The same key while the first request is still in flight ⇒ 409 `conflict`. A key whose request failed before anything was sent is released and may be retried. Before the send, the gateway records the RRN on the key. If the request then fails after the send, or crashes, it is answered from that RRN's `tran_log` row (201 with its current status, for example `APPROVED`, `DECLINED`, `TIMED_OUT` or `REVERSAL_PENDING`); a retry that finds the key still in flight more than 60 s after it was reserved (the 30 s send timeout, 10 s of recording and a margin) gets the same answer instead of 409. Once that status is final it becomes the key's stored response. A key still in flight past those 60 s with no RRN recorded sent nothing (the RRN is recorded before every send), so the retry takes it over and sends. Every reservation is fenced by a token (`idempotency_record.reservation_token`): if the first request was only slow, it can no longer record its RRN, so it aborts without sending, and it can't release the retry's reservation.
+  2. `cardToken` resolves to a fixture card and `terminalId` to its merchant (DE 42) before anything is sent. Unknown terminal ⇒ 422 `unknown-terminal`; unknown token ⇒ 422 `unknown-card-token`. The body is validated first: `amount.amount` > 0 and ≤ 999999999999 (DE 4, n 12), `amount.currency` `^[0-9]{3}$`, `entryMode` in the enum, `terminalId` 8 characters, `cardToken` present ⇒ else 400 `validation-error` with `errors[]`.
   3. Link not signed on, or no STAN available ⇒ nothing is sent; `status: DECLINED`, `responseCode: "91"`, STAN `000000` in the RRN (MCN-303-AC4). The row is still written to `tran_log`.
   4. The 0200 carries DE 2, 3 (`000000`), 4, 7, 11, 12, 13 (terminal local time, Asia/Ho_Chi_Minh), 14, 15, 22, 32 (`970499`), 37, 41, 42, 49 and a DE 64 MAC under the ZAK.
   5. `tran_log` moves CREATED → SENT → outcome, and each transition is written to `tran_state_history`.
@@ -111,10 +111,13 @@ The balance in "Số dư còn {balance} ₫" comes from §4.6, not from this res
 
 | HTTP status | Problem `type` | When | UI behaviour |
 | --- | --- | --- | --- |
-| 400 | `idempotency-key-required` | Header missing (never, from this page) | "Không gửi được giao dịch" + "Máy chủ trả lỗi: {detail}" |
-| 400 | `invalid-request` | Body is not valid JSON | same |
+| 400 | `insufficient-idempotency-key` | Header missing or not a UUID (never, from this page) | "Không gửi được giao dịch" + "Máy chủ trả lỗi: {detail}" |
+| 400 | `validation-error` | Body is not valid JSON or breaks the schema; `errors[]` names each field | same |
+| 409 | `conflict` | The same Idempotency-Key is still in flight | same |
 | 422 | `unknown-terminal` | `terminalId` not in the acquirer's terminals | same |
-| 500 | `purchase-failed` | Any other error: unknown `cardToken` (POS-G1), a database error | same |
+| 422 | `unknown-card-token` | `cardToken` is not a simulator card | same |
+| 422 | `idempotency-key-mismatch` | The Idempotency-Key was used for a different body | same |
+| 500 | `purchase-failed` | Any other error: a database error | same |
 | 502 | `https://mcn.local/problems/upstream-unavailable` (BFF) | BFF can't reach the gateway | same |
 
 - **Example.** dev:mock (`web-next/src/mocks/scenario-handlers.ts`, scenario "Mua hàng bình thường"):
@@ -138,7 +141,7 @@ Content-Type: application/json
 }
 ```
 
-  The real gateway returns the same shape plus `businessDate` and `traceId` (empty string today, POS-G8), without `balance`, and omits `responseCode`/`authCode` when they are empty. For comparison, the stored result of a real approved purchase, read back with `GET /v1/transactions/626807000352`: `status APPROVED`, `responseCode "00"`, `authCode "L7AFDG"`, `latencyMs 8059`.
+  The real gateway returns the same shape plus `businessDate`, `responseLabel`, `latencyMs` and `traceId` (the request span's W3C trace id, also stored in `tran_log.trace_id`), without `balance`, and omits `responseCode`/`authCode` when they are empty. For comparison, the stored result of a real approved purchase, read back with `GET /v1/transactions/626807000352`: `status APPROVED`, `responseCode "00"`, `authCode "L7AFDG"`, `latencyMs 8059`.
 - **Notes.** Mutations don't retry (TanStack default). The pay button is locked while any mutation is pending. The BFF sets no timeout; the gateway's HTTP write timeout is 35 s, above the 30 s ISO timeout. Rate limit: not enforced.
 
 ### 4.2 POST /v1/transactions/pre-authorizations
@@ -163,10 +166,10 @@ Content-Type: application/json
 
 | HTTP status | Problem `type` | When | UI behaviour |
 | --- | --- | --- | --- |
-| 400 | `idempotency-key-required` | Header missing | "Không gửi được giao dịch" + detail |
-| 400 | `invalid-request` | Body is not valid JSON | same |
+| 400 | `insufficient-idempotency-key` | Header missing or not a UUID | "Không gửi được giao dịch" + detail |
+| 400 | `validation-error` | Body is not valid JSON or breaks the schema; `errors[]` names each field | same |
 | 422 | `unknown-terminal` | Unknown `terminalId` | same |
-| 500 | `pre-authorization-failed` | Unknown `cardToken` (POS-G1), a failed reversal enqueue, a database error | same |
+| 500 | `pre-authorization-failed` | A failed reversal enqueue, a database error | same |
 | 502 | `…/upstream-unavailable` (BFF) | Gateway unreachable | same |
 
 - **Example.** dev:mock: request as §4.1 with `"amount": { "amount": 500000, "currency": "704" }`; response `{"rrn":"626807000125","stan":"000125","type":"PREAUTH","status":"APPROVED","responseCode":"00","authCode":"A00125","amount":{"amount":500000,"currency":"704"},"balance":null,"maskedPan":"970436******4417","terminalId":"00000042","merchantName":"Cà phê Góc Phố","createdAt":"…"}`. Real stored result for comparison (GET): `626807000293`, PREAUTH, DECLINED, RC `62`, card ••••3310 (blocked).
@@ -190,15 +193,16 @@ Content-Type: application/json
 
 - **Response.** `201`, `Transaction`. As §4.1, plus `originalRrn` (the pre-auth's RRN), shown in the step "Máy POS gửi yêu cầu": "Dùng mã tra soát {rrn} của lần giữ tiền." The completion gets its own new `rrn`. Title on approval: "Đã hoàn tất giao dịch"; MTI pair `0220 → 0230`.
 - **Provider rules.**
-  1. `{rrn}` must exist in `tran_log`; otherwise 404. The gateway doesn't check that it is an approved PREAUTH, or that the amount is within the hold (POS-G13).
+  1. `{rrn}` must exist in `tran_log` (else 404 `not-found`), be a PREAUTH in APPROVED that no completion has consumed, and hold at least the completion amount (else 409 `conflict`). The completion row and the claim on the pre-auth (`tran_log.completed_by`) are written in one DB transaction, so concurrent completions of one pre-auth send once. A link-down completion claims nothing, and the claim is released when the completion never left the gateway or the issuer declined it, so the hold can be completed again; an unknown outcome keeps it, since the 0220 is repeated through SAF. The original RRN is part of the idempotency hash.
   2. The 0220 carries DE 3, 4, 7, 11, 32, 37 (= the pre-auth's RRN), 49 and a DE 64 MAC; no DE 2 or DE 42.
   3. RC mapping, timeout, MAC and history behaviour as §4.2 rules 3–5.
 - **Errors.**
 
 | HTTP status | Problem `type` | When | UI behaviour |
 | --- | --- | --- | --- |
-| 400 | `idempotency-key-required` / `invalid-request` | as §4.2 | "Không gửi được giao dịch" + detail |
-| 404 | `unknown-transaction` | `{rrn}` not in `tran_log` | same. dev:mock differs: it returns 201 DECLINED RC `25` (POS-G13) |
+| 400 | `insufficient-idempotency-key` / `validation-error` | as §4.2, and a malformed `{rrn}` | "Không gửi được giao dịch" + detail |
+| 404 | `not-found` | `{rrn}` not in `tran_log` | same. dev:mock differs: it returns 201 DECLINED RC `25` (a WEB change, see §9 POS-G13) |
+| 409 | `conflict` | `{rrn}` is not an APPROVED PREAUTH | same |
 | 422 | `unknown-terminal` | The pre-auth's terminal no longer resolves | same |
 | 500 | `completion-failed` | A failed reversal enqueue, a database error | same |
 
@@ -226,7 +230,7 @@ Content-Type: application/json
 - **Provider rules.**
   1. As §4.2 rules 1 and 3–5 (route `balance-inquiries`).
   2. `balance` is parsed from DE 54 as currency (3) + D/C (1) + amount (12 digits); any other length leaves it `null`.
-  3. The response `amount` is `{ "amount": 0, "currency": "" }` and the stored row's currency is blank, which breaks the `Money` pattern (POS-G7).
+  3. The response `amount` is `{ "amount": 0, "currency": "704" }`: the card's currency from `contracts/fixtures/cards.json`, also stored in `tran_log.currency`. `balance` is stored in `tran_log.balance_amount`/`balance_currency` and returned by the GET detail.
 - **Errors.** As §4.2, with 500 type `balance-inquiry-failed`.
 - **Example.** dev:mock: `{"type":"BALANCE","status":"APPROVED","responseCode":"00","amount":{"amount":0,"currency":"704"},"balance":{"amount":5000000,"currency":"704"},…}`. Real stored result (GET `/v1/transactions/626807000291`): `"status":"DECLINED","responseCode":"30","amount":{"amount":0,"currency":"   "}`.
 
@@ -274,7 +278,7 @@ None. The page shows the synchronous POST result. A reversal that completes late
 - The page never holds a PAN: cards are addressed by `cardToken` (requests) and `cardRef` (reads), and displayed as `•••• last4`. `DISPLAY_CARDS` carries token, reference and last four only; the fixture `pan` is never embedded in web source.
 - Responses carry `maskedPan` (first 6 + last 4) at most. The gateway masks with `obs.MaskPAN` before the value reaches `tran_log` or a response.
 - No PIN, PIN block or track data is sent or returned. `encryptedPinBlock` is never sent (R-12, Ruling R1); MCN-305-AC4 returns when R-12 closes.
-- Every POST carries an `Idempotency-Key`. The gateway doesn't compare the stored request hash, so a reused key with a different body silently returns the first result (POS-G3).
+- Every POST carries an `Idempotency-Key` (a UUID). The gateway reserves it atomically and compares the stored request hash, so a reused key with a different body is 422 `idempotency-key-mismatch` and two concurrent requests with one key send once.
 - Money: integer minor units, currency `"704"`.
 - Audit: the gateway records every transaction in `tran_log` and its transitions in `tran_state_history`. No card-admin writes happen on this page.
 - 500 responses carry the raw Go error in `detail`, which the page shows verbatim in "Máy chủ trả lỗi: {detail}". No card data has been seen in those strings, but nothing prevents it (OVW-G12).
@@ -305,19 +309,19 @@ Payload bounds: requests < 300 bytes; `Transaction` ≈ 450 bytes; `CardDetail` 
 
 | ID | Gap | Evidence | Owner lane | Proposed fix / story |
 | --- | --- | --- | --- | --- |
-| POS-G1 | Unknown `cardToken` is a 500, not a 4xx | `transactionProblem` in `internal/api/transaction_errors.go` has no case for `purchase.ErrUnknownCardToken`; falls to `purchase-failed` / `<type>-failed` 500 | GW | Map it to 422 (or 400 `validation-error` with `errors[]`) |
-| POS-G2 | No request validation | Handlers only JSON-decode; `amount ≤ 0`, a negative amount, a non-numeric currency, an `entryMode` outside the enum (DE 22 left empty) or a `terminalId` of the wrong length reach the service. docs/04 §3 requires 400 `validation-error` with `errors[]` | GW | Validate `PurchaseRequest`/`CardPresentData` at the handler against the schema |
-| POS-G3 | Idempotency is weaker than docs/04 §2 | `idempotency.Find` returns the stored body without comparing `request_hash` (no 422 `idempotency-key-mismatch`); the key isn't checked to be a UUID; records never expire (docs/04: 24 h); Find-then-Store isn't atomic, so two concurrent requests with one key both send; `advtxn` allocates a STAN before the replay check | GW | Compare hashes, `INSERT … ON CONFLICT` reservation before sending, TTL. The issuer's `CardAdminController.replayIfPresent` already compares hashes |
+| POS-G1 | ~~Unknown `cardToken` is a 500, not a 4xx~~ | **Fixed** (#117): `transactionProblem` maps `purchase.ErrUnknownCardToken` to 422 `unknown-card-token` | GW | Done |
+| POS-G2 | ~~No request validation~~ | **Fixed** (#117): `internal/api/validation.go` checks every POST body and path RRN; 400 `validation-error` with `errors[]` | GW | Done |
+| POS-G3 | ~~Idempotency is weaker than docs/04 §2~~ | **Fixed** (#117): `IdempotencyRepository.Reserve` (INSERT … ON CONFLICT, 24 h TTL, request-hash compare, 409 while in flight); UUID keys; released only when nothing was sent; `advtxn` checks the replay before allocating a STAN | GW | Done |
 | POS-G4 | ~~Advanced transactions break "unknown outcome ⇒ reversal" (root CLAUDE.md §6.4)~~ | **Fixed** (#114): every send failure after the write marks the row TIMED_OUT and queues a 0420 (DE 39 68) for purchases, pre-auths and refunds; a completion's 0220 is repeated as 0221 until its 0230 instead (docs/03 §7.4); a balance inquiry owes nothing. Link down, or a link that drops before the write, records DECLINED RC 91 (`purchase.SendFailureStatus`). Everything after the send runs on a detached context with a 10 s bound (`purchase.Detach`), and the follow-up is queued from the row's real state even when the status update fails | GW | Done |
 | POS-G5 | ~~Incoming MAC not verified for advanced transactions~~ | **Fixed** (#114): `advtxn` verifies the incoming MAC through the shared `purchase.MACVerifier`; a mismatch is DECLINED RC 96 with a reason-06 reversal | GW | Done |
 | POS-G6 | Pre-auth, completion and balance inquiry aren't proven against the real issuer | Package doc of `internal/advtxn/service.go` (Ruling 1: proven against `internal/chaos/fakeissuer`); live rows: BALANCE `626807000291` DECLINED RC 30, COMPLETION `626807000294` DECLINED with `responseCode: null`; `CardAdminController.cardDetail` always returns `holds: []` | ISS + GW | MCN-601 (issuer hold and completion chain); a DECLINED row always carries an RC. Issuer side proven in #119: a balance inquiry without DE 4 is approved with DE 54 (it used to get RC 30), and a refund credits the account |
-| POS-G7 | Balance inquiry breaks the `Money` pattern | `CreateBalanceInquiry` passes no `requestedAmt`, so the response has `currency: ""` and `tran_log.currency` is blank: live `"amount":{"amount":0,"currency":"   "}` | GW | Use the card's currency (`"704"`) for the zero amount |
-| POS-G8 | POST responses miss fields the schema defines | `purchase.Transaction` has no `responseLabel`/`latencyMs` and never sets `TraceID` (always `""`); `advtxn.Transaction` has no `traceId`, `responseLabel` or `latencyMs`. The GET detail fills `responseLabel`/`latencyMs` and uses the RRN as `traceId` | GW | One DTO for POST and GET; persist a real trace id (NFR-08) |
+| POS-G7 | ~~Balance inquiry breaks the `Money` pattern~~ | **Fixed** (#117): a balance inquiry's amount is `{0, "704"}` from the card fixture's currency | GW | Done |
+| POS-G8 | ~~POST responses miss fields the schema defines~~ | **Fixed** (#117): POST responses carry `responseLabel`, `latencyMs` and the request span's `traceId`, stored in `tran_log.trace_id` (migration 00010) and returned by the GET detail | GW | Done |
 | POS-G9 | ~~Timeout response says TIMED_OUT while the row is REVERSAL_PENDING~~ | **Fixed** (#114): the timeout response reports REVERSAL_PENDING | GW + docs | Done |
 | POS-G10 | docs/04 §3 lists `link-down` 503; the gateway returns 201 DECLINED RC 91 | `CreatePurchase` link-down branch; MCN-303-AC4 | docs | Doc-fix PR: drop `link-down` 503 from docs/04 §3 (the story and the code agree) |
 | POS-G11 | `GET /v1/terminals` is in the contract but not served | `curl :8080/v1/terminals` → 404; the page hard-codes TID `00000042` and "Cà phê Góc Phố" (`PosScreen.tsx` `TERMINAL`) | GW | Implement the route from the `terminal`/`merchant` tables; let the POS pick a terminal |
 | POS-G12 | No PIN entry (MCN-305-AC4 deferred) | Plan Ruling R1; the gateway never forwards DE 52 (R-12) | GW + WEB | Close R-12, then restore the PIN pad and `encryptedPinBlock` |
-| POS-G13 | Completion accepts any known RRN; the mock and the gateway disagree on an unknown one | `CreateCompletion` only `tranLog.Get`s the RRN; dev:mock returns 201 DECLINED RC `25`, the gateway 404 `unknown-transaction` | GW + WEB | **Partly fixed** in #125: dev:mock now answers an unknown RRN with 404 `unknown-transaction`, like the gateway. The gateway half (409 unless the original is an approved PREAUTH) is still open |
+| POS-G13 | ~~Completion accepts any known RRN; the mock and the gateway disagree on an unknown one~~ | **Fixed** (#117): the gateway answers 409 `conflict` unless the original is an APPROVED PREAUTH, 404 `not-found` when it is unknown. The dev:mock still answers 201 DECLINED RC 25 (WEB lane, not changed here) | GW + WEB | Done (dev:mock parity in #125; the mock answers `unknown-transaction`, the gateway now `not-found`) |
 | POS-G14 | A retry after an HTTP failure creates a new Idempotency-Key | `pos-client.ts` calls `crypto.randomUUID()` inside each `mutationFn`; after a 500/502 whose outcome is unknown, pressing "Thanh toán" again can charge twice | WEB | **Fixed** in #125: the key belongs to the draft (`useDraftMutation`); the same draft retried after an unknown outcome resends it, a changed draft or a success mints a new one |
 | POS-G15 | Link-down declines share one RRN within an hour | A decline that was never sent uses STAN `000000`, so every link-down decline in the same hour gets RRN `YDDDHH000000` (`purchase.declinedTransaction`, `advtxn.noSTAN`); `GET /v1/transactions/{rrn}` then returns whichever row it finds first | GW | Reserve a real STAN (or a separate local sequence) for link-down declines |
 | POS-G16 | No sweeper for orphan SENT / TIMED_OUT rows | If the gateway dies between the send and recording the outcome, the row stays SENT (or TIMED_OUT with nothing queued) forever; nothing reverses it on restart. The same short windows exist after commit: between the send and the status update (#114 review N1), and between the status update and the SAF insert (N2); a crash in either leaves the row unreversed | GW | A startup/periodic sweeper that queues a 0420 (or a 0221 repeat for a completion) for rows older than the send timeout |
@@ -333,3 +337,4 @@ Payload bounds: requests < 300 bytes; `Transaction` ≈ 450 bytes; `CardDetail` 
 | 1.1 | 2026-09-25 | POS-G4, POS-G5 and POS-G9 fixed (#114); POS-G15 to POS-G18 recorded from the #114 security review |
 | 1.2 | 2026-09-25 | POS-G17 (refunds credit) marked Fixed and POS-G19 (reversals never restored balances) added as Fixed, both in #119; balance inquiry approved with DE 54 (POS-G6 note); rulings R-1 (reversals always post, may overdraw), R-2 (duplicate inquiry replays DE 54), R-3 (reversal frees velocity). |
 | 1.3 | 2026-09-26 | POS-G14 fixed, POS-G13 mock parity (#125) |
+| 1.4 | 2026-09-25 | POS-G1, POS-G2, POS-G3, POS-G7, POS-G8 and POS-G13 fixed (#117) |

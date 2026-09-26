@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/mcn/gateway-go/internal/journey"
+	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
@@ -37,12 +37,16 @@ func MountTransactionsQuery(r chi.Router, reader TranLogReader, reversals Revers
 
 func handleListTransactions(reader TranLogReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		filter, err := parseTransactionFilter(req)
-		if err != nil {
-			problem(w, http.StatusBadRequest, "invalid-request", err.Error())
+		filter, errs := parseTransactionFilter(req)
+		if len(errs) > 0 {
+			validationProblem(w, errs)
 			return
 		}
 		page, nextCursor, err := reader.List(req.Context(), filter)
+		if errors.Is(err, store.ErrInvalidCursor) {
+			validationProblem(w, fieldErrors{{Field: "cursor", Message: "is not a cursor this API returned"}})
+			return
+		}
 		if err != nil {
 			problem(w, http.StatusInternalServerError, "transactions-read-failed", err.Error())
 			return
@@ -60,7 +64,11 @@ func handleListTransactions(reader TranLogReader) http.HandlerFunc {
 
 func handleGetTransaction(reader TranLogReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		row, err := reader.Get(req.Context(), chi.URLParam(req, "rrn"))
+		rrn, ok := pathRRN(w, req)
+		if !ok {
+			return
+		}
+		row, err := reader.Get(req.Context(), rrn)
 		if errors.Is(err, store.ErrNotFound) {
 			problem(w, http.StatusNotFound, "unknown-transaction", "no such transaction")
 			return
@@ -75,7 +83,11 @@ func handleGetTransaction(reader TranLogReader) http.HandlerFunc {
 
 func handleGetTransactionJourney(reader TranLogReader, reversals ReversalReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		row, err := reader.Get(req.Context(), chi.URLParam(req, "rrn"))
+		rrn, ok := pathRRN(w, req)
+		if !ok {
+			return
+		}
+		row, err := reader.Get(req.Context(), rrn)
 		if errors.Is(err, store.ErrNotFound) {
 			problem(w, http.StatusNotFound, "unknown-transaction", "no such transaction")
 			return
@@ -111,69 +123,33 @@ func findReversal(ctx context.Context, reversals ReversalReader, tranID int64, h
 	return nil, nil
 }
 
-func parseTransactionFilter(req *http.Request) (store.TransactionFilter, error) {
-	q := req.URL.Query()
-	filter := store.TransactionFilter{Cursor: q.Get("cursor")}
-
-	if v := q.Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return store.TransactionFilter{}, errors.New("invalid limit")
-		}
-		filter.Limit = n
-	}
-	if v := q.Get("status"); v != "" {
-		filter.Status = &v
-	}
-	if v := q.Get("rc"); v != "" {
-		filter.RC = &v
-	}
-	if v := q.Get("last4"); v != "" {
-		filter.Last4 = &v
-	}
-	if v := q.Get("from"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			return store.TransactionFilter{}, errors.New("invalid from")
-		}
-		filter.From = &t
-	}
-	if v := q.Get("to"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
-		if err != nil {
-			return store.TransactionFilter{}, errors.New("invalid to")
-		}
-		filter.To = &t
-	}
-	return filter, nil
-}
-
 // transactionSummaryDTO mirrors contracts/openapi.yaml's TransactionSummary schema.
 type transactionSummaryDTO struct {
-	RRN           string    `json:"rrn"`
-	STAN          string    `json:"stan,omitempty"`
-	Type          string    `json:"type"`
-	Status        string    `json:"status"`
-	ResponseCode  *string   `json:"responseCode"`
-	ResponseLabel *string   `json:"responseLabel"`
-	Amount        moneyDTO  `json:"amount"`
-	MaskedPAN     string    `json:"maskedPan"`
-	TerminalID    string    `json:"terminalId"`
-	MerchantName  string    `json:"merchantName"`
-	LatencyMs     *int      `json:"latencyMs"`
-	CreatedAt     time.Time `json:"createdAt"`
+	RRN            string    `json:"rrn"`
+	STAN           string    `json:"stan,omitempty"`
+	Type           string    `json:"type"`
+	Status         string    `json:"status"`
+	ResponseCode   *string   `json:"responseCode"`
+	ResponseLabel  *string   `json:"responseLabel"`
+	Amount         moneyDTO  `json:"amount"`
+	MaskedPAN      string    `json:"maskedPan"`
+	TerminalID     string    `json:"terminalId"`
+	MerchantName   string    `json:"merchantName"`
+	LatencyMs      *int      `json:"latencyMs"`
+	CreatedAt      time.Time `json:"createdAt"`
+	ReversalReason *string   `json:"reversalReason"`
 }
 
 // transactionDTO mirrors contracts/openapi.yaml's Transaction schema (TransactionSummary + detail
 // fields).
 type transactionDTO struct {
 	transactionSummaryDTO
-	AuthCode       *string `json:"authCode"`
-	ApprovedAmount *string `json:"approvedAmount"`
-	Balance        *string `json:"balance"`
-	BusinessDate   string  `json:"businessDate"`
-	OriginalRRN    *string `json:"originalRrn"`
-	TraceID        string  `json:"traceId"`
+	AuthCode       *string   `json:"authCode"`
+	ApprovedAmount *moneyDTO `json:"approvedAmount"`
+	Balance        *moneyDTO `json:"balance"`
+	BusinessDate   string    `json:"businessDate"`
+	OriginalRRN    *string   `json:"originalRrn"`
+	TraceID        string    `json:"traceId,omitempty"`
 }
 
 type moneyDTO struct {
@@ -183,18 +159,19 @@ type moneyDTO struct {
 
 func toSummaryDTO(row store.TranLogRow) transactionSummaryDTO {
 	return transactionSummaryDTO{
-		RRN:           row.RRN,
-		STAN:          row.NetworkSTAN,
-		Type:          row.Type,
-		Status:        row.Status,
-		ResponseCode:  nullableString(row.ResponseCode),
-		ResponseLabel: responseLabel(row.ResponseCode),
-		Amount:        moneyDTO{Amount: row.Amount, Currency: row.Currency},
-		MaskedPAN:     row.MaskedPAN,
-		TerminalID:    row.TerminalID,
-		MerchantName:  row.MerchantName,
-		LatencyMs:     journey.LatencyMs(row),
-		CreatedAt:     row.CreatedAt,
+		RRN:            row.RRN,
+		STAN:           row.NetworkSTAN,
+		Type:           row.Type,
+		Status:         row.Status,
+		ResponseCode:   nullableString(row.ResponseCode),
+		ResponseLabel:  responseLabel(row.ResponseCode),
+		Amount:         moneyDTO{Amount: row.Amount, Currency: row.Currency},
+		MaskedPAN:      row.MaskedPAN,
+		TerminalID:     row.TerminalID,
+		MerchantName:   row.MerchantName,
+		LatencyMs:      journey.LatencyMs(row),
+		CreatedAt:      row.CreatedAt,
+		ReversalReason: nullableString(store.ReversalReasonOf(row.ReversalReasonCode)),
 	}
 }
 
@@ -202,12 +179,27 @@ func toTransactionDTO(row store.TranLogRow) transactionDTO {
 	return transactionDTO{
 		transactionSummaryDTO: toSummaryDTO(row),
 		AuthCode:              nullableString(row.AuthCode),
+		ApprovedAmount:        approvedAmountDTO(row),
+		Balance:               balanceDTO(row.Balance),
 		BusinessDate:          row.CreatedAt.Format("2006-01-02"),
-		// ponytail: tran_log has no trace_id column yet (docs/03 §10 describes joining traces by
-		// RRN in Tempo/Grafana, not a stored trace_id) - RRN doubles as the correlation id here
-		// until a future story adds real trace_id persistence.
-		TraceID: row.RRN,
+		OriginalRRN:           nullableString(row.OriginalRRN),
+		// Rows created before tran_log.trace_id existed have none; traceId is then omitted.
+		TraceID: row.TraceID,
 	}
+}
+
+func approvedAmountDTO(row store.TranLogRow) *moneyDTO {
+	if row.ApprovedAmount == nil {
+		return nil
+	}
+	return &moneyDTO{Amount: *row.ApprovedAmount, Currency: row.Currency}
+}
+
+func balanceDTO(balance *store.Money) *moneyDTO {
+	if balance == nil {
+		return nil
+	}
+	return &moneyDTO{Amount: balance.Amount, Currency: balance.Currency}
 }
 
 // journeyDTO mirrors contracts/openapi.yaml's Journey schema.
@@ -251,13 +243,7 @@ func toJourneyDTO(row store.TranLogRow, j journey.Journey) journeyDTO {
 	return journeyDTO{Transaction: toTransactionDTO(row), Steps: steps, Money: money}
 }
 
-func responseLabel(rc string) *string {
-	if rc == "" {
-		return nil
-	}
-	label := journey.EasyTextForRC(rc)
-	return &label
-}
+func responseLabel(rc string) *string { return purchase.ResponseLabel(rc) }
 
 func nullableString(s string) *string {
 	if s == "" {

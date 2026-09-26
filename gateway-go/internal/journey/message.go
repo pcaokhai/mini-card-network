@@ -47,6 +47,18 @@ var fieldSpecs = map[string]fieldSpec{
 
 type de struct{ no, value string }
 
+// typedMessage is newMessage for the transaction's own request or response: only the fields its
+// type sends.
+func (b builder) typedMessage(mti string, values ...de) *IsoMessage {
+	kept := values[:0:0]
+	for _, v := range values {
+		if b.carries(v.no) {
+			kept = append(kept, v)
+		}
+	}
+	return newMessage(mti, kept...)
+}
+
 // newMessage keeps only the fields that are stored; values arrive in DE order.
 func newMessage(mti string, values ...de) *IsoMessage {
 	fields := []IsoField{isoField(deMTI, mti)}
@@ -69,8 +81,8 @@ func (b builder) maskedPAN() de { return de{"2", obs.MaskPAN(b.txn.MaskedPAN)} }
 
 func (b builder) request() *IsoMessage {
 	t := b.txn
-	return newMessage(mtiRequest, b.maskedPAN(), de{"3", t.ProcessingCode}, de{"4", amount12(t.Amount)},
-		de{"7", b.requestDE7()}, de{"11", t.NetworkSTAN}, de{"22", t.POSEntryMode}, de{"37", t.RRN},
+	return b.typedMessage(b.requestMTI(), b.maskedPAN(), de{"3", t.ProcessingCode}, de{"4", amount12(t.Amount)},
+		de{"7", b.requestDE7()}, de{"11", t.NetworkSTAN}, de{"22", t.POSEntryMode}, de{"37", b.requestDE37()},
 		de{"41", t.TerminalID}, de{"42", t.MerchantID}, de{"49", t.Currency})
 }
 
@@ -81,8 +93,8 @@ func (b builder) response() *IsoMessage {
 	if t.ResponseCode == "00" || t.ResponseCode == "10" {
 		authCode = t.AuthCode
 	}
-	return newMessage("0210", b.maskedPAN(), de{"3", t.ProcessingCode}, de{"4", amount12(t.Amount)},
-		de{"7", b.requestDE7()}, de{"11", t.NetworkSTAN}, de{"37", t.RRN}, de{"38", authCode},
+	return b.typedMessage(b.responseMTI(), b.maskedPAN(), de{"3", t.ProcessingCode}, de{"4", amount12(t.Amount)},
+		de{"7", b.requestDE7()}, de{"11", t.NetworkSTAN}, de{"37", b.requestDE37()}, de{"38", authCode},
 		de{"39", t.ResponseCode}, de{"41", t.TerminalID}, de{"42", t.MerchantID}, de{"49", t.Currency})
 }
 
@@ -104,6 +116,15 @@ func (b builder) reversalAck() *IsoMessage {
 	f := b.rev.Fields
 	return newMessage("0430", b.maskedPAN(), de{"3", f[3]}, de{"4", f[4]}, de{"7", f[7]}, de{"11", f[11]},
 		de{"37", f[37]}, de{"39", "00"}, de{"41", f[41]}, de{"42", f[42]}, de{"49", f[49]})
+}
+
+// requestDE37 is the RRN the request carried: a completion's 0220 names its pre-authorization
+// (docs/03 C8).
+func (b builder) requestDE37() string {
+	if b.txn.Type == tranTypeCompletion && b.txn.OriginalRRN != "" {
+		return b.txn.OriginalRRN
+	}
+	return b.txn.RRN
 }
 
 func (b builder) requestDE7() string {

@@ -45,7 +45,7 @@ func TestPostPurchase_returns201WithTransaction__MCN_303_AC2(t *testing.T) {
 	MountPurchases(r, svc)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/purchases", bytes.NewBufferString(`{"terminalId":"00000042","cardToken":"tok_normal","entryMode":"CHIP_PIN","amount":{"amount":10000,"currency":"704"}}`))
-	req.Header.Set("Idempotency-Key", "k1")
+	req.Header.Set("Idempotency-Key", testIdemKey)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -57,7 +57,7 @@ func TestPostCancellation_requiresIdempotencyKey__MCN_401_AC5(t *testing.T) {
 	r := chi.NewRouter()
 	MountPurchases(r, &fakePurchaseService{})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/x/cancellations", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/626514000001/cancellations", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -69,8 +69,8 @@ func TestPostCancellation_returns202WithReversalPendingStatus__MCN_401_AC5(t *te
 	svc := &fakePurchaseService{cancelResult: purchase.Transaction{RRN: "x", Status: "REVERSAL_PENDING"}}
 	MountPurchases(r, svc)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/x/cancellations", nil)
-	req.Header.Set("Idempotency-Key", "cancel-1")
+	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/626514000001/cancellations", nil)
+	req.Header.Set("Idempotency-Key", testIdemKey)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 

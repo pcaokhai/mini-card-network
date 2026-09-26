@@ -63,7 +63,7 @@ This contract covers the six REST reads and the WebSocket feed the page consumes
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 4.1 | `GET /v1/metrics/overview` | gateway-go | KPIs, bars, decline reasons | on mount, then every 30 s | n/a | none | Real |
 | 4.2 | `GET /v1/transactions?limit=8` | gateway-go | Feed seed rows | once on mount | n/a | none | Real |
-| 4.3 | `WS /v1/stream` | gateway-go | Feed live rows (§5) | push | n/a | none | Real, with OVW-G3 and OVW-G9 |
+| 4.3 | `WS /v1/stream` | gateway-go | Feed live rows (§5) | push | n/a | none | Real, with OVW-G9 |
 | 4.4 | `GET /v1/network/links` | gateway-go | Header badge, health row 1 | every 5 s | n/a | none | Real |
 | 4.5 | `GET /v1/network/saf` | gateway-go | Health row 2 | every 5 s | n/a | none | Real |
 | 4.6 | `GET /v1/network/switch` | gateway-go | Health row 3 | every 5 s | n/a | none | dev:mock only; Planned MCN-802 (404 today) |
@@ -96,7 +96,7 @@ Every REST call is a `GET`, idempotent, and cached per query key by TanStack Que
   2. `approvalRate` = approved / (approved + declined) today; `0` when neither exists.
   3. `p50LatencyMs` / `p99LatencyMs` are percentiles of SENT → first terminal state (APPROVED, DECLINED, TIMED_OUT) today, in ms; `0` when there is no sample.
   4. `transactionsDeltaPct` compares today with the same elapsed window yesterday, as a fraction (`0.12` = +12 %). It is omitted when yesterday's window has no transactions; `0` never means "unknown".
-  5. `declineReasons[].share` values sum to 1. The provider returns every code, presentation-free. A declined row without an RC is counted under `responseCode: ""` with label `Declined`. This was observed on the local stack, from a COMPLETION declined without DE 39 (§9 OVW-G11).
+  5. `declineReasons[].share` values sum to 1. The provider returns every code, presentation-free. A declined row always carries an RC: a response without DE 39 is recorded as RC `30` (format error), and older rows with no RC are left out of `declineReasons`.
 - **Errors.**
 
 | HTTP status | Problem `type` | When | UI behaviour |
@@ -159,7 +159,7 @@ Every REST call is a `GET`, idempotent, and cached per query key by TanStack Que
 
 | HTTP status | Problem `type` | When | UI behaviour |
 | --- | --- | --- | --- |
-| 400 | `invalid-request` | `limit` not an integer | Feed shows `Chưa có giao dịch` until a WS event arrives |
+| 400 | `validation-error` | `limit` not an integer from 1 to 200, or another bad parameter | Feed shows `Chưa có giao dịch` until a WS event arrives |
 | 500 | `transactions-read-failed` | Database read failed | same |
 | 502 | `https://mcn.local/problems/upstream-unavailable` (BFF) | BFF can't reach the gateway | same |
 
@@ -301,7 +301,7 @@ Ordering and dedupe (UI side; the provider may rely on these):
 - On close, the socket reconnects with exponential backoff from 1 s up to 30 s. Events missed while disconnected are not replayed.
 
 Provider rules:
-1. Send `transaction.created` when a transaction reaches its first visible state, and `transaction.updated` on every later status change, including SAF-driven reversal completion. **Today the gateway sends only `transaction.created`, once, after the outcome (OVW-G3)**, so a reversal that completes later never updates on screen.
+1. Send `transaction.created` when a transaction reaches its first visible state, and `transaction.updated` on every later status change, including SAF-driven reversal completion. The gateway sends `transaction.created` once, after the outcome, and `transaction.updated` on a cancellation (REVERSAL_PENDING), a SAF acknowledgement (REVERSED) and a late response.
 2. `data` carries every required `TransactionSummary` field, and `responseCode` is set for APPROVED/DECLINED.
 3. The hub drops a message for a client whose 16-message buffer is full (`internal/ws/hub.go`), so a slow browser can miss rows.
 
@@ -341,7 +341,7 @@ Payload bounds: `throughput` always has 24 elements; `declineReasons` has at mos
 | --- | --- | --- | --- | --- |
 | OVW-G1 | `GET /v1/network/switch` not implemented | `curl :3000/api/v1/network/switch` → 404; no route in `gateway-go/internal/api` | GW | MCN-802 AC1, after MCN-801 (`feat/MCN-801-switch`, unmerged) |
 | OVW-G2 | ~~Throughput was 1-minute, sparse buckets over 30 minutes~~ | **Fixed**: 24 dense × 150 s buckets, `tps = count/150` (verified live) | GW | Done (MCN-002 seed work). Documenting the bucket size in the schema description is still open |
-| OVW-G3 | `transaction.updated` is never broadcast | Only `BroadcastTransaction("transaction.created", …)` in `internal/purchase/service.go` and `internal/advtxn/service.go`; the string `transaction.updated` appears nowhere in `gateway-go/internal` | GW | Broadcast on every status transition, including SAF reversal completion. (The REST side is fixed: an acknowledged 0420 moves `tran_log` from REVERSAL_PENDING to REVERSED) |
+| OVW-G3 | ~~`transaction.updated` is never broadcast~~ | **Fixed** (#117): `transaction.updated` on cancellation, late response and SAF acknowledgement (`reversalAckAnnouncer` → `purchase.Service.BroadcastUpdate`) | GW | Done |
 | OVW-G4 | ~~`key_store` empty until the first rotation, so a fresh stack had no ZAK and every purchase failed its MAC~~ | **Fixed**: startup registers `ZAK_HEX`/`ZPK_HEX` (verified live, §4.7) | GW | Done (MCN-002 seed work) |
 | OVW-G5 | The canvas folds the tail into "Lý do khác"; the UI lists every code | `DeclineReasonsBreakdown.tsx` sorts and renders all rows | WEB | **Fixed** in #125: the top four coded reasons, the rest folded client-side into "Lý do khác" |
 | OVW-G6 | ~~`TransactionSummary.latencyMs` always `null`~~ | **Fixed**: `toSummaryDTO` sets it from `journey.LatencyMs` (live values `8059`, `20`) | GW | Done (MCN-304 journey canvas) |
@@ -349,7 +349,7 @@ Payload bounds: `throughput` always has 24 elements; `declineReasons` has at mos
 | OVW-G8 | No loading or error state for the page | `OverviewScreen.tsx`: `if (!overviewQuery.data) return null;` | WEB | **Fixed** in #125: a loading skeleton and a problem banner |
 | OVW-G9 | The live feed's socket never connects on the BFF origin | `useWsEvents` falls back to `ws://{location.host}/v1/stream`; `curl :3000/v1/stream` → 404; `NEXT_PUBLIC_WS_URL` is set nowhere in the repo | WEB + PLAT | **Fixed** in #124 (documented): `web-next/.env.example` sets `NEXT_PUBLIC_WS_URL`; Route Handlers can't proxy the upgrade |
 | OVW-G10 | WS authentication differs from docs/04 §1 | The hub's `CheckOrigin` accepts every origin and reads no `token`; there is no `/api/stream-token` route under `web-next/src/app/api` | GW + WEB | Implement the token, or amend docs/04 through an ADR |
-| OVW-G11 | A declined row without an RC is counted under `responseCode: ""` | Live `declineReasons` holds `{"responseCode":"","label":"Declined"}`, from COMPLETION `626807000294` (DECLINED, `responseCode: null`) | GW | Fix the advanced-transaction mapping ([pos-page.md](pos-page.md) POS-G6): a DECLINED row always carries an RC |
+| OVW-G11 | ~~A declined row without an RC is counted under `responseCode: ""`~~ | **Fixed** (#117): `purchase.ResponseCodeOf` records a response without DE 39 as RC `30`; `overviewDeclineReasons` skips rows with no RC | GW | Done |
 | OVW-G12 | Gateway problem responses don't follow docs/04 §3 | `problem()` in `internal/api/lab.go` writes the bare slug as both `type` and `title`, with no `https://mcn.local/problems/` prefix, no `instance`, no `traceId`, and the raw Go error as `detail` | GW | One problem writer with the docs/04 shape; `internal` 500s carry only `traceId` |
 
 ### 9.1 Seed data check
@@ -386,7 +386,7 @@ Defects the seed exposed (all fixed):
 | Bars scaled to `max(1, peak)` and TPS rendered as a raw float | A flat chart at real (< 1 TPS) volume | WEB |
 | Mocks embedded full test PANs | PCI rule (root CLAUDE.md §6.2) broken in web source | WEB: last-4 only |
 
-Still open for this page: OVW-G1, G3, G5, G7 to G12. Also:
+Still open for this page: OVW-G1, G5, G7 to G10, G12. Also:
 - **R-12**: the gateway never forwards a PIN block, so RC 55 ("Sai mã PIN") can't be produced (`docs/09-risk-register.md`).
 - A REVERSED row shows its original approval's RC 00 ("Đã tự hủy · RC 00"). Showing the 0420's reason code (for example 17, customer cancellation) needs a new `TransactionSummary` field. That is a contract change, so it goes in its own contract PR.
 
@@ -397,3 +397,4 @@ Still open for this page: OVW-G1, G3, G5, G7 to G12. Also:
 | 1.0 | 2026-09-25 | First integration contract and seed-data check (#82) |
 | 2.0 | 2026-09-25 | Rewritten into the per-page template, with real examples from the local stack. G2, G4 and G6 marked fixed. Added G9–G12 (WS origin, WS authentication, empty-RC decline bucket, problem format) |
 | 2.1 | 2026-09-26 | OVW-G5, OVW-G8 fixed; OVW-G9 closed by #124; the date shown is `Overview.businessDate` (ADR-007) (#125) |
+| 2.2 | 2026-09-25 | OVW-G3 and OVW-G11 fixed (#117) |

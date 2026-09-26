@@ -318,7 +318,7 @@ The five known gateway texts (plan Ruling 7, `gatewayEventKey` in `src/component
 **Provider rules.**
 1. Returns the 50 newest `network_event` rows, `ORDER BY occurred_at DESC`. `nextCursor` is always `null`.
 2. `id` is the row's `BIGINT` as a decimal string.
-3. The late-response event is broadcast on WS only and **never persisted**, so it never appears in this list (NET-G5).
+3. The late-response event is persisted through `LinkRepository.RecordEvent` before it is broadcast, so it appears in this list.
 4. The gateway never emits severity `OK` or `ERROR` today.
 5. Client derivation: keep events on the viewer's **local** calendar day, sort newest first, cap at 30, show 5 with "Xem thêm {count} sự kiện". Empty: "Hôm nay chưa có sự kiện mạng nào."
 
@@ -444,7 +444,7 @@ Socket: `NEXT_PUBLIC_WS_URL` (set in the local `.env.local` to `ws://localhost:8
 | Event | `data` schema | Emitted by (real) | UI effect | Ordering / dedupe |
 | --- | --- | --- | --- | --- |
 | `link.status` | `Link` | `Supervisor.setStatus` on CONNECTED, SIGNED_ON and DOWN transitions | invalidates `["network","links"]` | none needed (refetch). Payload is partial: only `linkId`, `from`, `to`, `status` are real; `lastEchoAt`, `lastEchoOk`, `p99LatencyMs` are null and `inFlight` is 0 (NET-G4) |
-| `network.event` | `NetworkEvent` | `Supervisor.recordEvent` (4 texts); `purchase.Service.RecordLateResponse` (late 0210) | invalidates `["network","events"]` | none. Payload `id` is `"0"` and `occurredAt` is `0001-01-01T00:00:00Z` (not the stored row, NET-G4). A late-response event triggers a refetch that won't contain it (NET-G5) |
+| `network.event` | `NetworkEvent` | `Supervisor.recordEvent` (4 texts); `purchase.Service.RecordLateResponse` (late 0210) | invalidates `["network","events"]` | none. Payload `id` is `"0"` and `occurredAt` is `0001-01-01T00:00:00Z` (not the stored row, NET-G4). A late-response event is persisted first, so the refetch contains it |
 | `saf.changed` | `{ depth, deadCount }` | **never emitted** | would invalidate `["network","saf"]` | the 5 s poll is the only update path |
 | `switch.status` | `SwitchStatus` | **never emitted** (MCN-802) | would invalidate `["network","switch"]` | – |
 
@@ -493,7 +493,7 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | NET-G2 | MCN-204-AC2 says WS emits `link.status` and `network.event` "on every change". Echo results and manual sign-on/off emit nothing. docs/04 §5 lists "echo result" as a `link.status` trigger. | `internal/api/network.go` handlers; `supervisor.go` only broadcasts from `setStatus`/`recordEvent` | GW | **Fixed** in #121: echo, sign-on and sign-off each record a `network_event` and broadcast it with `link.status` |
 | NET-G3 | Sign-off leaves `link_state.status = SIGNED_ON` while the issuer holds the acquirer signed off. The UI shows healthy until a request returns RC 91. Sign-on doesn't write status either. | `supervisor.go:131` `TriggerSignOff` → `signOff` (no `setStatus`); R5.2 item 12 | GW | **Fixed** in #121: sign-off sets `CONNECTED` (the enum has no SIGNED_OFF; the connection stays up), sign-on and the re-sign-on after RC 91 set `SIGNED_ON` |
 | NET-G4 | WS payloads aren't the stored resources. `link.status` carries only endpoint and status (nulls elsewhere); `network.event` has `id: "0"` and a zero `occurredAt`. The page is unaffected (it only invalidates), but any consumer that reads `data` gets wrong values. | `supervisor.go:193`, `:201` | GW | **Fixed** in #121: `network.event` is the stored row (`RETURNING id, occurred_at`); `link.status` is the Link read back with live metrics |
-| NET-G5 | The late-response event is broadcast but never persisted, so it isn't in `GET /v1/network/events` and vanishes on the refetch the WS event triggers. | `internal/purchase/service.go:608` (no `RecordEvent`) | GW | Persist through `LinkRepository.RecordEvent` before broadcasting |
+| NET-G5 | ~~The late-response event is broadcast but never persisted, so it isn't in `GET /v1/network/events` and vanishes on the refetch the WS event triggers.~~ | **Fixed** (#117): `purchase.Service.RecordLateResponse` persists the event before broadcasting it | GW | Done |
 | NET-G6 | `GET /v1/network/switch` isn't built (404, plain text). The page polls it every 5 s, and each failure is retried 3 times. | curl `:8080/v1/network/switch` → 404; not mounted in `MountNetwork` | GW (MCN-802) + WEB | MCN-802; until then, `retry: false` on 404 in `useSwitchStatus` |
 | NET-G7 | `GET /v1/network/saf` is unbounded, and `depth` includes DEAD rows. The contract doesn't say whether it should. | `internal/store/safqueue.go:201` | GW + contracts | **Fixed** in #121: `depth` = PENDING + IN_FLIGHT (contract #111), `items` capped at 200, owed advices first |
 | NET-G8 | The WebSocket bypasses the BFF: it relies on the uncommitted `NEXT_PUBLIC_WS_URL`, and the same-origin fallback `/v1/stream` isn't served by Next. | `src/shared/ws/useWsEvents.ts`; `web-next/.env.local` | WEB | **Fixed** in #124 (documented): Route Handlers can't hold a WebSocket open, so `web-next/.env.example` documents `NEXT_PUBLIC_WS_URL` (with the BFF upstreams); a same-origin `/v1/stream` needs a reverse proxy |
@@ -520,3 +520,4 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | 1.3 | 2026-09-26 | NET-G8, NET-G10, NET-G11 fixed on the web side (#124) |
 | 1.4 | 2026-09-26 | NET-G15 web half fixed (#125) |
 | 1.5 | 2026-09-26 | NET-G19 (issuer 0430 unsigned) Fixed in #122; NET-G20 (gateway doesn't verify the 0430 MAC) added, open. |
+| 1.6 | 2026-09-26 | NET-G5 fixed (#117) |

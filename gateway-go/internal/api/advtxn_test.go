@@ -37,7 +37,7 @@ func TestPostPreAuthorizations_returns201__MCN_603_AC1(t *testing.T) {
 
 	body := []byte(`{"terminalId":"00000042","cardToken":"tok_normal","entryMode":"CHIP_PIN","amount":{"amount":1000,"currency":"704"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/pre-authorizations", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "11111111-1111-1111-1111-111111111111")
+	req.Header.Set("Idempotency-Key", testIdemKey)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -50,7 +50,7 @@ func TestPostCompletions_returns201__MCN_603_AC1(t *testing.T) {
 
 	body := []byte(`{"amount":{"amount":1000,"currency":"704"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/123456789012/completions", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "k1")
+	req.Header.Set("Idempotency-Key", testIdemKey)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -63,7 +63,7 @@ func TestPostRefunds_returns201__MCN_603_AC1(t *testing.T) {
 
 	body := []byte(`{"terminalId":"00000042","cardToken":"tok_normal","entryMode":"CHIP_PIN","amount":{"amount":1000,"currency":"704"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/refunds", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "k1")
+	req.Header.Set("Idempotency-Key", testIdemKey)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
@@ -87,7 +87,7 @@ func TestPostBalanceInquiries_returns201__MCN_603_AC1(t *testing.T) {
 
 	body := []byte(`{"terminalId":"00000042","cardToken":"tok_normal","entryMode":"CHIP_PIN"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/transactions/balance-inquiries", bytes.NewReader(body))
-	req.Header.Set("Idempotency-Key", "k1")
+	req.Header.Set("Idempotency-Key", testIdemKey)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 

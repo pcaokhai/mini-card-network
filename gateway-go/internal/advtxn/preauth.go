@@ -29,6 +29,10 @@ var ErrUnknownCardToken = purchase.ErrUnknownCardToken
 
 // CreatePreAuth sends a 0100 with DE 3=000000, DE 25=06 (pre-authorization hold, docs/03 §7.3).
 func (s *Service) CreatePreAuth(ctx context.Context, req PreAuthRequest, idempotencyKey string) (Transaction, error) {
+	return s.idempotent(ctx, routePreAuth, idempotencyKey, req, func(ctx context.Context) (Transaction, error) { return s.createPreAuth(ctx, req) })
+}
+
+func (s *Service) createPreAuth(ctx context.Context, req PreAuthRequest) (Transaction, error) {
 	card, ok := s.cardTokens.Resolve(req.CardToken)
 	if !ok {
 		return Transaction{}, ErrUnknownCardToken
@@ -59,6 +63,6 @@ func (s *Service) CreatePreAuth(ctx context.Context, req PreAuthRequest, idempot
 		mti: "0100", txnType: tranTypePreAuth, route: routePreAuth, fields: fields,
 		rrn: rrn, stan: stan, linkUp: linkUp, sentAt: now, maskedPAN: maskedPAN, terminalID: req.TerminalID,
 		cardToken: req.CardToken, posEntryMode: fields[22],
-		requestedAmt: req.Amount, idempotencyKey: idempotencyKey, requestHash: hashRequest(req),
+		requestedAmt: req.Amount,
 	})
 }

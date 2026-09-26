@@ -7,8 +7,10 @@ import (
 	"io"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/isonet"
@@ -51,6 +53,33 @@ type fakeTranLog struct {
 	failStatus  string // UpdateStatus to this status fails, leaving the row as it was
 }
 
+func (f *fakeTranLog) UpdateAmounts(_ context.Context, id int64, approved *int64, balance *store.Money) error {
+	f.rows[id-1].ApprovedAmount = approved
+	f.rows[id-1].Balance = balance
+	return nil
+}
+
+func (f *fakeTranLog) ReleaseCompletion(_ context.Context, preAuthRRN, completionRRN string) error {
+	for i := range f.rows {
+		if f.rows[i].RRN == preAuthRRN && f.rows[i].CompletedBy == completionRRN {
+			f.rows[i].CompletedBy = ""
+		}
+	}
+	return nil
+}
+
+// InsertCompletion claims the pre-auth as store.TranLogRepository does, in one step.
+func (f *fakeTranLog) InsertCompletion(ctx context.Context, row store.TranLogRow, preAuthRRN string) (int64, error) {
+	for i := range f.rows {
+		pre := &f.rows[i]
+		if pre.RRN == preAuthRRN && pre.Type == tranTypePreAuth && pre.Status == statusApproved && pre.CompletedBy == "" {
+			pre.CompletedBy = row.RRN
+			return f.Insert(ctx, row)
+		}
+	}
+	return 0, store.ErrNotCompletable
+}
+
 func (f *fakeTranLog) RecordStateTransition(_ context.Context, _ int64, from, to string) error {
 	f.transitions = append(f.transitions, from+"->"+to)
 	return nil
@@ -80,28 +109,103 @@ func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, response
 	return nil
 }
 
+// fakeIdempotency mirrors store.IdempotencyRepository's reserve/store/release contract,
+// including its reservation tokens.
 type fakeIdempotency struct {
-	stored   map[string]store.StoredResponse
-	storeCtx context.Context // the context the last Store ran on
+	stored    map[string]store.StoredResponse
+	storeCtx  context.Context // the context the last Store ran on
+	hashes    map[string]string
+	pending   map[string]bool
+	released  []string
+	rrns      map[string]string    // AttachRRN, by key+route
+	reserved  map[string]time.Time // when each pending key was reserved
+	tokens    map[string]string    // the token holding each pending key
+	issued    int
+	attachErr error
+	// reclaimOnAttach makes another request reclaim the key just before AttachRRN, as when the
+	// holder was slow, not dead.
+	reclaimOnAttach bool
 }
 
-func (f *fakeIdempotency) Find(_ context.Context, key, route string) (*store.StoredResponse, error) {
-	stored, ok := f.stored[key+route]
-	if !ok {
-		return nil, nil
+func (f *fakeIdempotency) init() {
+	if f.hashes == nil {
+		f.stored, f.hashes, f.pending = map[string]store.StoredResponse{}, map[string]string{}, map[string]bool{}
+		f.rrns, f.reserved, f.tokens = map[string]string{}, map[string]time.Time{}, map[string]string{}
 	}
-	return &stored, nil
 }
 
-func (f *fakeIdempotency) Store(ctx context.Context, key, route, _ string, status int, body []byte) error {
+func (f *fakeIdempotency) newToken(k string) string {
+	f.issued++
+	f.tokens[k] = fmt.Sprintf("token-%d", f.issued)
+	return f.tokens[k]
+}
+
+// pendAt makes key a reservation made at reservedAt that sent rrn, as a crashed request leaves it.
+func (f *fakeIdempotency) pendAt(key, route, hash, rrn string, reservedAt time.Time) {
+	_, _, _ = f.Reserve(context.Background(), key, route, hash)
+	k := key + route
+	f.rrns[k], f.reserved[k] = rrn, reservedAt
+}
+
+func (f *fakeIdempotency) Reclaim(_ context.Context, key, route, hash string, staleAfter time.Duration) (string, error) {
+	k := key + route
+	if !f.pending[k] || f.hashes[k] != hash || f.rrns[k] != "" || time.Since(f.reserved[k]) < staleAfter {
+		return "", nil
+	}
+	f.reserved[k] = time.Now()
+	return f.newToken(k), nil
+}
+
+func (f *fakeIdempotency) AttachRRN(_ context.Context, key, route, token, rrn string) error {
+	if f.attachErr != nil {
+		return f.attachErr
+	}
+	k := key + route
+	if f.reclaimOnAttach {
+		f.newToken(k)
+	}
+	if f.tokens[k] != token {
+		return store.ErrReservationLost
+	}
+	f.rrns[k] = rrn
+	return nil
+}
+
+func (f *fakeIdempotency) Reserve(_ context.Context, key, route, hash string) (*store.StoredResponse, string, error) {
+	f.init()
+	k := key + route
+	if h, ok := f.hashes[k]; ok {
+		switch {
+		case h != hash:
+			return nil, "", store.ErrIdempotencyKeyMismatch
+		case f.pending[k]:
+			return nil, "", &store.InProgressError{RRN: f.rrns[k], ReservedAt: f.reserved[k]}
+		}
+		stored := f.stored[k]
+		return &stored, "", nil
+	}
+	f.hashes[k], f.pending[k], f.reserved[k] = hash, true, time.Now()
+	return nil, f.newToken(k), nil
+}
+
+func (f *fakeIdempotency) Store(ctx context.Context, key, route, hash string, status int, body []byte) error {
 	f.storeCtx = ctx
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if f.stored == nil {
-		f.stored = map[string]store.StoredResponse{}
+	k := key + route
+	f.stored[k], f.hashes[k] = store.StoredResponse{Status: status, Body: body}, hash
+	delete(f.pending, k)
+	return nil
+}
+
+func (f *fakeIdempotency) Release(_ context.Context, key, route, token string) error {
+	k := key + route
+	if f.pending[k] && f.tokens[k] == token {
+		delete(f.pending, k)
+		delete(f.hashes, k)
+		f.released = append(f.released, key)
 	}
-	f.stored[key+route] = store.StoredResponse{Status: status, Body: body}
 	return nil
 }
 
@@ -205,7 +309,7 @@ func TestCreatePreAuth_sendsMTI0100WithDE25_06__MCN_603_AC1(t *testing.T) {
 func TestCreateCompletion_sendsMTI0220ReferencingOriginalRRN__MCN_603_AC1(t *testing.T) {
 	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
 	svc, tranLog, _, _ := newTestService(mux)
-	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "123456789012", Type: tranTypePreAuth, TerminalID: "00000042", MaskedPAN: "970436******4417"})
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "123456789012", Type: tranTypePreAuth, Status: statusApproved, Amount: 10000, TerminalID: "00000042", MaskedPAN: "970436******4417"})
 
 	txn, err := svc.CreateCompletion(context.Background(), "123456789012", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "idem-completion-1")
 
@@ -304,7 +408,7 @@ func TestCreateRefund_unknownTerminalSendsNothing__MCN_002(t *testing.T) {
 func TestCreateCompletion_inheritsPreAuthsTerminalAndMerchant__MCN_002(t *testing.T) {
 	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
 	svc, tranLog, _, _ := newTestService(mux)
-	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, TerminalID: "00000047", MaskedPAN: "970436******5540"})
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, Status: statusApproved, Amount: 10000, TerminalID: "00000047", MaskedPAN: "970436******5540"})
 
 	txn, err := svc.CreateCompletion(context.Background(), "626514000300", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "idem-completion-merchant")
 
@@ -331,7 +435,7 @@ func TestCreateCompletion_unknownPreAuthSendsNothing__MCN_002(t *testing.T) {
 // sendOneOfEach runs every advanced flow once, with a PREAUTH row for the completion to reference.
 func sendOneOfEach(t *testing.T, svc *Service, tranLog *fakeTranLog, key string) []Transaction {
 	t.Helper()
-	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, Status: "APPROVED", TerminalID: "00000042", MaskedPAN: "970436******4417", CardToken: testCardToken, POSEntryMode: "051"})
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, Status: "APPROVED", Amount: 10000, TerminalID: "00000042", MaskedPAN: "970436******4417", CardToken: testCardToken, POSEntryMode: "051"})
 	ctx := context.Background()
 	var txns []Transaction
 	preAuth, err := svc.CreatePreAuth(ctx, samplePreAuthRequest(), key+"-preauth")
@@ -431,7 +535,7 @@ func TestSend_badIncomingMACDeclinesRc96AndQueuesReasonSixReversal__POS_G5(t *te
 
 func TestSend_badMACOnACompletionRepeatsTheAdvice__POS_G5(t *testing.T) {
 	svc, tranLog, _, _, reversal := newTestServiceWithReversal(&fakeMux{response: map[int]string{39: "00", 64: badMACHex}})
-	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, Status: statusApproved, TerminalID: "00000042", CardToken: testCardToken})
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000300", Type: tranTypePreAuth, Status: statusApproved, Amount: 10000, TerminalID: "00000042", CardToken: testCardToken})
 
 	txn, err := svc.CreateCompletion(context.Background(), "626514000300", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "idem-completion-mac")
 
@@ -481,7 +585,7 @@ func TestSend_reversalIsQueuedFromTheRowsStateWhenTheUpdateFails__POS_G4(t *test
 
 			_, err := svc.CreatePreAuth(context.Background(), samplePreAuthRequest(), "idem-status")
 
-			require.Equal(t, tc.fail != "", err != nil, "a failed update is still reported")
+			require.NoError(t, err, "a failure after the send is answered from tran_log (S1)")
 			require.Equal(t, []string{"68"}, reversal.reasons)
 			require.Equal(t, tc.want, reversal.queued[0].Status, "Queue refuses any state but the one the row holds")
 		})
@@ -512,3 +616,193 @@ func TestResponseMTI(t *testing.T) {
 
 // badMACHex never matches the fake HSM's MAC.
 const badMACHex = "FFFFFFFFFFFFFFFF"
+
+func TestCreatePreAuth_replayNeverAllocatesASTAN__POS_G3(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, _, _, _ := newTestService(mux)
+	_, err := svc.CreatePreAuth(context.Background(), samplePreAuthRequest(), "key-replay")
+	require.NoError(t, err)
+
+	_, err = svc.CreatePreAuth(context.Background(), samplePreAuthRequest(), "key-replay")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, mux.stanCounter)
+}
+
+func TestCreateRefund_sameKeyDifferentRequestIsAMismatch__POS_G3(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, _, _, _ := newTestService(mux)
+	_, err := svc.CreateRefund(context.Background(), sampleRefundRequest(), "key-refund")
+	require.NoError(t, err)
+
+	other := sampleRefundRequest()
+	other.Amount.Amount = 1
+	_, err = svc.CreateRefund(context.Background(), other, "key-refund")
+
+	require.ErrorIs(t, err, store.ErrIdempotencyKeyMismatch)
+	require.Equal(t, 1, mux.stanCounter)
+}
+
+func TestCreateBalanceInquiry_amountCarriesTheCardCurrency__POS_G7(t *testing.T) {
+	svc, tranLog, _, _ := newTestService(&fakeMux{response: map[int]string{39: "00", 64: stdMACHex, 54: "704C000000012345"}})
+
+	txn, err := svc.CreateBalanceInquiry(context.Background(), sampleBalanceRequest(), "key-balance")
+
+	require.NoError(t, err)
+	require.Equal(t, Money{Amount: 0, Currency: "704"}, txn.Amount)
+	require.Equal(t, "704", tranLog.rows[0].Currency)
+	require.Equal(t, &store.Money{Amount: 12345, Currency: "704"}, tranLog.rows[0].Balance, "JRN-G3")
+}
+
+func TestCreateCompletion_requiresAnApprovedPreAuth__POS_G13(t *testing.T) {
+	for name, original := range map[string]store.TranLogRow{
+		"a purchase":           {RRN: "626514000301", Type: "PURCHASE", Status: statusApproved, TerminalID: "00000042"},
+		"a declined pre-auth":  {RRN: "626514000301", Type: tranTypePreAuth, Status: statusDeclined, TerminalID: "00000042"},
+		"a reversing pre-auth": {RRN: "626514000301", Type: tranTypePreAuth, Status: statusReversalPending, TerminalID: "00000042"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+			svc, tranLog, idem, _ := newTestService(mux)
+			tranLog.rows = append(tranLog.rows, original)
+
+			_, err := svc.CreateCompletion(context.Background(), "626514000301", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "key-completion")
+
+			require.ErrorIs(t, err, ErrNotCompletable)
+			require.Nil(t, mux.lastFields)
+			require.Equal(t, []string{"key-completion"}, idem.released)
+		})
+	}
+}
+
+func TestCreateCompletion_persistsTheOriginalRRNAndApprovedAmount__JRN_G3(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "10", 4: "000000004000", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000302", Type: tranTypePreAuth, Status: statusApproved, Amount: 10000, TerminalID: "00000042", CardToken: testCardToken})
+
+	txn, err := svc.CreateCompletion(tracedContext(), "626514000302", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "key-completion-10")
+
+	require.NoError(t, err)
+	row := tranLog.rows[1]
+	require.Equal(t, "626514000302", row.OriginalRRN)
+	require.Equal(t, int64(4000), *row.ApprovedAmount)
+	require.Equal(t, testTraceID, row.TraceID)
+	require.Equal(t, testTraceID, txn.TraceID, "POS-G8")
+	require.NotNil(t, txn.ResponseLabel, "POS-G8")
+	require.NotNil(t, txn.LatencyMs, "POS-G8")
+}
+
+func TestSend_responseWithoutRCIsDeclinedFormatError__OVW_G11(t *testing.T) {
+	svc, tranLog, _, _ := newTestService(&fakeMux{response: map[int]string{64: stdMACHex}})
+
+	txn, err := svc.CreateRefund(context.Background(), sampleRefundRequest(), "key-no-rc")
+
+	require.NoError(t, err)
+	require.Equal(t, statusDeclined, txn.Status)
+	require.Equal(t, "30", txn.ResponseCode)
+	require.Equal(t, "30", tranLog.rows[0].ResponseCode)
+}
+
+const testTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+
+func tracedContext() context.Context {
+	traceID, _ := trace.TraceIDFromHex(testTraceID)
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	return trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID}))
+}
+
+func approvedPreAuth(rrn string) store.TranLogRow {
+	return store.TranLogRow{RRN: rrn, Type: tranTypePreAuth, Status: statusApproved, Amount: 10000, Currency: "704", TerminalID: "00000042", CardToken: testCardToken}
+}
+
+func TestCreateCompletion_aPreAuthIsCompletedOnce__S2(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, approvedPreAuth("626514000950"))
+	completion := CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}
+
+	_, err := svc.CreateCompletion(context.Background(), "626514000950", completion, "key-complete-1")
+	require.NoError(t, err)
+	mux.lastFields = nil
+	_, err = svc.CreateCompletion(context.Background(), "626514000950", completion, "key-complete-2")
+
+	require.ErrorIs(t, err, ErrNotCompletable)
+	require.Nil(t, mux.lastFields, "the second completion is never sent")
+	require.Len(t, tranLog.rows, 2, "and never logged")
+}
+
+func TestCreateCompletion_cannotExceedTheHold__S2(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, approvedPreAuth("626514000951"))
+
+	_, err := svc.CreateCompletion(context.Background(), "626514000951", CompletionRequest{Amount: Money{Amount: 10001, Currency: "704"}}, "key-over-hold")
+
+	require.ErrorIs(t, err, ErrExceedsHold)
+	require.Nil(t, mux.lastFields)
+}
+
+func TestCreateRefund_aRetryOfAStaleKeyAnswersFromTheTransaction__S1(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, idem, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, store.TranLogRow{RRN: "626514000952", Type: tranTypeRefund, Status: statusApproved, ResponseCode: "00", Amount: 10000, Currency: "704"})
+	idem.pendAt("key-crashed", routeRefund, hashRequest(sampleRefundRequest()), "626514000952", time.Now().Add(-2*time.Minute))
+
+	txn, err := svc.CreateRefund(context.Background(), sampleRefundRequest(), "key-crashed")
+
+	require.NoError(t, err)
+	require.Equal(t, statusApproved, txn.Status)
+	require.Equal(t, "626514000952", txn.RRN)
+	require.Zero(t, mux.stanCounter, "never resent")
+}
+
+func TestCreateCompletion_aPreSendFailureReleasesTheClaim__S2(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, approvedPreAuth("626514000970"))
+	tranLog.failStatus = statusSent
+	completion := CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}
+
+	_, err := svc.CreateCompletion(context.Background(), "626514000970", completion, "key-fails-before-send")
+	require.Error(t, err)
+	require.Nil(t, mux.lastFields, "nothing was sent")
+	require.Empty(t, tranLog.rows[0].CompletedBy, "the hold is free again")
+
+	tranLog.failStatus = ""
+	txn, err := svc.CreateCompletion(context.Background(), "626514000970", completion, "key-fails-before-send")
+	require.NoError(t, err, "the retry completes instead of a 409 forever")
+	require.Equal(t, statusApproved, txn.Status)
+}
+
+func TestCreateCompletion_aDeclineFreesThePreAuth__S2(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "05", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	tranLog.rows = append(tranLog.rows, approvedPreAuth("626514000971"))
+
+	txn, err := svc.CreateCompletion(context.Background(), "626514000971", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "key-declined")
+
+	require.NoError(t, err)
+	require.Equal(t, statusDeclined, txn.Status)
+	require.Empty(t, tranLog.rows[0].CompletedBy, "a declined completion consumed nothing")
+}
+
+func TestCreateCompletion_anUnknownOutcomeKeepsTheClaim__S2(t *testing.T) {
+	svc, tranLog, _, _ := newTestService(&fakeMux{err: context.DeadlineExceeded})
+	tranLog.rows = append(tranLog.rows, approvedPreAuth("626514000972"))
+
+	_, err := svc.CreateCompletion(context.Background(), "626514000972", CompletionRequest{Amount: Money{Amount: 5000, Currency: "704"}}, "key-unknown")
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tranLog.rows[0].CompletedBy, "the 0220 is repeated through SAF, so the hold stays taken")
+}
+
+func TestSend_aPreSendFailureLeavesNoSentRow__N2(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, idem, _ := newTestService(mux)
+	idem.attachErr = errors.New("db down")
+
+	_, err := svc.CreateRefund(context.Background(), sampleRefundRequest(), "key-attach-fails")
+
+	require.Error(t, err)
+	require.Nil(t, mux.lastFields, "nothing was sent")
+	require.NotEqual(t, statusSent, tranLog.rows[0].Status, "a SENT row would be swept into a 0420 for a request that never left")
+}

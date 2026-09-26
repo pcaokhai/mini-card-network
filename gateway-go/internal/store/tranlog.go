@@ -45,6 +45,21 @@ type TranLogRow struct {
 	SentAt         *time.Time // the moment DE 7 was built from
 	RespondedAt    *time.Time // set by UpdateStatus; the issuer's answer once the status is final
 	CardToken      string     // simulator token, never the PAN
+	// Detail the Transaction resource reports (JRN-G3, POS-G8).
+	ApprovedAmount *int64 // partial approval (RC 10): DE 4 of the response
+	Balance        *Money // balance inquiry: DE 54 of the response
+	OriginalRRN    string // completion: the pre-authorization it completes
+	TraceID        string // W3C trace id of the request that created the row
+	// ReversalReasonCode is DE 39 of the 0420 queued for this row, empty when none was.
+	ReversalReasonCode string
+	// CompletedBy is the RRN of the completion that consumed this pre-authorization.
+	CompletedBy string
+}
+
+// Money is an amount in integer minor units and its ISO 4217 numeric currency.
+type Money struct {
+	Amount   int64
+	Currency string
 }
 
 // TransactionFilter narrows TranLogRepository.List. Nil pointer fields mean "no filter".
@@ -54,11 +69,35 @@ type TransactionFilter struct {
 	Last4  *string
 	From   *time.Time
 	To     *time.Time
-	Cursor string
-	Limit  int
+	// ReversalReason is one of the Reversal* values.
+	ReversalReason *string
+	Cursor         string
+	Limit          int
 }
 
 const defaultTransactionsLimit = 50
+
+// Reversal reasons (contracts/openapi.yaml ReversalReason), from DE 39 of the 0420 (docs/03 §7.3).
+const (
+	ReversalCustomerCancellation = "CUSTOMER_CANCELLATION"
+	ReversalTimeout              = "TIMEOUT"
+	ReversalMACFailure           = "MAC_FAILURE"
+	ReversalSendFailure          = "SEND_FAILURE"
+)
+
+var reversalReasonByCode = map[string]string{"17": ReversalCustomerCancellation, "68": ReversalTimeout, "06": ReversalMACFailure}
+
+// ReversalReasonOf names a 0420's DE 39 reason code; empty when no reversal was queued. A code
+// other than 17, 68 and 06 is a SEND_FAILURE.
+func ReversalReasonOf(code string) string {
+	if code == "" {
+		return ""
+	}
+	if reason, ok := reversalReasonByCode[code]; ok {
+		return reason
+	}
+	return ReversalSendFailure
+}
 
 // StateTransition is one tran_state_history row.
 type StateTransition struct {
@@ -73,17 +112,57 @@ type TranLogRepository struct{ pool *Pool }
 // NewTranLogRepository builds a TranLogRepository backed by pool.
 func NewTranLogRepository(pool *Pool) *TranLogRepository { return &TranLogRepository{pool: pool} }
 
+// ErrNotCompletable means a completion names a transaction that is not an approved
+// pre-authorization, or one another completion already consumed.
+var ErrNotCompletable = errors.New("only an approved, uncompleted pre-authorization can be completed")
+
 // Insert records a new tran_log row and returns its id.
 func (r *TranLogRepository) Insert(ctx context.Context, row TranLogRow) (int64, error) {
+	return insertTranLog(ctx, r.pool, row)
+}
+
+// InsertCompletion records completion and claims the pre-authorization preAuthRRN for it in one
+// DB transaction, so a pre-auth is completed at most once even under concurrent requests. A
+// pre-auth that isn't APPROVED, or was already completed, is ErrNotCompletable and nothing is
+// recorded.
+func (r *TranLogRepository) InsertCompletion(ctx context.Context, completion TranLogRow, preAuthRRN string) (int64, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	claimed, err := tx.Exec(ctx,
+		`UPDATE tran_log SET completed_by = $2
+		 WHERE rrn = $1 AND tran_type = 'PREAUTH' AND state = 'APPROVED' AND completed_by IS NULL`,
+		preAuthRRN, completion.RRN)
+	if err != nil {
+		return 0, err
+	}
+	if claimed.RowsAffected() == 0 {
+		return 0, fmt.Errorf("complete %s: %w", preAuthRRN, ErrNotCompletable)
+	}
+	id, err := insertTranLog(ctx, tx, completion)
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit(ctx)
+}
+
+// rowQuerier is what insertTranLog needs: a pool or a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func insertTranLog(ctx context.Context, q rowQuerier, row TranLogRow) (int64, error) {
 	var id int64
-	err := r.pool.QueryRow(ctx,
+	err := q.QueryRow(ctx,
 		`INSERT INTO tran_log (business_date, client_request_id, tran_type, tid, mid, network_stan, rrn, masked_pan, amount, currency, state, response_code, auth_code,
-		                       processing_code, pos_entry_mode, sent_at, card_token, mti)
+		                       processing_code, pos_entry_mode, sent_at, card_token, mti, original_rrn, trace_id)
 		 VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''),
-		         NULLIF($13, ''), NULLIF($14, ''), $15, NULLIF($16, ''), NULLIF($17, ''))
+		         NULLIF($13, ''), NULLIF($14, ''), $15, NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''))
 		 RETURNING id`,
 		row.RRN, row.Type, row.TerminalID, row.MerchantID, row.NetworkSTAN, row.RRN, row.MaskedPAN, row.Amount, row.Currency, row.Status, row.ResponseCode, row.AuthCode,
-		row.ProcessingCode, row.POSEntryMode, row.SentAt, row.CardToken, row.MTI,
+		row.ProcessingCode, row.POSEntryMode, row.SentAt, row.CardToken, row.MTI, row.OriginalRRN, row.TraceID,
 	).Scan(&id)
 	return id, err
 }
@@ -95,6 +174,20 @@ func (r *TranLogRepository) UpdateStatus(ctx context.Context, id int64, status, 
 	_, err := r.pool.Exec(ctx,
 		`UPDATE tran_log SET state = $2, response_code = NULLIF($3, ''), auth_code = NULLIF($4, ''), responded_at = now() WHERE id = $1`,
 		id, status, responseCode, authCode)
+	return err
+}
+
+// UpdateAmounts records what an issuer response reported beyond its RC: a partial approval's
+// approved amount and a balance inquiry's balance (nil when the response carried none).
+func (r *TranLogRepository) UpdateAmounts(ctx context.Context, id int64, approvedAmount *int64, balance *Money) error {
+	var balanceAmount *int64
+	var balanceCurrency *string
+	if balance != nil {
+		balanceAmount, balanceCurrency = &balance.Amount, &balance.Currency
+	}
+	_, err := r.pool.Exec(ctx,
+		`UPDATE tran_log SET approved_amount = $2, balance_amount = $3, balance_currency = $4 WHERE id = $1`,
+		id, approvedAmount, balanceAmount, balanceCurrency)
 	return err
 }
 
@@ -137,20 +230,37 @@ func (r *TranLogRepository) ListStateHistory(ctx context.Context, id int64) ([]S
 	return history, rows.Err()
 }
 
-const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at, coalesce(t.network_stan, ''), coalesce(t.processing_code, ''), coalesce(t.pos_entry_mode, ''), t.sent_at, coalesce(t.card_token, ''), t.responded_at, coalesce(t.mti, '')`
+const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at, coalesce(t.network_stan, ''), coalesce(t.processing_code, ''), coalesce(t.pos_entry_mode, ''), t.sent_at, coalesce(t.card_token, ''), t.responded_at, coalesce(t.mti, ''),
+	t.approved_amount, t.balance_amount, coalesce(t.balance_currency, ''), coalesce(t.original_rrn, ''), coalesce(t.trace_id, ''), coalesce(t.reversal_reason, ''), coalesce(t.completed_by, '')`
 
 // Get reads the tran_log row for the given RRN.
 func (r *TranLogRepository) Get(ctx context.Context, rrn string) (TranLogRow, error) {
-	var row TranLogRow
-	err := r.pool.QueryRow(ctx,
-		`SELECT `+tranLogSelectColumns+` FROM tran_log t JOIN merchant m ON m.mid = t.mid WHERE t.rrn = $1`, rrn,
-	).Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
-		&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken, &row.RespondedAt, &row.MTI)
+	row, err := scanTranLogRow(r.pool.QueryRow(ctx,
+		`SELECT `+tranLogSelectColumns+` FROM tran_log t JOIN merchant m ON m.mid = t.mid WHERE t.rrn = $1`, rrn))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TranLogRow{}, ErrNotFound
 	}
-	row.RRN = strings.TrimSpace(row.RRN)
 	return row, err
+}
+
+// scanTranLogRow reads one row selected with tranLogSelectColumns.
+func scanTranLogRow(scanner pgx.Row) (TranLogRow, error) {
+	var row TranLogRow
+	var balanceAmount *int64
+	var balanceCurrency string
+	err := scanner.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
+		&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken, &row.RespondedAt, &row.MTI,
+		&row.ApprovedAmount, &balanceAmount, &balanceCurrency, &row.OriginalRRN, &row.TraceID, &row.ReversalReasonCode, &row.CompletedBy)
+	if err != nil {
+		return TranLogRow{}, err
+	}
+	if balanceAmount != nil {
+		row.Balance = &Money{Amount: *balanceAmount, Currency: balanceCurrency}
+	}
+	row.RRN = strings.TrimSpace(row.RRN)
+	row.OriginalRRN = strings.TrimSpace(row.OriginalRRN)
+	row.CompletedBy = strings.TrimSpace(row.CompletedBy)
+	return row, nil
 }
 
 // List returns a page of tran_log rows matching filter, newest first, plus an opaque cursor for
@@ -211,10 +321,13 @@ func buildListQuery(filter TransactionFilter, limit int) (string, []any, error) 
 	if filter.To != nil {
 		query += ` AND t.created_at <= ` + arg(*filter.To)
 	}
+	if filter.ReversalReason != nil {
+		query += reversalReasonClause(*filter.ReversalReason, arg)
+	}
 	if filter.Cursor != "" {
 		cursorAt, cursorID, err := decodeCursor(filter.Cursor)
 		if err != nil {
-			return "", nil, fmt.Errorf("decode cursor: %w", err)
+			return "", nil, fmt.Errorf("%w: %w", ErrInvalidCursor, err)
 		}
 		query += ` AND (t.created_at, t.id) < (` + arg(cursorAt) + `, ` + arg(cursorID) + `)`
 	}
@@ -222,15 +335,23 @@ func buildListQuery(filter TransactionFilter, limit int) (string, []any, error) 
 	return query, args, nil
 }
 
+// reversalReasonClause matches the codes reason names; SEND_FAILURE is every other code.
+func reversalReasonClause(reason string, arg func(any) string) string {
+	for code, name := range reversalReasonByCode {
+		if name == reason {
+			return ` AND t.reversal_reason = ` + arg(code)
+		}
+	}
+	return ` AND t.reversal_reason NOT IN ('17', '68', '06')`
+}
+
 func scanTranLogRows(rows pgx.Rows) ([]TranLogRow, error) {
 	var page []TranLogRow
 	for rows.Next() {
-		var row TranLogRow
-		if err := rows.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
-			&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken, &row.RespondedAt, &row.MTI); err != nil {
+		row, err := scanTranLogRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		row.RRN = strings.TrimSpace(row.RRN)
 		page = append(page, row)
 	}
 	return page, rows.Err()
@@ -269,6 +390,30 @@ type StoredResponse struct {
 	Body   []byte
 }
 
+// InProgressError is ErrIdempotencyInProgress with what the first request recorded: the RRN it
+// sent (empty until it sent) and when it reserved the key.
+type InProgressError struct {
+	RRN        string
+	ReservedAt time.Time
+}
+
+func (e *InProgressError) Error() string { return ErrIdempotencyInProgress.Error() }
+
+// Is makes an InProgressError match ErrIdempotencyInProgress.
+func (e *InProgressError) Is(target error) bool { return target == ErrIdempotencyInProgress }
+
+// Idempotency errors (docs/04 §2).
+var (
+	ErrIdempotencyKeyMismatch = errors.New("idempotency key reused with a different request")
+	ErrIdempotencyInProgress  = errors.New("a request with this idempotency key is still in progress")
+)
+
+// idempotencyTTL is how long a key replays its response (docs/04 §2).
+const idempotencyTTL = "24 hours"
+
+// pendingStatus marks a reserved key whose request hasn't stored its response yet.
+const pendingStatus = 0
+
 // IdempotencyRepository persists idempotency_record for replay of state-changing REST calls.
 type IdempotencyRepository struct{ pool *Pool }
 
@@ -277,26 +422,83 @@ func NewIdempotencyRepository(pool *Pool) *IdempotencyRepository {
 	return &IdempotencyRepository{pool: pool}
 }
 
-// Find returns the stored response for (key, route), or nil if no such key was ever stored.
-func (r *IdempotencyRepository) Find(ctx context.Context, key, route string) (*StoredResponse, error) {
-	var resp StoredResponse
+// Reserve claims (key, route) for the request hashed requestHash, atomically: exactly one of
+// several concurrent callers gets (nil, token, nil) and may go on to send, fencing everything it
+// does with the key by token. A later caller gets the stored response to replay, an
+// *InProgressError while the first hasn't finished, or ErrIdempotencyKeyMismatch for a different
+// request. A key older than 24 h is claimed afresh.
+func (r *IdempotencyRepository) Reserve(ctx context.Context, key, route, requestHash string) (*StoredResponse, string, error) {
+	var token string
 	err := r.pool.QueryRow(ctx,
-		`SELECT status, body FROM idempotency_record WHERE key = $1 AND route = $2`, key, route,
-	).Scan(&resp.Status, &resp.Body)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		`INSERT INTO idempotency_record (key, route, request_hash, status, body, created_at, reservation_token)
+		 VALUES ($1, $2, $3, $4, 'null', now(), gen_random_uuid())
+		 ON CONFLICT (key, route) DO UPDATE
+		   SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status, body = EXCLUDED.body, created_at = EXCLUDED.created_at,
+		       rrn = NULL, reservation_token = EXCLUDED.reservation_token
+		   WHERE idempotency_record.created_at < now() - interval '`+idempotencyTTL+`'
+		 RETURNING reservation_token::text`,
+		key, route, requestHash, pendingStatus).Scan(&token)
+	if err == nil {
+		return nil, token, nil
 	}
-	if err != nil {
-		return nil, err
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", err
 	}
-	return &resp, nil
+	var storedHash string
+	var resp StoredResponse
+	var pending InProgressError
+	err = r.pool.QueryRow(ctx,
+		`SELECT request_hash, status, body, coalesce(rrn, ''), created_at FROM idempotency_record WHERE key = $1 AND route = $2`, key, route,
+	).Scan(&storedHash, &resp.Status, &resp.Body, &pending.RRN, &pending.ReservedAt)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, "", ErrIdempotencyInProgress // released between the two statements
+	case err != nil:
+		return nil, "", err
+	case storedHash != requestHash:
+		return nil, "", ErrIdempotencyKeyMismatch
+	case resp.Status == pendingStatus:
+		pending.RRN = strings.TrimSpace(pending.RRN)
+		return nil, "", &pending
+	}
+	return &resp, "", nil
 }
 
 // Store records the response returned for (key, route) so a replay can return it unchanged.
 func (r *IdempotencyRepository) Store(ctx context.Context, key, route, requestHash string, status int, body []byte) error {
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO idempotency_record (key, route, request_hash, status, body, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		key, route, requestHash, status, body, time.Now().UTC())
+		`INSERT INTO idempotency_record (key, route, request_hash, status, body, created_at) VALUES ($1, $2, $3, $4, $5, now())
+		 ON CONFLICT (key, route) DO UPDATE SET request_hash = EXCLUDED.request_hash, status = EXCLUDED.status, body = EXCLUDED.body`,
+		key, route, requestHash, status, body)
+	return err
+}
+
+// ErrReservationLost means a reservation's token no longer holds its key: another request
+// reclaimed it while this one was slow. The holder must abort without sending or releasing.
+var ErrReservationLost = errors.New("idempotency reservation was reclaimed by another request")
+
+// AttachRRN records the RRN a reserved key's request is about to send, before it is sent. It is
+// ErrReservationLost unless token still holds the key, so a holder that lost its key never sends.
+func (r *IdempotencyRepository) AttachRRN(ctx context.Context, key, route, token, rrn string) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE idempotency_record SET rrn = $3
+		 WHERE key = $1 AND route = $2 AND status = $4 AND reservation_token::text = $5`, key, route, rrn, pendingStatus, token)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrReservationLost
+	}
+	return nil
+}
+
+// Release frees a reservation whose request failed before anything was sent, so the key can be
+// retried. Only token's own reservation is freed: a stored response, or a reservation another
+// request reclaimed, is left alone.
+func (r *IdempotencyRepository) Release(ctx context.Context, key, route, token string) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM idempotency_record WHERE key = $1 AND route = $2 AND status = $3 AND reservation_token::text = $4`,
+		key, route, pendingStatus, token)
 	return err
 }
 
@@ -352,4 +554,32 @@ func (r *TranLogRepository) Backdate(ctx context.Context, rrn string, at time.Ti
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// ReleaseCompletion undoes completionRRN's claim on preAuthRRN, so the hold can be completed
+// again: the completion never left the gateway, or the issuer declined it. A claim held by
+// another completion is left alone.
+func (r *TranLogRepository) ReleaseCompletion(ctx context.Context, preAuthRRN, completionRRN string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE tran_log SET completed_by = NULL WHERE rrn = $1 AND completed_by = $2`, preAuthRRN, completionRRN)
+	return err
+}
+
+// Reclaim takes over a reservation of (key, route) for the same request that has been pending
+// longer than staleAfter without recording an RRN, returning the new token ("" when not
+// reclaimed). AttachRRN always runs before the send, so such a key sent nothing yet; its holder,
+// if only slow, now holds a stale token and can neither send nor release. Reclaiming refreshes
+// the reservation's age, so of several concurrent retries exactly one wins.
+func (r *IdempotencyRepository) Reclaim(ctx context.Context, key, route, requestHash string, staleAfter time.Duration) (string, error) {
+	var token string
+	err := r.pool.QueryRow(ctx,
+		`UPDATE idempotency_record SET created_at = now(), reservation_token = gen_random_uuid()
+		 WHERE key = $1 AND route = $2 AND request_hash = $3 AND status = $4 AND rrn IS NULL
+		   AND created_at < now() - make_interval(secs => $5)
+		 RETURNING reservation_token::text`,
+		key, route, requestHash, pendingStatus, staleAfter.Seconds()).Scan(&token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return token, err
 }

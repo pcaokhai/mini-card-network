@@ -16,6 +16,10 @@ const (
 
 // CreateRefund sends a 0200 with DE 3=200000 (docs/03 §6 refund processing code).
 func (s *Service) CreateRefund(ctx context.Context, req RefundRequest, idempotencyKey string) (Transaction, error) {
+	return s.idempotent(ctx, routeRefund, idempotencyKey, req, func(ctx context.Context) (Transaction, error) { return s.createRefund(ctx, req) })
+}
+
+func (s *Service) createRefund(ctx context.Context, req RefundRequest) (Transaction, error) {
 	card, ok := s.cardTokens.Resolve(req.CardToken)
 	if !ok {
 		return Transaction{}, ErrUnknownCardToken
@@ -45,6 +49,6 @@ func (s *Service) CreateRefund(ctx context.Context, req RefundRequest, idempoten
 		mti: "0200", txnType: tranTypeRefund, route: routeRefund, fields: fields,
 		rrn: rrn, stan: stan, linkUp: linkUp, sentAt: now, maskedPAN: maskedPAN, terminalID: req.TerminalID,
 		cardToken: req.CardToken, posEntryMode: fields[22],
-		requestedAmt: req.Amount, idempotencyKey: idempotencyKey, requestHash: hashRequest(req),
+		requestedAmt: req.Amount,
 	})
 }

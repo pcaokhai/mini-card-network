@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,18 +35,6 @@ func TestTranLogRepository_insertUpdateAndGet__MCN_303(t *testing.T) {
 	require.Equal(t, statusApproved, got.Status)
 	require.Equal(t, "00", got.ResponseCode)
 	require.Equal(t, "123456", got.AuthCode)
-}
-
-func TestIdempotencyRepository_storeAndReplay__MCN_303_AC1(t *testing.T) {
-	pool := newTestPool(t)
-	repo := NewIdempotencyRepository(pool)
-	ctx := context.Background()
-
-	require.NoError(t, repo.Store(ctx, "key-1", "purchases", "hash-abc", 201, []byte(`{"rrn":"x"}`)))
-	stored, err := repo.Find(ctx, "key-1", "purchases")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	require.Equal(t, 201, stored.Status)
 }
 
 func TestTranLogRepository_updateLateResponseSetsCodeAndTimestamp__MCN_403_AC1(t *testing.T) {
@@ -261,4 +251,122 @@ func TestTranLogRepository_getReadsRespondedAt__MCN_304(t *testing.T) {
 
 	require.Nil(t, before.RespondedAt)
 	require.NotNil(t, after.RespondedAt)
+}
+
+func TestTranLogRepository_roundTripsTheDetailFields__JRN_G3(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	id, err := repo.Insert(ctx, TranLogRow{
+		RRN: "626514000702", Type: "COMPLETION", Status: statusApproved, Amount: 10000, Currency: "704",
+		MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID,
+		OriginalRRN: "626514000700", TraceID: "4bf92f3577b34da6a3ce929d0e0e4736",
+	})
+	require.NoError(t, err)
+	approved := int64(7500)
+	require.NoError(t, repo.UpdateAmounts(ctx, id, &approved, &Money{Amount: 42000, Currency: "704"}))
+
+	got, err := repo.Get(ctx, "626514000702")
+
+	require.NoError(t, err)
+	require.Equal(t, "626514000700", got.OriginalRRN)
+	require.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", got.TraceID)
+	require.Equal(t, &approved, got.ApprovedAmount)
+	require.Equal(t, &Money{Amount: 42000, Currency: "704"}, got.Balance)
+}
+
+func TestTranLogRepository_listFiltersByReversalReason__JRN_G7(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewTranLogRepository(pool)
+	ctx := context.Background()
+	for rrn, reason := range map[string]string{"r68": "68", "r17": "17", "r06": "06", "r99": "99", "none": ""} {
+		id, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Status: "REVERSED", Amount: 1, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID, Type: tranTypePurchase})
+		require.NoError(t, err)
+		if reason != "" {
+			_, err = pool.Exec(ctx, `UPDATE tran_log SET reversal_reason = $2 WHERE id = $1`, id, reason)
+			require.NoError(t, err)
+		}
+	}
+	for filter, want := range map[string]string{
+		ReversalTimeout: "r68", ReversalCustomerCancellation: "r17", ReversalMACFailure: "r06", ReversalSendFailure: "r99",
+	} {
+		page, _, err := repo.List(ctx, TransactionFilter{ReversalReason: &filter})
+		require.NoError(t, err)
+		require.Len(t, page, 1, filter)
+		require.Equal(t, want, page[0].RRN, filter)
+		require.Equal(t, filter, ReversalReasonOf(page[0].ReversalReasonCode))
+	}
+	require.Empty(t, ReversalReasonOf(""))
+}
+
+func TestTranLogRepository_listRejectsAMalformedCursor__JRN_G6(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+
+	_, _, err := repo.List(context.Background(), TransactionFilter{Cursor: "zzz"})
+
+	require.ErrorIs(t, err, ErrInvalidCursor)
+}
+
+func insertPreAuth(ctx context.Context, t *testing.T, repo *TranLogRepository, rrn, status string) {
+	t.Helper()
+	_, err := repo.Insert(ctx, TranLogRow{RRN: rrn, Type: "PREAUTH", Status: status, Amount: 10000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID})
+	require.NoError(t, err)
+}
+
+func completionOf(rrn string) TranLogRow {
+	return TranLogRow{RRN: rrn, Type: "COMPLETION", Status: statusApproved, Amount: 5000, Currency: "704", TerminalID: "00000042", MerchantID: testMerchantID}
+}
+
+func TestTranLogRepository_aPreAuthIsCompletedOnce__S2(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	insertPreAuth(ctx, t, repo, "626514000901", statusApproved)
+	insertPreAuth(ctx, t, repo, "626514000902", "DECLINED")
+
+	_, err := repo.InsertCompletion(ctx, completionOf("626514000911"), "626514000901")
+	require.NoError(t, err)
+	_, err = repo.InsertCompletion(ctx, completionOf("626514000912"), "626514000901")
+	require.ErrorIs(t, err, ErrNotCompletable, "a second completion of the same pre-auth")
+	_, err = repo.InsertCompletion(ctx, completionOf("626514000913"), "626514000902")
+	require.ErrorIs(t, err, ErrNotCompletable, "a declined pre-auth holds nothing")
+
+	preAuth, err := repo.Get(ctx, "626514000901")
+	require.NoError(t, err)
+	require.Equal(t, "626514000911", preAuth.CompletedBy)
+	_, err = repo.Get(ctx, "626514000912")
+	require.ErrorIs(t, err, ErrNotFound, "the refused completion leaves no row")
+}
+
+func TestTranLogRepository_concurrentCompletionsClaimThePreAuthOnce__S2(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	insertPreAuth(ctx, t, repo, "626514000921", statusApproved)
+	var won atomic.Int32
+	var wg sync.WaitGroup
+	for i := range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := repo.InsertCompletion(ctx, completionOf(fmt.Sprintf("62651400093%d", i)), "626514000921"); err == nil {
+				won.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int32(1), won.Load())
+}
+
+func TestTranLogRepository_releasingAClaimLetsThePreAuthBeCompletedAgain__S2(t *testing.T) {
+	repo := NewTranLogRepository(newTestPool(t))
+	ctx := context.Background()
+	insertPreAuth(ctx, t, repo, "626514000961", statusApproved)
+	_, err := repo.InsertCompletion(ctx, completionOf("626514000962"), "626514000961")
+	require.NoError(t, err)
+
+	require.NoError(t, repo.ReleaseCompletion(ctx, "626514000961", "626514000999"), "another completion's release is a no-op")
+	_, err = repo.InsertCompletion(ctx, completionOf("626514000963"), "626514000961")
+	require.ErrorIs(t, err, ErrNotCompletable)
+
+	require.NoError(t, repo.ReleaseCompletion(ctx, "626514000961", "626514000962"))
+	_, err = repo.InsertCompletion(ctx, completionOf("626514000964"), "626514000961")
+	require.NoError(t, err)
 }
