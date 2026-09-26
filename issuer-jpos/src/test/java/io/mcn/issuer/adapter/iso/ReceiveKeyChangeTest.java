@@ -31,6 +31,16 @@ class ReceiveKeyChangeTest {
         .thenReturn(HexFormat.of().parseHex("ff".repeat(16)));
     when(securityModule.computeKcv(newClearKey)).thenReturn("DDEEFF");
     when(keyStoreRepository.insert(any())).thenReturn(42L);
+    java.sql.Connection activationConnection = mock(java.sql.Connection.class);
+    org.mockito.Mockito.doAnswer(
+            call -> {
+              // run the in-transaction work the way the real activate() does before its commit
+              call.<java.util.function.Consumer<java.sql.Connection>>getArgument(1)
+                  .accept(activationConnection);
+              return null;
+            })
+        .when(keyStoreRepository)
+        .activate(eq(42L), any());
 
     ReceiveKeyChange receiveKeyChange =
         new ReceiveKeyChange(securityModule, keyStoreRepository, auditLogRepository, zmk, "970499");
@@ -52,9 +62,17 @@ class ReceiveKeyChangeTest {
                         && "970499".equals(r.counterparty())
                         && "DDEEFF".equals(r.kcv())
                         && "PENDING".equals(r.status())));
-    verify(keyStoreRepository).activate(42L);
+    verify(keyStoreRepository).activate(eq(42L), any());
+    // SEC-G23: the audit row is written on the activation's own connection, before its commit
     verify(auditLogRepository)
-        .record(eq("issuer"), eq("key_change.activated"), eq("key_store"), eq("42"), any(), any());
+        .record(
+            eq(activationConnection),
+            eq("issuer"),
+            eq("key_change.activated"),
+            eq("key_store"),
+            eq("42"),
+            any(),
+            any());
     assertThat(request.hasField(48)).isFalse();
   }
 
@@ -206,7 +224,7 @@ class ReceiveKeyChangeTest {
     when(keyStoreRepository.insert(any())).thenReturn(10L);
     org.mockito.Mockito.doThrow(new IllegalStateException("activate key_store failed"))
         .when(keyStoreRepository)
-        .activate(10L);
+        .activate(eq(10L), any());
     ReceiveKeyChange receiveKeyChange =
         new ReceiveKeyChange(securityModule, keyStoreRepository, auditLogRepository, zmk, "970499");
 
@@ -239,7 +257,7 @@ class ReceiveKeyChangeTest {
     when(keyStoreRepository.insert(any())).thenReturn(10L);
     org.mockito.Mockito.doThrow(new IllegalStateException("activate key_store failed"))
         .when(keyStoreRepository)
-        .activate(10L);
+        .activate(eq(10L), any());
     ReceiveKeyChange receiveKeyChange =
         new ReceiveKeyChange(
             securityModule, keyStoreRepository, mock(AuditLogRepository.class), zmk, "970499");

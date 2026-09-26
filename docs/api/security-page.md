@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/security-page.md` |
-| Version | 1.6 |
+| Version | 1.7 |
 | Status | Approved for integration |
 | Date | 2026-09-25 |
 | Screen | route `/security`, container `web-next/src/app/(console)/security/SecurityScreen.tsx` |
@@ -282,6 +282,7 @@ No NFR in docs/02 §2 sets a latency for key APIs. The figures below are **obser
 | SEC-G20 | Low priority (#122 review N1). The PVV compare is `String.equals` (`VerifySecurity.java:174`), not constant-time. The risk is low (a 4-digit PVV behind a PIN-try limit), but it is inconsistent with the MAC path | `VerifySecurity.pvvMatchesUnder` | ISS | Compare the PVV bytes with `MessageDigest.isEqual`. Open |
 | SEC-G21 | Low priority (#122 review N2). `extractPin` returns a Java `String` PIN, which can't be zeroed, while everything around it (the clear PIN block, the ZPK copy) is | `VerifySecurity.extractPin` | ISS | At minimum a one-line comment; better, compute the PVV from a `char[]`/`byte[]` PIN that is zeroed after use. Open |
 | SEC-G22 | Low priority (#122 review N3). `ReceiveKeyChange`'s `catch (Exception e) { return false; }` swallows the cause with no log, so a decrypt failure and a DB outage look the same (both 0810 RC 96) | `ReceiveKeyChange.receive` (line 110) | ISS | Log the exception class and message type (no key material) before answering 96. Open |
+| SEC-G23 | A key change's activation and its `key_change.activated` audit row committed separately: `activate()` committed, then the audit insert ran on another connection. If that insert failed, `ReceiveKeyChange` answered 0810 RC 96 while the new key was already ACTIVE, so the acquirer believed the change had failed | `ReceiveKeyChange.receive`; `KeyStoreRepository.activate` | ISS | **Fixed** in #128: `KeyStoreRepository.activate(id, alsoInThisTransaction)` runs the audit insert on the activation's own connection before the commit. A failed audit write rolls the activation back, and the answer (96) matches `key_store`: nothing changed. On success the key is ACTIVE and audited in one commit. The SF2 path (a concurrent resend activated the same key) still answers 00 |
 
 ## 10. Change log
 
@@ -294,3 +295,4 @@ No NFR in docs/02 §2 sets a latency for key APIs. The figures below are **obser
 | 1.4 | 2026-09-26 | SEC-G1 fixed; SEC-G8 web part (rows keyed by type + KCV, rotate only on the active ZPK) (#124) |
 | 1.5 | 2026-09-26 | SEC-G15 (issuer never used a rotated ZAK/ZPK, including the 0430 MAC), SEC-G17 (idempotent key-change advice) and SEC-G18 (replayed old key rejected) marked Fixed in #122. |
 | 1.6 | 2026-09-26 | #122 review: SF1 residual (SEC-G19) and N1–N3 (SEC-G20–G22) recorded as low-priority open gaps. |
+| 1.7 | 2026-09-26 | SEC-G23 (activation and its audit entry commit together) Fixed in #128. |

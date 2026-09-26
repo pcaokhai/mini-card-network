@@ -1,5 +1,6 @@
 package io.mcn.issuer.adapter.persistence;
 
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -9,6 +10,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 import javax.sql.DataSource;
 
 /** Reads/writes {@code key_store}; keys are always cryptograms under LMK, never clear. */
@@ -51,6 +53,15 @@ public class KeyStoreRepository {
    * same way - it is declined, never activated over the wrong key - and needs a fresh rotation.
    */
   public void activate(long id) {
+    activate(id, conn -> {});
+  }
+
+  /**
+   * As {@link #activate(long)}, running {@code alsoInThisTransaction} on the same connection before
+   * the commit - so a record that must exist exactly when the key is ACTIVE (its audit entry,
+   * SEC-G23) commits or rolls back together with it.
+   */
+  public void activate(long id, Consumer<Connection> alsoInThisTransaction) {
     String retirePrevious =
         """
         UPDATE key_store SET status = 'RETIRED', retired_at = now()
@@ -71,6 +82,7 @@ public class KeyStoreRepository {
         activateStmt.setLong(1, id);
         activateStmt.executeUpdate();
       }
+      alsoInThisTransaction.accept(conn);
       conn.commit();
     } catch (SQLException e) {
       throw new IllegalStateException("activate key_store failed", e);
