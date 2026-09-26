@@ -51,6 +51,8 @@ type Decoded struct {
 	SecondaryBitmap *string   `json:"secondaryBitmap,omitempty"`
 	Segments        []Segment `json:"segments"`
 	Fields          []Field   `json:"fields"`
+	// Packed is the redacted wire message on encode (LAB-G3); null on decode.
+	Packed *string `json:"packed"`
 }
 
 func buildFields(fields map[int]string, segmentsByDE map[int]string) []Field {
@@ -103,7 +105,13 @@ func Encode(mti string, fields map[string]string) (Decoded, error) {
 	if err != nil {
 		return Decoded{}, err
 	}
-	return Decode(packed)
+	d, err := Decode(packed)
+	if err != nil {
+		return Decoded{}, err
+	}
+	redacted := joinSegments(d.Segments)
+	d.Packed = &redacted
+	return d, nil
 }
 
 func assemble(mti string, fields map[int]string, segments []Segment) Decoded {

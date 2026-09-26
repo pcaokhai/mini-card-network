@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 )
 
@@ -22,6 +23,10 @@ type Config struct {
 	ToxiproxyAdminAddr  string
 	IssuerProxyName     string
 	ChaosFakeIssuerAddr string
+	// IssuerAdminURL is the Issuer Admin API base URL; chaos runs read card balances from it (CHA-G1).
+	IssuerAdminURL string
+	// ChaosRunMaxDuration caps a chaos run's wall-clock time (CHAOS_RUN_MAX_DURATION, default 10m).
+	ChaosRunMaxDuration time.Duration
 	LMKTestValueHex     string
 	ZMK                 []byte
 	// InitialZAK / InitialZPK are the working keys the issuer is configured with. When
@@ -50,14 +55,17 @@ func Load(getenv func(string) string) (Config, error) {
 		ChaosFakeIssuerAddr: getenv("CHAOS_FAKE_ISSUER_ADDR"),               // empty means off (MCN-407)
 		CORSAllowedOrigin:   getenv("CORS_ALLOWED_ORIGIN"),                  // empty means off (R-10)
 	}
-	timeout, err := time.ParseDuration(valueOr(getenv("SHUTDOWN_TIMEOUT"), "30s"))
-	if err != nil {
-		return Config{}, fmt.Errorf("SHUTDOWN_TIMEOUT: %w", err)
+	var err error
+	if cfg.ShutdownTimeout, err = positiveDuration(getenv, "SHUTDOWN_TIMEOUT", "30s"); err != nil {
+		return Config{}, err
 	}
-	if timeout <= 0 {
-		return Config{}, errors.New("SHUTDOWN_TIMEOUT must be positive")
+	if cfg.ChaosRunMaxDuration, err = positiveDuration(getenv, "CHAOS_RUN_MAX_DURATION", "10m"); err != nil {
+		return Config{}, err
 	}
-	cfg.ShutdownTimeout = timeout
+
+	if cfg.IssuerAdminURL, err = httpURL(valueOr(getenv("ISSUER_ADMIN_URL"), "http://issuer:8081")); err != nil {
+		return Config{}, fmt.Errorf("ISSUER_ADMIN_URL: %w", err)
+	}
 
 	cfg.LMKTestValueHex = getenv("LMK_TEST_VALUE_HEX")
 	if cfg.LMKTestValueHex == "" {
@@ -122,6 +130,27 @@ func optionalAESKeyHex(getenv func(string) string, name string) ([]byte, error) 
 	default:
 		return nil, fmt.Errorf("%s: must decode to 16, 24 or 32 bytes (AES), got %d", name, len(key))
 	}
+}
+
+// positiveDuration reads name as a Go duration (fallback when unset) that must be above zero.
+func positiveDuration(getenv func(string) string, name, fallback string) (time.Duration, error) {
+	d, err := time.ParseDuration(valueOr(getenv(name), fallback))
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", name, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s must be positive", name)
+	}
+	return d, nil
+}
+
+// httpURL accepts only an absolute http(s) URL with a host.
+func httpURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("want an http(s) URL with a host, got %q", raw)
+	}
+	return raw, nil
 }
 
 func valueOr(v, fallback string) string {
