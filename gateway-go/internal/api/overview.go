@@ -59,7 +59,7 @@ func handleGetOverview(reader OverviewReader, calendar bizdate.Calendar) http.Ha
 		day := businessDay(calendar, now)
 		stats, err := reader.Overview(req.Context(), now, day)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "overview-read-failed", err.Error())
+			internalProblem(w, req, "overview-read-failed", err)
 			return
 		}
 		dto := toOverviewDTO(stats)

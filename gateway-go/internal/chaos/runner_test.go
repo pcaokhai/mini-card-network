@@ -3,10 +3,8 @@ package chaos
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -125,7 +123,10 @@ func (f *fakeHub) recorded() ([]string, []ChaosRun) {
 	return append([]string(nil), f.events...), append([]ChaosRun(nil), f.snapshots...)
 }
 
-var normalCard = []purchase.CardFixture{{CardToken: "tok_normal", Balance: 5000000}}
+// normalCardRef is tok_normal's issuer cardRef (contracts/fixtures/cards.json).
+const normalCardRef = "crd_normal0001"
+
+var normalCard = []purchase.CardFixture{{CardToken: "tok_normal", CardRef: normalCardRef, Balance: 5000000}}
 
 func approvedDeclinedTimedOut() *fakePurchases {
 	return &fakePurchases{outcomes: []purchase.Transaction{
@@ -180,7 +181,7 @@ func TestRunner_verifiesMoneyAgainstIssuerBalances__MCN_404_AC2_CHA_G1(t *testin
 	require.Equal(t, int64(4990000), final.ClosingBalanceTotal)
 	require.Equal(t, int64(0), final.LedgerDiscrepancy)
 	require.Nil(t, final.FailureKind)
-	require.Equal(t, []string{"crd_normal0001", "crd_normal0001"}, balances.refs)
+	require.Equal(t, []string{normalCardRef, normalCardRef}, balances.refs)
 }
 
 func TestRunner_issuerBalanceDriftIsLedgerMismatch__CHA_G1(t *testing.T) {
@@ -348,7 +349,7 @@ func TestRunner_shutdownEndsARunningRun__CHA_N2(t *testing.T) {
 
 func TestRunner_mixedCurrenciesAreRunError__CHA_N4(t *testing.T) {
 	balances := &fakeBalances{values: []int64{1, 2}, currencies: []string{"704", "840"}}
-	cards := []purchase.CardFixture{{CardToken: "tok_normal"}, {CardToken: "tok_low"}}
+	cards := []purchase.CardFixture{{CardToken: "tok_normal", CardRef: normalCardRef}, {CardToken: "tok_low", CardRef: "crd_lowbal0002"}}
 	runner := newServed(t, approvedDeclinedTimedOut(), &fakeSafDepth{}, reversedR3(), balances, cards, &fakeHub{})
 	run, err := runner.Start(context.Background(), 3)
 	require.NoError(t, err)
@@ -418,21 +419,4 @@ func TestRunner_getUnknownRunReturnsNotOK__MCN_404_AC2(t *testing.T) {
 
 	_, ok := runner.Get("does-not-exist")
 	require.False(t, ok)
-}
-
-func TestFixtureCardRefs_matchContractFixtures__CHA_G1(t *testing.T) {
-	raw, err := os.ReadFile("../../../contracts/fixtures/cards.json")
-	require.NoError(t, err)
-	var fixture struct {
-		Cards []struct{ CardToken, CardRef string }
-	}
-	require.NoError(t, json.Unmarshal(raw, &fixture))
-	want := map[string]string{}
-	for _, c := range fixture.Cards {
-		want[c.CardToken] = c.CardRef
-	}
-	require.Equal(t, want, fixtureCardRefs)
-	for _, seed := range purchase.DefaultCardTokens().Seeds() {
-		require.Contains(t, fixtureCardRefs, seed.CardToken)
-	}
 }

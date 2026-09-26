@@ -88,7 +88,7 @@ The rules below apply to every page contract. `docs/04-api-contract.md` §2–3 
 | Idempotency | `Idempotency-Key` (UUID) is required on every state-changing POST/PUT/DELETE. A replay returns the stored status and body. Reusing a key with a different body gives 422. | Gateway (transactions, cancellations) and issuer (blocks, limits). A missing key gives 400. |
 | Concurrency | Updatable admin resources return `ETag`; updates need `If-Match`; a mismatch gives 412. | Issuer card limits. The ETag covers the limits only (cards G-ETag). |
 | Pagination | Cursor based: `?limit=&cursor=` returns `{ items, nextCursor \| null }`, with a maximum limit of 200. | Transactions list, card ledger (`cursor` = the last `journalId`). |
-| Errors | RFC 9457 problem details: `type`, `title`, `status`, `detail`, `instance`, `traceId`. | **Issuer:** full URI `type` (`https://mcn.local/problems/not-found`) with `instance` and `traceId`. **Gateway:** bare slug `type` (`unknown-transaction`), with no `instance` or `traceId` (platform gap P-1). |
+| Errors | RFC 9457 problem details: `type`, `title`, `status`, `detail`, `instance`, `traceId`. | **Issuer:** full URI `type` (`https://mcn.local/problems/not-found`) with `instance` and `traceId`. **Gateway:** the same shape since #PRN (P-1), from one writer in `internal/api/problems.go`. |
 | Declines | A declined or timed-out transaction is **not** an HTTP error. It returns 201 with `status` DECLINED, TIMED_OUT or REVERSAL_PENDING. | Gateway. |
 | Tracing | `traceparent` is accepted and propagated; responses carry `X-Trace-Id`. | `traceparent` is forwarded by the BFF. The gateway doesn't return `X-Trace-Id` (P-2). |
 | Actor | The BFF sends `X-Actor: <username>` for audit. | The issuer reads `X-Actor` (`CardAdminController.actor`, default `"unknown"`). The BFF doesn't send it (P-3). |
@@ -99,7 +99,7 @@ The rules below apply to every page contract. `docs/04-api-contract.md` §2–3 
 
 | ID | Gap | Evidence | Owner | Fix |
 | --- | --- | --- | --- | --- |
-| P-1 | The gateway's problem `type` is a bare slug, with no `instance` or `traceId`. | `curl :8080/v1/transactions/000000000000` returns `{"type":"unknown-transaction",…}` | GW | Emit `https://mcn.local/problems/<slug>`, `instance` and `traceId` in the single problem mapper (root CLAUDE.md §6.8). |
+| P-1 | ~~The gateway's problem `type` is a bare slug, with no `instance` or `traceId`.~~ | `curl :8080/v1/transactions/000000000000` returns `{"type":"unknown-transaction",…}` | GW | **Fixed** in #PRN: `problem()` emits `https://mcn.local/problems/<slug>`, `title`, `status`, `detail`, `instance` and `traceId` as `application/problem+json`; every handler uses it, and every slug is from the catalogue |
 | P-2 | The gateway doesn't return `X-Trace-Id`. | Response headers of any gateway call | GW | Set it from the request span; add it to the BFF's forwarded response headers. |
 | P-3 | The BFF doesn't send `X-Actor`, so issuer audit rows read `unknown`. | `route.ts` header allow-list; `CardAdminController.actor` | WEB | Add `X-Actor` once the BFF has a session (v1 has no end-user auth). |
 | P-4 | CORS on the gateway allows only `http://localhost:3000`. | `Access-Control-Allow-Origin` | GW | Not needed while every browser call goes through the BFF. Keep it or remove it, but don't widen it. |

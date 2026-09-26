@@ -111,8 +111,8 @@ func (r *Runner) balanceTotal(ctx context.Context) (int64, error) {
 	var total int64
 	var cur string
 	for _, c := range r.seedCards {
-		ref, ok := fixtureCardRefs[c.CardToken]
-		if !ok {
+		ref := c.CardRef // generated from contracts/fixtures/cards.json with the rest of the card
+		if ref == "" {
 			return 0, fmt.Errorf("no cardRef for seed card %s", c.CardToken)
 		}
 		balance, cardCurrency, err := r.balances.LedgerBalance(ctx, ref)

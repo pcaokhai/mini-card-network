@@ -332,7 +332,7 @@ Payload bounds: at most one step per code, so at most 11 steps; messages carry a
 | JRN-G7 | ~~The "Đã tự hủy" (auto-cancelled) tab opens any REVERSED transaction~~ | **Fixed** (#117): `ReversalQueuer.Queue` stores the 0420's DE 39 in `tran_log.reversal_reason`; `TransactionSummary.reversalReason` and `?reversalReason=` use it. The web tab still has to ask for `TIMEOUT` | contracts + GW + WEB | Done (the WEB tab asks for `reversalReason=TIMEOUT` since #125) |
 | JRN-G8 | "Mở trong phòng lab" opens the lab without the message | `IsoField.raw` / message bytes are never returned (messages are rebuilt, not captured); `StepDetail` links to `/lab/message` with no parameter | GW + WEB | Pack the rebuilt message and return it as `raw` on the MTI field, then pass it to the lab |
 | JRN-G9 | Every journey error reads as "not found" | `JourneyView`: `if (isError) return <Notice>{t("notFound", { rrn })}</Notice>` for 404, 500 and 502 alike, after 3 retries | WEB | **Fixed** in #125: a 404 reads "not found" and isn't retried; other problems read as a load error |
-| JRN-G10 | Problem responses aren't docs/04 §3 shaped | Bare slugs `unknown-transaction`, `transaction-read-failed`, `journey-read-failed`, `transactions-read-failed`, `invalid-request`; see OVW-G12 in [overview-page.md](overview-page.md) | GW | As OVW-G12 |
+| JRN-G10 | ~~Problem responses aren't docs/04 §3 shaped~~ | Bare slugs `unknown-transaction`, `transaction-read-failed`, `journey-read-failed`, `transactions-read-failed`, `invalid-request`; see OVW-G12 in [overview-page.md](overview-page.md) | GW | **Fixed** (#PRN, P-1): every gateway problem is written by one `problem()` with the docs/04 §3 shape: a catalogue URI type, `instance`, `traceId`; `unknown-transaction` is now `not-found`, read failures are `internal` with a generic detail |
 | JRN-G11 | An unknown `StepCode` isn't handled | `key()` in `components/journey/useJourneyCopy.ts` returns `step.{code}` for any code and calls `t()` without `t.has()`, so a code missing from `messages/*.json` shows the key path instead of the provider's `title`/`easyText` | WEB | **Fixed** in #125: an unknown code falls back to the provider's `title`/`easyText` (`t.has`) |
 
 ## 10. Change log
@@ -344,3 +344,4 @@ Payload bounds: at most one step per code, so at most 11 steps; messages carry a
 | 1.2 | 2026-09-25 | JRN-G2 evidence: after #119 the issuer ledger credits refunds, so the gateway's negative REFUND `money` row is now wrong against it; the gateway must flip it (#117). No provider change here. |
 | 1.3 | 2026-09-26 | JRN-G5, G7, G9, G11 fixed (#125) |
 | 1.4 | 2026-09-25 | JRN-G2, JRN-G3, JRN-G6 and JRN-G7 fixed (#117) |
+| 1.5 | 2026-09-26 | JRN-G10 fixed (#PRN, P-1) |

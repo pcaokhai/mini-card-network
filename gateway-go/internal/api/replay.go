@@ -28,12 +28,12 @@ func newReplayStore() *replayStore { return &replayStore{byKey: map[string]store
 // stores what it returns. run writes its own problem responses and returns ok=false for them, so
 // failures are not replayed. The lock is
 // held across run so two retries of one key can't both act.
-func (s *replayStore) serve(ctx context.Context, w http.ResponseWriter, key, fingerprint string, run func(ctx context.Context) (status int, body any, ok bool)) {
+func (s *replayStore) serve(req *http.Request, w http.ResponseWriter, key, fingerprint string, run func(ctx context.Context) (status int, body any, ok bool)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if prior, found := s.byKey[key]; found {
 		if prior.fingerprint != fingerprint {
-			problem(w, http.StatusUnprocessableEntity, problemIdempotencyMismatch, "Idempotency-Key was already used with a different request")
+			problem(w, req, http.StatusUnprocessableEntity, problemIdempotencyMismatch, "Idempotency-Key was already used with a different request")
 			return
 		}
 		if prior.location != "" {
@@ -42,7 +42,7 @@ func (s *replayStore) serve(ctx context.Context, w http.ResponseWriter, key, fin
 		writeJSONBody(w, prior.status, prior.body)
 		return
 	}
-	status, body, ok := run(ctx)
+	status, body, ok := run(req.Context())
 	if !ok {
 		return
 	}

@@ -39,7 +39,7 @@ func handleListAcquirerKeys(svc KeyLister, lifetimes map[string]int) http.Handle
 	return func(w http.ResponseWriter, req *http.Request) {
 		rows, err := svc.ListCurrent(req.Context())
 		if err != nil {
-			problem(w, http.StatusInternalServerError, problemInternal, "could not read the key inventory")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not read the key inventory")
 			return
 		}
 		infos := make([]keyInfo, 0, len(rows))

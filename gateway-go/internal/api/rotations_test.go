@@ -65,11 +65,11 @@ func TestPostRotation_validatesKeyTypeAndKey__SEC_G4_G5(t *testing.T) {
 	for _, keyType := range []string{"", "CVK", "zpk"} {
 		code, got := postRotation(t, r, testLinkKey, keyType)
 		require.Equal(t, http.StatusBadRequest, code, keyType)
-		require.Equal(t, "validation-error", got["type"], keyType)
+		require.Equal(t, problemTypeBase+"validation-error", got["type"], keyType)
 	}
 	code, got := postRotation(t, r, "not-a-uuid", keyZPK)
 	require.Equal(t, http.StatusBadRequest, code)
-	require.Equal(t, "insufficient-idempotency-key", got["type"])
+	require.Equal(t, problemTypeBase+"insufficient-idempotency-key", got["type"])
 	require.Zero(t, rotator.starts)
 }
 
@@ -86,7 +86,7 @@ func TestPostRotation_replaysPerKeyAnd422OnADifferentBody__SEC_G4(t *testing.T) 
 
 	code, got := postRotation(t, r, testLinkKey, "ZAK")
 	require.Equal(t, http.StatusUnprocessableEntity, code)
-	require.Equal(t, "idempotency-key-mismatch", got["type"])
+	require.Equal(t, problemTypeBase+"idempotency-key-mismatch", got["type"])
 }
 
 func TestPostRotation_conflictWhileOneRuns__SEC_G2(t *testing.T) {
@@ -95,7 +95,7 @@ func TestPostRotation_conflictWhileOneRuns__SEC_G2(t *testing.T) {
 
 	code, got := postRotation(t, r, testLinkKey, keyZPK)
 	require.Equal(t, http.StatusConflict, code)
-	require.Equal(t, "conflict", got["type"])
+	require.Equal(t, problemTypeBase+"conflict", got["type"])
 }
 
 func TestGetRotation_unknownIsNotFound__SEC_G6(t *testing.T) {
@@ -105,7 +105,7 @@ func TestGetRotation_unknownIsNotFound__SEC_G6(t *testing.T) {
 	for _, id := range []string{"999999", "abc"} {
 		code, got := serve(t, r, http.MethodGet, rotationsPath+"/"+id, "")
 		require.Equal(t, http.StatusNotFound, code, id)
-		require.Equal(t, "not-found", got["type"], id)
+		require.Equal(t, problemTypeBase+"not-found", got["type"], id)
 	}
 }
 

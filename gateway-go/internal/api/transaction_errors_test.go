@@ -45,7 +45,7 @@ func TestPostPurchase_otherFailuresStay500__MCN_002(t *testing.T) {
 	rec := postJSON(r, "/v1/transactions/purchases", validPurchaseBody)
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	require.Contains(t, rec.Body.String(), "purchase-failed")
+	require.Contains(t, rec.Body.String(), `"type":"https://mcn.local/problems/internal"`, "an unexpected failure is the catalogue's internal problem (P-1)")
 }
 
 func TestPostCompletion_unknownPreAuthIs404__MCN_002(t *testing.T) {
@@ -55,7 +55,7 @@ func TestPostCompletion_unknownPreAuthIs404__MCN_002(t *testing.T) {
 	rec := postJSON(r, "/v1/transactions/000000000000/completions", `{"amount":{"amount":1,"currency":"704"}}`)
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
-	require.Contains(t, rec.Body.String(), `"type":"not-found"`)
+	require.Contains(t, rec.Body.String(), `"type":"https://mcn.local/problems/not-found"`)
 }
 
 func TestPostRefund_unknownTerminalIs422__MCN_002(t *testing.T) {

@@ -204,7 +204,7 @@ func TestLinkActions_requireAUUIDIdempotencyKey__NET_G14(t *testing.T) {
 		for _, key := range []string{"", "not-a-uuid"} {
 			code, got := serve(t, r, http.MethodPost, "/v1/network/links/issuer/"+action, key)
 			require.Equal(t, http.StatusBadRequest, code, action)
-			require.Equal(t, "insufficient-idempotency-key", got["type"], action)
+			require.Equal(t, problemTypeBase+"insufficient-idempotency-key", got["type"], action)
 		}
 	}
 	require.Zero(t, trigger.signOns)
@@ -224,7 +224,7 @@ func TestSignOn_replaysForTheSameKeyAndRejectsReuseOnAnotherAction__NET_G14(t *t
 
 	code, got = serve(t, r, http.MethodPost, "/v1/network/links/issuer/sign-off", testLinkKey)
 	require.Equal(t, http.StatusUnprocessableEntity, code)
-	require.Equal(t, "idempotency-key-mismatch", got["type"])
+	require.Equal(t, problemTypeBase+"idempotency-key-mismatch", got["type"])
 
 	code, _ = serve(t, r, http.MethodPost, signOnPath, otherLinkKey)
 	require.Equal(t, http.StatusOK, code)
@@ -249,12 +249,12 @@ func TestGetNetworkEvents_honoursLimitAndCursor__NET_G12(t *testing.T) {
 	for _, bad := range []string{"limit=0", "limit=201", "limit=x"} {
 		code, got = serve(t, r, http.MethodGet, "/v1/network/events?"+bad, "")
 		require.Equal(t, http.StatusBadRequest, code, bad)
-		require.Equal(t, "validation-error", got["type"], bad)
+		require.Equal(t, problemTypeBase+"validation-error", got["type"], bad)
 	}
 	reader.cursorErr = store.ErrInvalidCursor
 	code, got = serve(t, r, http.MethodGet, "/v1/network/events?cursor=zzz", "")
 	require.Equal(t, http.StatusBadRequest, code)
-	require.Equal(t, "validation-error", got["type"])
+	require.Equal(t, problemTypeBase+"validation-error", got["type"])
 }
 
 func TestGetLinks_carriesLiveLatencyAndInFlight__NET_G16(t *testing.T) {

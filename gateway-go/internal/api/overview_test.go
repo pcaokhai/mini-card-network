@@ -17,11 +17,12 @@ import (
 type fakeOverviewReader struct {
 	stats store.OverviewStats
 	day   store.BusinessDay
+	err   error
 }
 
 func (f *fakeOverviewReader) Overview(_ context.Context, _ time.Time, day store.BusinessDay) (store.OverviewStats, error) {
 	f.day = day
-	return f.stats, nil
+	return f.stats, f.err
 }
 
 // fixedCalendar is a BusinessCalendar whose business date never moves.

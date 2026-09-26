@@ -59,7 +59,7 @@ func handleGetSaf(reader SafReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		snap, err := reader.ListItems(req.Context())
 		if err != nil {
-			problem(w, http.StatusInternalServerError, problemInternal, "could not read the SAF queue")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not read the SAF queue")
 			return
 		}
 		writeJSONBody(w, http.StatusOK, struct {
@@ -122,7 +122,7 @@ func handleListLinks(reader LinkReader, trigger LinkTrigger) http.HandlerFunc {
 func readLink(w http.ResponseWriter, req *http.Request, reader LinkReader, trigger LinkTrigger) (store.Link, bool) {
 	link, err := reader.Get(req.Context(), issuerLinkID)
 	if err != nil {
-		problem(w, http.StatusInternalServerError, problemInternal, "could not read the link state")
+		problem(w, req, http.StatusInternalServerError, problemInternal, "could not read the link state")
 		return store.Link{}, false
 	}
 	if trigger != nil {
@@ -139,11 +139,11 @@ func handleListNetworkEvents(reader LinkReader) http.HandlerFunc {
 		}
 		events, next, err := reader.ListEvents(req.Context(), limit, req.URL.Query().Get("cursor"))
 		if errors.Is(err, store.ErrInvalidCursor) {
-			problem(w, http.StatusBadRequest, problemValidation, "cursor is not one this endpoint issued")
+			problem(w, req, http.StatusBadRequest, problemValidation, "cursor is not one this endpoint issued")
 			return
 		}
 		if err != nil {
-			problem(w, http.StatusInternalServerError, problemInternal, "could not read network events")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not read network events")
 			return
 		}
 		var nextCursor *string
@@ -168,7 +168,7 @@ func pageLimit(w http.ResponseWriter, req *http.Request) (int, bool) {
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 || n > maxEventsLimit {
-		problem(w, http.StatusBadRequest, problemValidation, "limit must be an integer from 1 to 200")
+		problem(w, req, http.StatusBadRequest, problemValidation, "limit must be an integer from 1 to 200")
 		return 0, false
 	}
 	return n, true
@@ -186,7 +186,7 @@ func handleEchoLink(trigger LinkTrigger) http.HandlerFunc {
 		}
 		result, err := trigger.TriggerEcho(req.Context())
 		if err != nil {
-			problem(w, http.StatusInternalServerError, problemInternal, "echo could not be sent")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "echo could not be sent")
 			return
 		}
 		writeJSONBody(w, http.StatusOK, struct {
@@ -208,9 +208,9 @@ func handleLinkTransition(reader LinkReader, trigger LinkTrigger, replays *repla
 		if !ok {
 			return
 		}
-		replays.serve(req.Context(), w, key, action, func(ctx context.Context) (int, any, bool) {
+		replays.serve(req, w, key, action, func(ctx context.Context) (int, any, bool) {
 			if err := call(ctx); err != nil {
-				problem(w, http.StatusConflict, "link-not-ready", err.Error())
+				problem(w, req, http.StatusConflict, "link-not-ready", err.Error())
 				return 0, nil, false
 			}
 			link, ok := readLink(w, req, reader, trigger)
@@ -221,7 +221,7 @@ func handleLinkTransition(reader LinkReader, trigger LinkTrigger, replays *repla
 
 func validLinkID(w http.ResponseWriter, req *http.Request) bool {
 	if chi.URLParam(req, "linkId") != issuerLinkID {
-		problem(w, http.StatusNotFound, problemNotFound, "no such link")
+		problem(w, req, http.StatusNotFound, problemNotFound, "no such link")
 		return false
 	}
 	return true
