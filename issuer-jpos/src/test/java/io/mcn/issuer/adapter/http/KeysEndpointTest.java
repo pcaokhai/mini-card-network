@@ -38,7 +38,7 @@ class KeysEndpointTest {
 
   @Test
   void should_return_key_info_array_with_no_clear_key_field__MCN_501_AC1_AC2() throws Exception {
-    int port = server.start(0);
+    int port = server.start("127.0.0.1", 0);
 
     HttpResponse<String> resp =
         client.send(

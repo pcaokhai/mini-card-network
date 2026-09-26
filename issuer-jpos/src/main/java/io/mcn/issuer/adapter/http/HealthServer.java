@@ -29,8 +29,17 @@ public final class HealthServer {
     this.keys = keys;
   }
 
-  /** Starts on {@code port} (0 = random) and returns the bound port. */
+  /** Starts on {@code port} (0 = random) on every interface and returns the bound port. */
   public int start(int port) {
+    return start(null, port);
+  }
+
+  /**
+   * Starts on {@code host} only ({@code null} = every interface). Tests bind 127.0.0.1, the address
+   * they call: a random port on the wildcard address can share its number with another local server
+   * bound to 127.0.0.1 (macOS allows it), which then answers the test's requests.
+   */
+  public int start(String host, int port) {
     // Javalin 7 moved route registration off the Javalin instance and onto
     // config.routes (io.javalin.config.RoutesConfig implements JavalinDefaultRoutingApi);
     // there is no fluent .get(...) directly on the object Javalin.create() returns.
@@ -60,7 +69,7 @@ public final class HealthServer {
                     keys.registerRoutes(config.routes);
                   }
                 })
-            .start(port);
+            .start(host, port);
     return app.port();
   }
 
