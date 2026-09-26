@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/cards-page.md` |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Approved for integration |
 | Date | 2026-09-25 |
 | Screen | routes `/cards` and `/cards/{cardRef}`, container `web-next/src/app/(console)/cards/CardsScreen.tsx` |
@@ -125,7 +125,7 @@ GET /api/v1/cards
 | header `ETag` | string | ✓ | kept with the query data; sent as `If-Match` by §4.6 | – | – |
 
 **Provider rules.**
-1. `ledgerBalance` and `availableBalance` are the `account` row's `ledger_balance` and `available_balance` in the account currency (`704`).
+1. `ledgerBalance` and `availableBalance` are read straight from the `account` row's `ledger_balance` and `available_balance` columns (`AccountRepository.findById`) in the account currency (`704`), not summed from the ledger. Those columns change only through `AccountLockRepository.adjust`, in the same transaction as the journal that explains the change, so balance = opening + Σ credits − Σ debits of the account's postings. Before #119 a reversal wrote its journal but never updated the columns, so any card with a reversal showed a balance too low by the reversed amounts (pos-page.md §9 POS-G19). **Ruling (R-1, #119): the balances can be negative.** A reversal is an advice and always posts (docs/03 §7.3), even past the overdraft floor, for example a refund reversed after the customer spent it. The floor (`available ≥ −overdraft_limit`) is enforced only for customer-initiated debits, in the issuer's Authorize under the account row lock (the `chk_available_floor` DB check was dropped in migration V7). A reversal that ends below the floor writes an `audit_log` row `NEGATIVE_BALANCE_AFTER_REVERSAL` (entity `account`, after-state with the balance, overdraft limit and reversed transaction) for follow-up. The UI renders a negative `Money` amount as it comes.
 2. `holds` is always `[]`, because no PREAUTH flow ships yet (MCN-603; the `ponytail:` note in `cardDetail()`). The dev:mock card 4417 has one hold, as in the canvas (Ruling R9).
 3. `limits` holds the `card_limit` rows with `txn_type = 'ALL'`. A missing row reads as `amount: 0`, and the UI shows "Chưa đặt" for it (Ruling R6).
 4. `usedToday` = `SUM(velocity_counter.txn_amount)` for the card, with `period = 'DAILY'` and `period_key` = `system_state.current_business_date` (CARDS-G12). While no cutover has written that row, it falls back to the calendar date, which is also what the ISO path keys the counters with.
@@ -410,7 +410,9 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | CARDS-G15 | Two strings in `vi.json` are English: `cards.limits.stale` ("Someone changed this card. Reload to continue.", the MCN-309-AC3 wording) and `cards.ledger.expert.more` ("Load more") | `web-next/messages/vi.json` | WEB | Translate, keeping AC3's meaning |
 | CARDS-G16 | An `Idempotency-Key` that isn't a UUID is accepted (docs/04 §2–3 say 400 `insufficient-idempotency-key`) | `CardAdminController` checked non-blank only | ISS | **Fixed** in #115: 400 `insufficient-idempotency-key` unless the key is a UUID |
 | CARDS-G17 | Requests in flight together with the same key: the second one misses the replay lookup and gets 409 (block) or 412 (limits), or a 500 on the idempotency primary key without a lock | `replayIfPresent` read before the write transaction | ISS | **Fixed** in #115: the record is re-read under the card's row lock and replayed (§4.4 rule 2) |
-| CARDS-G18 | The authorization path doesn't use `CardLifecycle`: `CheckCard.isNonActive` declines `BLOCKED`, `LOST` and `STOLEN` with RC 62 but not `PIN_BLOCKED`, which the Admin API reads as a locked card | `CheckCard.isNonActive` | ISS | Move the "can this card authorize?" rule into `CardLifecycle` and decline `PIN_BLOCKED` (RC 75 or 62 per docs/03). Open: this is an ISO-path change, outside this page's PR |
+| CARDS-G18 | The authorization path doesn't use `CardLifecycle`: `CheckCard.isNonActive` declines `BLOCKED`, `LOST` and `STOLEN` with RC 62 but not `PIN_BLOCKED`, which the Admin API reads as a locked card | `CheckCard.isNonActive` | ISS | **Fixed** in #119: `CheckCard` decides by `CardLifecycle.effectiveStatus` on the business date `ParseAndValidate` sets: RC 54 expired (from the first day after the expiry month, as this page reads it), RC 75 `PIN_BLOCKED` (docs/03 §8), RC 62 `BLOCKED`/`LOST`/`STOLEN`. A `BLOCKED` card past expiry now gets 54 |
+| CARDS-G19 | Refunds have no ceiling and no alert: since #119 a refund is never declined for funds or velocity, so a compromised acquirer can push unlimited credits to a card | #119 review; `CheckLimits` skips non-debits, `Authorize.credit` has no cap | ISS | A per-card or per-merchant refund ceiling (e.g. refunds ≤ the card's recent debits at that MID) and an alert on refund volume. Open |
+| CARDS-G20 | CheckCard's business date is `LocalDate.now()` in the JVM's default zone (`ParseAndValidate` sets it), so expiry flips at the host's midnight, not the business date's | `ParseAndValidate` `BUSINESS_DATE`; ADR-007 | ISS | Pin the zone now; when MCN-702 writes `system_state`, read one business-date source for the ISO path and the Admin API (ADR-007, CARDS-G12 note). Open |
 
 ## 10. Change log
 
@@ -418,3 +420,4 @@ No NFR in docs/02 §2 sets a latency for the Admin API. The figures below are **
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version, verified against main @ `8d27c72` and the local stack (GET only). |
 | 1.1 | 2026-09-25 | Issuer gap fixes in #115: CARDS-G1, G2, G4, G5 (issuer half), G6, G7, G8, G9, G10, G12 and G13 are marked Fixed, and G14 needed no provider change. §4 provider rules, request tables and error tables now describe the new behaviour. The `Idempotency-Key` must be a UUID, requests with the same key that are in flight together replay under the card lock (§4.4 rule 2), and limits must be positive (§4.6 rule 6). The G12 note covers MCN-702. Adds CARDS-G16 and G17 (Fixed) and G18 (open), and documents the If-Match forms (§4.6) and the PAN masking in problems (G9). |
+| 1.2 | 2026-09-25 | CARDS-G18 marked Fixed in #119: authorization and the Admin API read card status through the same rule. Adds open rows CARDS-G19 (no refund ceiling or alert) and CARDS-G20 (business date zone), found by the #119 review. §4.2 rule 1 states where the balances come from, the pre-#119 reversal gap, and Ruling R-1 (a reversal may overdraw; negative balances are possible). |

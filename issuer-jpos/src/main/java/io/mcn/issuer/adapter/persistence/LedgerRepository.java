@@ -43,10 +43,10 @@ public class LedgerRepository {
   }
 
   /**
-   * Posts a balanced reversing journal: the customer's money comes back (credit the account, debit
-   * {@code SETTLEMENT_SUSPENSE}) - the debit/credit sides swapped from {@link #postPurchase}.
+   * Posts a balanced refund journal: the money comes to the customer (debit {@code
+   * SETTLEMENT_SUSPENSE}, credit the account) - the mirror of {@link #postPurchase}.
    */
-  public long postReversal(
+  public long postRefund(
       Connection conn,
       long tranId,
       LocalDate businessDate,
@@ -54,12 +54,72 @@ public class LedgerRepository {
       long amount,
       String currency) {
     try {
-      long journalId = insertJournalEntry(conn, tranId, businessDate, "REVERSAL");
-      insertPosting(conn, journalId, accountId, null, "C", amount, currency);
+      long journalId = insertJournalEntry(conn, tranId, businessDate, "REFUND");
       insertPosting(conn, journalId, null, SETTLEMENT_SUSPENSE_GL_CODE, "D", amount, currency);
+      insertPosting(conn, journalId, accountId, null, "C", amount, currency);
       return journalId;
     } catch (SQLException e) {
+      throw new IllegalStateException("post refund journal failed", e);
+    }
+  }
+
+  /**
+   * Posts the REVERSAL journal for {@code originalTranId}: every posting of the original's journals
+   * with its direction swapped, so a purchase reversal credits the customer and a refund reversal
+   * debits them. Returns the signed amount to apply to each customer account (credit positive);
+   * empty when the original posted nothing (a balance inquiry), and then no journal is written.
+   */
+  public Map<Long, Long> postReversalOf(
+      Connection conn, long originalTranId, LocalDate originalBusinessDate) {
+    try {
+      List<PostingToMirror> originals =
+          postingsOfTransaction(conn, originalTranId, originalBusinessDate);
+      if (originals.isEmpty()) return Map.of();
+      long journalId = insertJournalEntry(conn, originalTranId, originalBusinessDate, "REVERSAL");
+      Map<Long, Long> accountDeltas = new LinkedHashMap<>();
+      for (PostingToMirror p : originals) {
+        String swapped = "D".equals(p.direction()) ? "C" : "D";
+        insertPosting(
+            conn, journalId, p.accountId(), p.glCode(), swapped, p.amount(), p.currency());
+        if (p.accountId() != null) {
+          long signed = "C".equals(swapped) ? p.amount() : -p.amount();
+          accountDeltas.merge(p.accountId(), signed, Long::sum);
+        }
+      }
+      return accountDeltas;
+    } catch (SQLException e) {
       throw new IllegalStateException("post reversal journal failed", e);
+    }
+  }
+
+  private record PostingToMirror(
+      Long accountId, String glCode, String direction, long amount, String currency) {}
+
+  private List<PostingToMirror> postingsOfTransaction(
+      Connection conn, long tranId, LocalDate businessDate) throws SQLException {
+    String sql =
+        """
+        SELECT p.account_id, p.gl_code, p.direction, p.amount, p.currency
+        FROM journal_entry je JOIN ledger_posting p ON p.journal_id = je.id
+        WHERE je.tran_id = ? AND je.tran_business_date = ? AND je.entry_type <> 'REVERSAL'
+        ORDER BY p.id""";
+    try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, tranId);
+      stmt.setObject(2, businessDate);
+      try (ResultSet rs = stmt.executeQuery()) {
+        List<PostingToMirror> postings = new ArrayList<>();
+        while (rs.next()) {
+          long accountId = rs.getLong("account_id");
+          postings.add(
+              new PostingToMirror(
+                  rs.wasNull() ? null : accountId,
+                  rs.getString("gl_code"),
+                  rs.getString("direction"),
+                  rs.getLong("amount"),
+                  rs.getString("currency").trim()));
+        }
+        return postings;
+      }
     }
   }
 

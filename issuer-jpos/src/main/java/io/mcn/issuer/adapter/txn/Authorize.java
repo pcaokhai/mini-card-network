@@ -3,7 +3,9 @@ package io.mcn.issuer.adapter.txn;
 import com.zaxxer.hikari.HikariDataSource;
 import io.mcn.issuer.adapter.persistence.AccountLockRepository;
 import io.mcn.issuer.adapter.persistence.AccountRow;
+import io.mcn.issuer.adapter.persistence.AccountSummary;
 import io.mcn.issuer.adapter.persistence.LedgerRepository;
+import io.mcn.issuer.adapter.persistence.TranLogRepository;
 import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import java.io.Serializable;
 import java.sql.Connection;
@@ -18,9 +20,11 @@ import org.jpos.transaction.TransactionParticipant;
 import org.jpos.util.Destroyable;
 
 /**
- * Real approval (MCN-302b, replacing MCN-302a's RC-96 placeholder): row-locks the card's account,
- * approves (RC 00 + DE 38 auth code) and posts a balanced double-entry journal when funds are
- * sufficient, or declines RC 51 otherwise. Never touches the account when an earlier participant
+ * Real approval (MCN-302b, replacing MCN-302a's RC-96 placeholder), by what the request does to the
+ * customer ({@link io.mcn.issuer.domain.TransactionType}): a purchase row-locks the account and
+ * debits it with a balanced journal, or declines RC 51; a refund credits it with a balanced REFUND
+ * journal (never declined for funds); a balance inquiry answers DE 54 and posts nothing. Every
+ * approval carries RC 00 + a DE 38 auth code. Never touches the account when an earlier participant
  * already set {@code RESPONSE_CODE} (a decline, or a replayed duplicate).
  *
  * <p><b>Task 0 finding:</b> jPOS 3.0.1's {@code TransactionManager} hands every participant in a
@@ -45,11 +49,11 @@ import org.jpos.util.Destroyable;
 public class Authorize implements TransactionParticipant, Configurable, Destroyable {
 
   private static final String CURRENCY = "704";
-  private static final String PURCHASE_TRAN_TYPE = "PURCHASE";
 
   private AccountLockRepository lockRepository;
   private LedgerRepository ledgerRepository;
   private VelocityCounterRepository velocityCounterRepository;
+  private TranLogRepository tranLogRepository;
   private final AuthCodeGenerator authCodeGenerator;
   private DataSource dataSource;
   private HikariDataSource ownedDataSource;
@@ -73,6 +77,23 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
       VelocityCounterRepository velocityCounterRepository,
       AuthCodeGenerator authCodeGenerator,
       DataSource dataSource) {
+    this(
+        lockRepository,
+        ledgerRepository,
+        velocityCounterRepository,
+        authCodeGenerator,
+        dataSource == null ? null : new TranLogRepository(dataSource),
+        dataSource);
+  }
+
+  public Authorize(
+      AccountLockRepository lockRepository,
+      LedgerRepository ledgerRepository,
+      VelocityCounterRepository velocityCounterRepository,
+      AuthCodeGenerator authCodeGenerator,
+      TranLogRepository tranLogRepository,
+      DataSource dataSource) {
+    this.tranLogRepository = tranLogRepository;
     this.lockRepository = lockRepository;
     this.ledgerRepository = ledgerRepository;
     this.velocityCounterRepository = velocityCounterRepository;
@@ -87,6 +108,7 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     this.lockRepository = new AccountLockRepository(this.dataSource);
     this.ledgerRepository = new LedgerRepository();
     this.velocityCounterRepository = new VelocityCounterRepository(this.dataSource);
+    this.tranLogRepository = new TranLogRepository(this.dataSource);
   }
 
   @Override
@@ -102,49 +124,128 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     if (ctx.<String>get(TxnContextKeys.RESPONSE_CODE) != null) {
       return PREPARED;
     }
-
-    long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
-    long amount = ctx.get(TxnContextKeys.AMOUNT);
-
     try (Connection conn = dataSource.getConnection()) {
       conn.setAutoCommit(false);
-      AccountRow account = lockRepository.lockAndGet(conn, accountId);
-
-      if (account.availableBalance() < amount) {
+      try {
+        return approveInOneTransaction(conn, ctx);
+      } catch (ReversedBeforeApproval e) {
         conn.rollback();
-        ctx.put(TxnContextKeys.RESPONSE_CODE, "51");
-        ctx.put(TxnContextKeys.DECLINE_REASON, "insufficient funds");
+        // docs/03 §7.3 and §8: an original processed after its reversal is declined RC 94
+        ctx.put(TxnContextKeys.RESPONSE_CODE, "94");
+        ctx.put(TxnContextKeys.DECLINE_REASON, "reversed before approval");
         return PREPARED;
+      } catch (RuntimeException e) {
+        conn.rollback();
+        throw e;
       }
-
-      boolean debited = lockRepository.debit(conn, accountId, amount, account.version());
-      if (!debited) {
-        // ponytail: the row lock (FOR UPDATE) serializes every writer on this account within one
-        // DB transaction - a failed optimistic-version check here means the lock isn't actually
-        // being held, which is a real bug, not a retryable race. Fail loudly rather than looping.
-        throw new IllegalStateException(
-            "account " + accountId + " version changed under a held row lock");
-      }
-
-      String authCode = authCodeGenerator.generate();
-      Long tranId = ctx.get(TxnContextKeys.TRAN_ID);
-      LocalDate businessDate = ctx.get(TxnContextKeys.BUSINESS_DATE);
-      LocalDate effectiveBusinessDate = businessDate == null ? LocalDate.now() : businessDate;
-      ledgerRepository.postPurchase(
-          conn, tranId == null ? 0L : tranId, effectiveBusinessDate, accountId, amount, CURRENCY);
-
-      Long cardId = ctx.get(TxnContextKeys.CARD_ID);
-      if (cardId != null) {
-        velocityCounterRepository.incrementDaily(
-            conn, cardId, PURCHASE_TRAN_TYPE, effectiveBusinessDate, amount);
-      }
-
-      conn.commit();
-      ctx.put(TxnContextKeys.RESPONSE_CODE, "00");
-      ctx.put(TxnContextKeys.AUTH_CODE, authCode);
-      return PREPARED;
     } catch (SQLException e) {
       throw new IllegalStateException("authorize failed", e);
     }
+  }
+
+  /**
+   * Moves the money and records the APPROVED outcome on the {@code tran_log} row in one transaction
+   * (S1, root CLAUDE.md §6.5): a crash can't leave money moved behind a RECEIVED row that every
+   * reversal would bounce off. {@code LogAndOutbox} later rewrites the same outcome and owns every
+   * decline's, where nothing moved.
+   */
+  private int approveInOneTransaction(Connection conn, Context ctx) throws SQLException {
+    boolean approved =
+        switch (TxnTypes.of(ctx).customerEffect()) {
+          case DEBIT -> debit(conn, ctx);
+          case CREDIT -> credit(conn, ctx);
+          case NONE -> answerBalance(conn, ctx);
+        };
+    if (!approved) {
+      conn.rollback();
+      return PREPARED;
+    }
+    String authCode = authCodeGenerator.generate();
+    boolean recorded =
+        tranLogRepository.updateOutcome(
+            conn,
+            tranId(ctx),
+            businessDate(ctx),
+            "APPROVED",
+            "00",
+            authCode,
+            null,
+            ctx.<Long>get(TxnContextKeys.BALANCE));
+    if (!recorded) {
+      throw new ReversedBeforeApproval(); // a reversal abandoned the row while we held the money
+    }
+    conn.commit();
+    ctx.put(TxnContextKeys.RESPONSE_CODE, "00");
+    ctx.put(TxnContextKeys.AUTH_CODE, authCode);
+    return PREPARED;
+  }
+
+  /**
+   * Purchase or cash: RC 51 unless the balance stays at or above the overdraft floor ({@code
+   * -overdraft_limit}), checked here under the row lock because the account table no longer
+   * enforces it (reversals must be able to overdraw); then debit, journal and velocity.
+   */
+  private boolean debit(Connection conn, Context ctx) {
+    long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
+    long amount = ctx.get(TxnContextKeys.AMOUNT);
+    AccountRow account = lockRepository.lockAndGet(conn, accountId);
+    if (account.availableBalance() - amount < -account.overdraftLimit()) {
+      ctx.put(TxnContextKeys.RESPONSE_CODE, "51");
+      ctx.put(TxnContextKeys.DECLINE_REASON, "insufficient funds");
+      return false;
+    }
+    lockRepository.adjust(conn, accountId, -amount);
+    LocalDate businessDate = businessDate(ctx);
+    ledgerRepository.postPurchase(conn, tranId(ctx), businessDate, accountId, amount, CURRENCY);
+    Long cardId = ctx.get(TxnContextKeys.CARD_ID);
+    if (cardId != null) {
+      velocityCounterRepository.incrementDaily(
+          conn, cardId, VelocityCounterRepository.DEBIT_TRAN_TYPE, businessDate, amount);
+    }
+    return true;
+  }
+
+  /**
+   * Refund: the money goes to the customer, so there is no funds check and it doesn't count towards
+   * the debit velocity counters (POS-G17).
+   */
+  private boolean credit(Connection conn, Context ctx) {
+    long accountId = ctx.get(TxnContextKeys.ACCOUNT_ID);
+    long amount = ctx.get(TxnContextKeys.AMOUNT);
+    lockRepository.adjust(conn, accountId, amount);
+    ledgerRepository.postRefund(conn, tranId(ctx), businessDate(ctx), accountId, amount, CURRENCY);
+    return true;
+  }
+
+  /** Balance inquiry: answers the available balance in DE 54; posts and holds nothing. */
+  private boolean answerBalance(Connection conn, Context ctx) {
+    AccountSummary account = lockRepository.read(conn, ctx.get(TxnContextKeys.ACCOUNT_ID));
+    ctx.put(TxnContextKeys.BALANCE, account.availableBalance());
+    ctx.put(TxnContextKeys.BALANCE_CURRENCY, account.currency());
+    return true;
+  }
+
+  /**
+   * The row is no longer RECEIVED: {@code LocateAndReverse} abandoned it as stale while this
+   * approval was in progress, so the approval must roll back.
+   */
+  private static final class ReversedBeforeApproval extends RuntimeException {
+    ReversedBeforeApproval() {
+      super("tran_log row was reversed before its approval committed", null, false, false);
+    }
+  }
+
+  /** The row {@code LogAndOutbox} inserted; an approval with none has nothing to post against. */
+  private static long tranId(Context ctx) {
+    Long tranId = ctx.get(TxnContextKeys.TRAN_ID);
+    if (tranId == null) {
+      throw new IllegalStateException("no tran_log row (TRAN_ID) to record the approval on");
+    }
+    return tranId;
+  }
+
+  private static LocalDate businessDate(Context ctx) {
+    LocalDate businessDate = ctx.get(TxnContextKeys.BUSINESS_DATE);
+    return businessDate == null ? LocalDate.now() : businessDate;
   }
 }

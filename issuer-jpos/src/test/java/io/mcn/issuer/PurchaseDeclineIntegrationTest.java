@@ -23,6 +23,7 @@ import org.jpos.iso.packager.GenericPackager;
 import org.jpos.q2.Q2;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -150,17 +151,29 @@ class PurchaseDeclineIntegrationTest {
   }
 
   private static ISOMsg purchase(int stan, String pan, long amountMinor) throws Exception {
+    return financial(stan, pan, "000000", amountMinor);
+  }
+
+  /** A 0200 with {@code processingCode}; {@code amountMinor} null leaves DE 4 out (inquiry). */
+  private static ISOMsg financial(int stan, String pan, String processingCode, Long amountMinor)
+      throws Exception {
     ISOMsg request =
         buildIso(
             "0200",
             Map.of(
-                3, "000000",
-                4, String.format("%012d", amountMinor),
-                7, "0922120000",
-                11, pad(stan),
-                37, "GOCPHO" + pad(stan),
-                41, "00000042",
-                42, "GOCPHO000000001"));
+                3,
+                processingCode,
+                7,
+                "0922120000",
+                11,
+                pad(stan),
+                37,
+                "GOCPHO" + pad(stan),
+                41,
+                "00000042",
+                42,
+                "GOCPHO000000001"));
+    if (amountMinor != null) request.set(4, String.format("%012d", amountMinor));
     request.set(2, pan);
     // VerifySecurity (MCN-503) verifies DE 52/64 on every 0200; a real gateway always sends
     // both, so the test builds a genuine PIN block (fixture PIN) and Retail MAC too - otherwise
@@ -169,6 +182,41 @@ class PurchaseDeclineIntegrationTest {
     JCESecurityModule securityModule = new JCESecurityModule(LMK_HEX);
     byte[] mac = securityModule.computeMac(request.pack(), ZAK);
     request.set(64, HexFormat.of().formatHex(mac));
+    return unpack(send(request.pack()));
+  }
+
+  /** A 0420 (reason 17) for the 0200 sent with {@code originalStan} by {@link #financial}. */
+  private static ISOMsg reversal(int stan, int originalStan, String processingCode, long amount)
+      throws Exception {
+    return reversal("0420", stan, originalStan, processingCode, amount);
+  }
+
+  private static ISOMsg reversal(
+      String mti, int stan, int originalStan, String processingCode, long amount) throws Exception {
+    ISOMsg request =
+        buildIso(
+            mti,
+            Map.of(
+                3,
+                processingCode,
+                4,
+                String.format("%012d", amount),
+                7,
+                "0922120500",
+                11,
+                pad(stan),
+                32,
+                "970499",
+                37,
+                "GOCPHO" + pad(originalStan),
+                39,
+                "17",
+                41,
+                "00000042",
+                42,
+                "GOCPHO000000001",
+                90,
+                "0200" + pad(originalStan) + "0922120000" + "00000970499" + "0".repeat(11)));
     return unpack(send(request.pack()));
   }
 
@@ -307,6 +355,313 @@ class PurchaseDeclineIntegrationTest {
       try (ResultSet rs = stmt.executeQuery()) {
         rs.next();
         return rs.getLong(1);
+      }
+    }
+  }
+
+  // ---- POS-G17: refunds credit, reversals mirror, balance inquiries move nothing ----------------
+
+  private static final String SECOND_PAN = "9704360000005540"; // crd_second0006, 200 000 000
+
+  @Test
+  @Order(7)
+  @DisplayName("POS-G17: a refund credits the customer with a balanced REFUND journal")
+  void refundCreditsTheCustomerWithABalancedRefundJournal() throws Exception {
+    long accountId = accountIdByAccountNo("ACC-crd_second0006");
+    long before = accountBalance(accountId);
+    long ledgerBefore = ledgerBalance(accountId);
+
+    ISOMsg response = financial(20, SECOND_PAN, "200000", 25_000L);
+
+    assertThat(response.getString(39)).isEqualTo("00");
+    assertThat(response.getString(38)).hasSize(6);
+    assertThat(accountBalance(accountId)).isEqualTo(before + 25_000L);
+    assertThat(ledgerBalance(accountId)).isEqualTo(ledgerBefore + 25_000L);
+    assertThat(postingsOfLatestJournal(accountId, "REFUND"))
+        .containsExactlyInAnyOrder("D:SETTLEMENT_SUSPENSE:25000", "C:ACC-crd_second0006:25000");
+    assertThat(unbalancedJournalCount()).isZero();
+  }
+
+  @Test
+  @Order(8)
+  @DisplayName("POS-G17: a refund isn't declined for funds or velocity limits")
+  void refundIsNotDeclinedForFundsOrVelocity() throws Exception {
+    long accountId = accountIdByAccountNo("ACC-crd_lowbal0002");
+    long before = accountBalance(accountId);
+    long refund = before + 10_000_000L; // more than the balance and than any debit ceiling
+
+    ISOMsg response = financial(21, "9704360000009021", "200000", refund);
+
+    assertThat(response.getString(39)).isEqualTo("00");
+    assertThat(accountBalance(accountId)).isEqualTo(before + refund);
+  }
+
+  @Test
+  @Order(9)
+  @DisplayName("POS-G17: reversing a refund debits the customer back")
+  void reversingARefundDebitsTheCustomerBack() throws Exception {
+    long accountId = accountIdByAccountNo("ACC-crd_second0006");
+    long before = accountBalance(accountId);
+    long ledgerBefore = ledgerBalance(accountId);
+    assertThat(financial(22, SECOND_PAN, "200000", 40_000L).getString(39)).isEqualTo("00");
+
+    ISOMsg ack = reversal(23, 22, "200000", 40_000L);
+
+    assertThat(negativeBalanceEvents(accountId)).isZero(); // N4: a debit that stays above floor
+    assertThat(ack.getMTI()).isEqualTo("0430");
+    assertThat(accountBalance(accountId)).isEqualTo(before);
+    assertThat(ledgerBalance(accountId)).isEqualTo(ledgerBefore);
+    assertThat(postingsOfLatestJournal(accountId, "REVERSAL"))
+        .containsExactlyInAnyOrder("C:SETTLEMENT_SUSPENSE:40000", "D:ACC-crd_second0006:40000");
+    assertThat(unbalancedJournalCount()).isZero();
+  }
+
+  @Test
+  @Order(10)
+  @DisplayName("POS-G17: reversing a purchase gives the money back")
+  void reversingAPurchaseGivesTheMoneyBack() throws Exception {
+    long accountId = accountIdByAccountNo("ACC-crd_second0006");
+    long before = accountBalance(accountId);
+    long ledgerBefore = ledgerBalance(accountId);
+    assertThat(purchase(24, SECOND_PAN, 30_000L).getString(39)).isEqualTo("00");
+    assertThat(accountBalance(accountId)).isEqualTo(before - 30_000L);
+
+    reversal(25, 24, "000000", 30_000L);
+    reversal(26, 24, "000000", 30_000L); // a repeat has no second effect (docs/03 §7.3)
+
+    assertThat(accountBalance(accountId)).isEqualTo(before);
+    assertThat(negativeBalanceEvents(accountId)).isZero(); // N4: a credit never flags
+    assertThat(ledgerBalance(accountId)).isEqualTo(ledgerBefore);
+    assertThat(unbalancedJournalCount()).isZero();
+  }
+
+  @Test
+  @Order(11)
+  @DisplayName("POS-G17: a balance inquiry posts no journal, holds nothing and answers DE 54")
+  void balanceInquiryPostsNothingAndAnswersDe54() throws Exception {
+    long accountId = accountIdByAccountNo("ACC-crd_second0006");
+    long before = accountBalance(accountId);
+    long journalsBefore = journalCount(accountId);
+
+    ISOMsg response = financial(27, SECOND_PAN, "310000", null);
+
+    assertThat(response.getString(39)).isEqualTo("00");
+    assertThat(response.getString(54)).isEqualTo("704C" + String.format("%012d", before));
+    assertThat(accountBalance(accountId)).isEqualTo(before);
+    assertThat(journalCount(accountId)).isEqualTo(journalsBefore);
+    assertThat(holdCount(accountId)).isZero();
+  }
+
+  // ---- CARDS-G18: authorization reads card status the way the Admin API does ------------------
+
+  @Test
+  @Order(12)
+  @DisplayName("CARDS-G18: an expired card is declined RC 54")
+  void expiredCardIsDeclinedRc54() throws Exception {
+    assertThat(purchase(28, "9704360000007765", 10_000L).getString(39)).isEqualTo("54");
+  }
+
+  @Test
+  @Order(13)
+  @DisplayName("CARDS-G18: a PIN_BLOCKED card is declined RC 75 before any PIN check")
+  void pinBlockedCardIsDeclinedRc75() throws Exception {
+    execute("UPDATE card SET status = 'PIN_BLOCKED' WHERE card_ref = 'crd_limit00005'");
+    long accountId = accountIdByAccountNo("ACC-crd_limit00005");
+    long before = accountBalance(accountId);
+
+    ISOMsg response = purchase(29, "9704360000001208", 10_000L);
+
+    assertThat(response.getString(39)).isEqualTo("75");
+    assertThat(accountBalance(accountId)).isEqualTo(before);
+  }
+
+  @Test
+  @Order(14)
+  @DisplayName(
+      "R-1: reversing a refund the customer already spent answers 0430 00, overdraws the account"
+          + " and records NEGATIVE_BALANCE_AFTER_REVERSAL")
+  void reversingASpentRefundOverdrawsAndRecordsAnEvent() throws Exception {
+    String pan = "9704360000004417"; // crd_normal0001, no overdraft
+    long accountId = accountIdByAccountNo("ACC-crd_normal0001");
+    assertThat(financial(40, pan, "200000", 100_000L).getString(39)).isEqualTo("00");
+    long spendAll = accountBalance(accountId);
+    assertThat(purchase(41, pan, spendAll).getString(39)).isEqualTo("00");
+
+    ISOMsg ack = reversal(42, 40, "200000", 100_000L);
+
+    assertThat(ack.getMTI()).isEqualTo("0430");
+    assertThat(ack.getString(39)).isEqualTo("00");
+    assertThat(accountBalance(accountId)).isEqualTo(-100_000L);
+    assertThat(ledgerBalance(accountId)).isEqualTo(-100_000L);
+    assertThat(
+            single(
+                "SELECT count(*) FROM audit_log WHERE action = 'NEGATIVE_BALANCE_AFTER_REVERSAL'"
+                    + " AND entity_type = 'account' AND entity_id = ?::text",
+                accountId))
+        .isEqualTo(1);
+    assertThat(unbalancedJournalCount()).isZero();
+  }
+
+  @Test
+  @Order(15)
+  @DisplayName("R-3: reversing a purchase frees its daily limit, so the next purchase passes")
+  void reversingAPurchaseFreesItsDailyVelocity() throws Exception {
+    String pan = "9704360000009021"; // crd_lowbal0002, well funded since the refund in Order 8
+    long cardId = single("SELECT id FROM card WHERE card_ref = 'crd_lowbal0002' AND 0 < ?", 1);
+    long usedToday = velocityToday(cardId, "txn_amount");
+    execute(
+        "INSERT INTO card_limit (card_id, tran_type, period, max_amount) VALUES ("
+            + cardId
+            + ", 'ALL', 'DAILY', "
+            + (usedToday + 50_000L)
+            + ")");
+    try {
+      assertThat(purchase(43, pan, 50_000L).getString(39)).isEqualTo("00");
+      assertThat(purchase(44, pan, 10_000L).getString(39)).isEqualTo("61");
+      long countBefore = velocityToday(cardId, "txn_count");
+
+      reversal(45, 43, "000000", 50_000L);
+      reversal("0421", 45, 43, "000000", 50_000L); // repeat of the same advice
+      reversal(48, 43, "000000", 50_000L); // and a fresh 0420 for the already-reversed original
+
+      assertThat(velocityToday(cardId, "txn_amount")).isEqualTo(usedToday);
+      assertThat(velocityToday(cardId, "txn_count")).isEqualTo(countBefore - 1);
+      assertThat(purchase(46, pan, 10_000L).getString(39)).isEqualTo("00");
+    } finally {
+      execute("DELETE FROM card_limit WHERE card_id = " + cardId);
+    }
+  }
+
+  @Test
+  @Order(16)
+  @DisplayName("R-2: a duplicate balance inquiry replays the stored DE 54 and DE 38")
+  void duplicateBalanceInquiryReplaysDe54AndDe38() throws Exception {
+    ISOMsg first = financial(47, SECOND_PAN, "310000", null);
+    ISOMsg duplicate = financial(47, SECOND_PAN, "310000", null);
+
+    assertThat(first.getString(54)).startsWith("704C");
+    assertThat(duplicate.getString(39)).isEqualTo("00");
+    assertThat(duplicate.getString(54)).isEqualTo(first.getString(54));
+    assertThat(duplicate.getString(38)).isEqualTo(first.getString(38));
+  }
+
+  private static long negativeBalanceEvents(long accountId) throws Exception {
+    return single(
+        "SELECT count(*) FROM audit_log WHERE action = 'NEGATIVE_BALANCE_AFTER_REVERSAL'"
+            + " AND entity_id = ?::text",
+        accountId);
+  }
+
+  private static long velocityToday(long cardId, String column) throws Exception {
+    return single(
+        "SELECT COALESCE(SUM("
+            + column
+            + "), 0) FROM velocity_counter WHERE card_id = ? AND period = 'DAILY'"
+            + " AND period_key = '"
+            + java.time.LocalDate.now() // the date Authorize keys the counter with
+            + "'",
+        cardId);
+  }
+
+  @Test
+  @Order(99)
+  @DisplayName(
+      "POS-G19: after purchases, reversals, refunds and refund reversals, every account's balance"
+          + " = opening + Σ credits − Σ debits of its postings")
+  void everyAccountBalanceEqualsOpeningPlusItsPostings() throws Exception {
+    var fixture =
+        new com.fasterxml.jackson.databind.ObjectMapper()
+            .readTree(Path.of("../contracts/fixtures/cards.json").toFile());
+    var cards = fixture.isArray() ? fixture : fixture.path("cards");
+    String sql =
+        """
+        SELECT a.ledger_balance, a.available_balance,
+               COALESCE(SUM(CASE p.direction WHEN 'C' THEN p.amount ELSE -p.amount END), 0)
+        FROM account a LEFT JOIN ledger_posting p ON p.account_id = a.id
+        WHERE a.account_no = ? GROUP BY a.id""";
+    for (var card : cards) {
+      String accountNo = "ACC-" + card.path("cardRef").asText();
+      long opening = card.path("balance").asLong();
+      try (var conn = dataSource.getConnection();
+          var stmt = conn.prepareStatement(sql)) {
+        stmt.setString(1, accountNo);
+        try (ResultSet rs = stmt.executeQuery()) {
+          rs.next();
+          assertThat(rs.getLong(1)).as("ledger " + accountNo).isEqualTo(opening + rs.getLong(3));
+          assertThat(rs.getLong(2)).as("available " + accountNo).isEqualTo(rs.getLong(1));
+        }
+      }
+    }
+    assertThat(unbalancedJournalCount()).isZero();
+  }
+
+  private static void execute(String sql) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.createStatement()) {
+      stmt.execute(sql);
+    }
+  }
+
+  private static long single(String sql, long accountId) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, accountId);
+      try (ResultSet rs = stmt.executeQuery()) {
+        rs.next();
+        return rs.getLong(1);
+      }
+    }
+  }
+
+  private static long ledgerBalance(long accountId) throws Exception {
+    return single("SELECT ledger_balance FROM account WHERE id = ?", accountId);
+  }
+
+  private static long journalCount(long accountId) throws Exception {
+    return single(
+        "SELECT count(DISTINCT journal_id) FROM ledger_posting WHERE account_id = ?", accountId);
+  }
+
+  private static long holdCount(long accountId) throws Exception {
+    return single(
+        "SELECT count(*) FROM auth_hold h JOIN card c ON c.id = h.card_id WHERE c.account_id = ?",
+        accountId);
+  }
+
+  private static long unbalancedJournalCount() throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt =
+            conn.prepareStatement(
+                """
+                SELECT count(*) FROM (
+                  SELECT journal_id FROM ledger_posting GROUP BY journal_id
+                  HAVING SUM(CASE WHEN direction = 'D' THEN amount ELSE -amount END) <> 0) x""");
+        ResultSet rs = stmt.executeQuery()) {
+      rs.next();
+      return rs.getLong(1);
+    }
+  }
+
+  /** "D|C:account-or-GL:amount" for each posting of the account's newest journal of a type. */
+  private static java.util.List<String> postingsOfLatestJournal(long accountId, String entryType)
+      throws Exception {
+    String sql =
+        """
+        SELECT p.direction, COALESCE(p.gl_code, a.account_no) AS account, p.amount
+        FROM ledger_posting p LEFT JOIN account a ON a.id = p.account_id
+        WHERE p.journal_id = (
+          SELECT max(je.id) FROM journal_entry je JOIN ledger_posting lp ON lp.journal_id = je.id
+          WHERE lp.account_id = ? AND je.entry_type = ?)""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, accountId);
+      stmt.setString(2, entryType);
+      try (ResultSet rs = stmt.executeQuery()) {
+        java.util.List<String> postings = new java.util.ArrayList<>();
+        while (rs.next()) {
+          postings.add(rs.getString(1) + ":" + rs.getString(2) + ":" + rs.getLong(3));
+        }
+        return postings;
       }
     }
   }

@@ -20,4 +20,46 @@ public record TranLogRow(
     String status,
     String responseCode,
     String authCode,
-    String declineReason) {}
+    String declineReason,
+    Long balance) {
+
+  /** A row with no answered balance: everything but a balance inquiry (R-2). */
+  public TranLogRow(
+      LocalDate businessDate,
+      String mti,
+      String tranType,
+      String processingCode,
+      String acquirerId,
+      String tid,
+      String mid,
+      String stan,
+      String transmissionDtRaw,
+      String rrn,
+      long amount,
+      String currency,
+      Long cardId,
+      String status,
+      String responseCode,
+      String authCode,
+      String declineReason) {
+    this(
+        businessDate,
+        mti,
+        tranType,
+        processingCode,
+        acquirerId,
+        tid,
+        mid,
+        stan,
+        transmissionDtRaw,
+        rrn,
+        amount,
+        currency,
+        cardId,
+        status,
+        responseCode,
+        authCode,
+        declineReason,
+        null);
+  }
+}

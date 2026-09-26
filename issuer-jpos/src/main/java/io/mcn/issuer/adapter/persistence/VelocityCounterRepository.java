@@ -18,6 +18,9 @@ public class VelocityCounterRepository {
     this.dataSource = dataSource;
   }
 
+  /** The counter every approved debit (purchase or cash) increments and its reversal undoes. */
+  public static final String DEBIT_TRAN_TYPE = "PURCHASE";
+
   private static final String INCREMENT_SQL =
       """
       INSERT INTO velocity_counter (card_id, tran_type, period, period_key, txn_count, txn_amount)
@@ -49,6 +52,28 @@ public class VelocityCounterRepository {
       stmt.executeUpdate();
     } catch (SQLException e) {
       throw new IllegalStateException("increment velocity_counter failed", e);
+    }
+  }
+
+  /**
+   * Undoes one {@link #incrementDaily} on the caller's connection: a reversed debit no longer
+   * counts towards the day's limits (R-3). Floors at zero so a replayed reversal can't go negative.
+   */
+  public void decrementDaily(
+      Connection conn, long cardId, String tranType, LocalDate businessDate, long amount) {
+    String sql =
+        """
+        UPDATE velocity_counter SET txn_count = GREATEST(txn_count - 1, 0),
+                                    txn_amount = GREATEST(txn_amount - ?, 0)
+        WHERE card_id = ? AND tran_type = ? AND period = 'DAILY' AND period_key = ?""";
+    try (PreparedStatement stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, amount);
+      stmt.setLong(2, cardId);
+      stmt.setString(3, tranType);
+      stmt.setString(4, businessDate.toString());
+      stmt.executeUpdate();
+    } catch (SQLException e) {
+      throw new IllegalStateException("decrement velocity_counter failed", e);
     }
   }
 

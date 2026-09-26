@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/journey-page.md` |
-| Version | 1.0 |
+| Version | 1.2 |
 | Status | Approved for integration for purchases. Journeys of pre-authorizations, completions, refunds and balance inquiries show purchase MTIs and money signs today (§9 JRN-G2) |
 | Date | 2026-09-25 |
 | Screen | route `/transactions` → `web-next/src/app/(console)/transactions/JourneyIndexScreen.tsx`; route `/transactions/{rrn}` → `web-next/src/app/(console)/transactions/[rrn]/JourneyScreen.tsx`. Both render `components/journey/JourneyView.tsx` |
@@ -322,7 +322,7 @@ Payload bounds: at most one step per code, so at most 11 steps; messages carry a
 | ID | Gap | Evidence | Owner lane | Proposed fix / story |
 | --- | --- | --- | --- | --- |
 | JRN-G1 | ~~Journeys of pre-auth, completion, refund and balance inquiry show "declined before reaching the issuer" although they were sent and answered~~ | **Fixed** (#114): `advtxn` records `sent_at`, the network STAN, the processing code, the POS entry mode, the card token, the MTI and the CREATED→SENT→final history | GW | Done |
-| JRN-G2 | The journey builder is purchase-only | `mtiRequest = "0200"` and a hard-coded `"0210"` in `message.go`, so a PREAUTH shows 0200/0210 instead of 0100/0110 and a COMPLETION instead of 0220/0230; POS_REQUEST's text says `POST /v1/purchases` (the path is `/v1/transactions/purchases`); `moneyRows` gives a REFUND a negative delta (`Delta: -txn.Amount`) | GW | Take the MTI pair and the money sign from `tran_type`; fix the path text |
+| JRN-G2 | The journey builder is purchase-only | `mtiRequest = "0200"` and a hard-coded `"0210"` in `message.go`, so a PREAUTH shows 0200/0210 instead of 0100/0110 and a COMPLETION instead of 0220/0230; POS_REQUEST's text says `POST /v1/purchases` (the path is `/v1/transactions/purchases`); `moneyRows` gives a REFUND a negative delta (`Delta: -txn.Amount`). Since #119 the issuer really credits a refund (REFUND journal, C customer) and a refund reversal debits it. **The gateway must flip the sign:** `+amount` for a REFUND at ISSUER_APPROVED and `−amount` for its reversal at REVERSAL_CONFIRMED. #117 (open) makes exactly that change in `internal/journey/types.go` (rule 9 there: "`+amount` for a refund; the reversal row has the opposite sign"), so the two are consistent once both land; whichever merges second reconciles this row | GW | Take the MTI pair and the money sign from `tran_type`; fix the path text |
 | JRN-G3 | `Transaction` detail fields are never filled | `transactionDTO` types `approvedAmount` and `balance` as `*string` and never sets them; `originalRrn` isn't persisted (live COMPLETION `626807000294`: `originalRrn: null`); `traceId` is the RRN (`toTransactionDTO` ponytail comment) | GW | Persist approved amount, balance and original RRN in `tran_log`; add a `trace_id` column |
 | JRN-G4 | `money[].balanceAfter` is always `null` | MCN-304-AC3 asks for issuer-reported balances (DE 54) or null; plan MCN-304 Ruling 7 keeps null, and the web reads the issuer ledger instead (MCN-307 Ruling 3), costing 3–12 extra requests per journey | GW + ISS | Keep the ruling, and add an `rrn` filter to `/v1/cards/{cardRef}/ledger` so the web needs one request |
 | JRN-G5 | No live refresh for unfinished journeys | `useJourney` has no `refetchInterval`; the page uses no WS event | WEB (+ GW OVW-G3) | Poll every 2 s while `status` ∈ {SENT, TIMED_OUT, REVERSAL_PENDING}, or subscribe to `transaction.updated` once it exists |
@@ -339,3 +339,4 @@ Payload bounds: at most one step per code, so at most 11 steps; messages carry a
 | --- | --- | --- |
 | 1.0 | 2026-09-25 | First version |
 | 1.1 | 2026-09-25 | JRN-G1 fixed (#114) |
+| 1.2 | 2026-09-25 | JRN-G2 evidence: after #119 the issuer ledger credits refunds, so the gateway's negative REFUND `money` row is now wrong against it; the gateway must flip it (#117). No provider change here. |

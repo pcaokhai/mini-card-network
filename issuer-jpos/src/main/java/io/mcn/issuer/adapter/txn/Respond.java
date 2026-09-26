@@ -116,11 +116,23 @@ public class Respond implements AbortParticipant, Configurable {
     if (authCode != null) {
       response.set(38, authCode);
     }
+    Long balance = ctx.get(TxnContextKeys.BALANCE);
+    if (balance != null && "00".equals(responseCode)) {
+      response.set(54, de54(ctx.get(TxnContextKeys.BALANCE_CURRENCY), balance));
+    }
     byte[] arpc = ctx.get(TxnContextKeys.EMV_ARPC);
     if (arpc != null && ("00".equals(responseCode) || "10".equals(responseCode))) {
       response.set(55, buildArpcTlv(arpc));
     }
     return response;
+  }
+
+  /**
+   * The balance sub-format the gateway parses (docs/03 §3 leaves DE 54's layout to the
+   * implementation): currency (3) + C/D sign (1) + minor units (12).
+   */
+  private static String de54(String currency, long balance) {
+    return currency + (balance < 0 ? "D" : "C") + String.format("%012d", Math.abs(balance));
   }
 
   /**

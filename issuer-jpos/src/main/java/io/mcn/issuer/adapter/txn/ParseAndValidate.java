@@ -1,8 +1,9 @@
 package io.mcn.issuer.adapter.txn;
 
+import io.mcn.issuer.domain.TransactionType;
 import java.io.Serializable;
 import java.time.LocalDate;
-import java.util.Set;
+import java.util.Optional;
 import org.jpos.iso.ISOMsg;
 import org.jpos.transaction.Context;
 import org.jpos.transaction.TransactionParticipant;
@@ -14,9 +15,6 @@ import org.jpos.transaction.TransactionParticipant;
  */
 public class ParseAndValidate implements TransactionParticipant {
 
-  private static final Set<String> KNOWN_PROCESSING_CODES =
-      Set.of("000000", "010000", "200000", "310000");
-
   @Override
   public int prepare(long id, Serializable context) {
     Context ctx = (Context) context;
@@ -24,13 +22,16 @@ public class ParseAndValidate implements TransactionParticipant {
 
     try {
       String processingCode = request.getString(3);
-      if (!KNOWN_PROCESSING_CODES.contains(processingCode)) {
+      Optional<TransactionType> type = TransactionType.fromProcessingCode(processingCode);
+      if (type.isEmpty()) {
         ctx.put(TxnContextKeys.RESPONSE_CODE, "12");
         return ABORTED;
       }
 
-      long amount = Long.parseLong(request.getString(4));
-      if (amount <= 0) {
+      // A balance inquiry asks for no amount: the gateway leaves DE 4 out (docs/03 §4 C6).
+      boolean movesMoney = type.get().customerEffect() != TransactionType.CustomerEffect.NONE;
+      long amount = movesMoney || request.hasField(4) ? Long.parseLong(request.getString(4)) : 0L;
+      if (movesMoney && amount <= 0) {
         ctx.put(TxnContextKeys.RESPONSE_CODE, "13");
         return ABORTED;
       }

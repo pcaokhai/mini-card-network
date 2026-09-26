@@ -67,20 +67,55 @@ public class TranLogRepository {
       String responseCode,
       String authCode,
       String declineReason) {
+    updateOutcome(tranId, businessDate, status, responseCode, authCode, declineReason, null);
+  }
+
+  /** As above, plus the balance a balance inquiry answered, so a duplicate replays it (R-2). */
+  public void updateOutcome(
+      long tranId,
+      LocalDate businessDate,
+      String status,
+      String responseCode,
+      String authCode,
+      String declineReason,
+      Long balance) {
+    try (var conn = dataSource.getConnection()) {
+      updateOutcome(
+          conn, tranId, businessDate, status, responseCode, authCode, declineReason, balance);
+    } catch (SQLException e) {
+      throw new IllegalStateException("update tran_log outcome failed", e);
+    }
+  }
+
+  /**
+   * Same update on the caller's connection, so {@code Authorize} commits the outcome in the
+   * transaction that moves the money (S1, root CLAUDE.md §6.5). Only a row still {@code RECEIVED}
+   * takes an outcome: returns false when it already has one (a reversal abandoned it first, or
+   * {@code Authorize} already wrote it), so nothing ever overwrites a decided row.
+   */
+  public boolean updateOutcome(
+      Connection conn,
+      long tranId,
+      LocalDate businessDate,
+      String status,
+      String responseCode,
+      String authCode,
+      String declineReason,
+      Long balance) {
     String sql =
         """
         UPDATE tran_log SET status = ?, response_code = ?, auth_code = ?, decline_reason = ?,
-                             updated_at = now()
-        WHERE id = ? AND business_date = ?""";
-    try (var conn = dataSource.getConnection();
-        var stmt = conn.prepareStatement(sql)) {
+                             balance = ?, updated_at = now()
+        WHERE id = ? AND business_date = ? AND status = 'RECEIVED'""";
+    try (var stmt = conn.prepareStatement(sql)) {
       stmt.setString(1, status);
       stmt.setString(2, responseCode);
       stmt.setString(3, authCode);
       stmt.setString(4, declineReason);
-      stmt.setLong(5, tranId);
-      stmt.setObject(6, businessDate);
-      stmt.executeUpdate();
+      stmt.setObject(5, balance, java.sql.Types.BIGINT);
+      stmt.setLong(6, tranId);
+      stmt.setObject(7, businessDate);
+      return stmt.executeUpdate() == 1;
     } catch (SQLException e) {
       throw new IllegalStateException("update tran_log outcome failed", e);
     }
@@ -97,7 +132,7 @@ public class TranLogRepository {
         """
         SELECT business_date, mti, tran_type, processing_code, acquirer_id, tid, mid, stan,
                transmission_dt_raw, rrn, amount, currency, card_id, status, response_code,
-               auth_code, decline_reason
+               auth_code, decline_reason, balance
         FROM tran_log
         WHERE acquirer_id = ? AND tid = ? AND stan = ? AND transmission_dt_raw = ?
           AND mti = ? AND business_date = ?""";
@@ -113,6 +148,8 @@ public class TranLogRepository {
       if (!rs.next()) return Optional.empty();
       long rawCardId = rs.getLong("card_id");
       Long cardId = rs.wasNull() ? null : rawCardId;
+      long rawBalance = rs.getLong("balance");
+      Long balance = rs.wasNull() ? null : rawBalance;
       return Optional.of(
           new TranLogRow(
               rs.getObject("business_date", LocalDate.class),
@@ -131,7 +168,8 @@ public class TranLogRepository {
               rs.getString("status"),
               rs.getString("response_code") == null ? null : rs.getString("response_code").trim(),
               rs.getString("auth_code") == null ? null : rs.getString("auth_code").trim(),
-              rs.getString("decline_reason")));
+              rs.getString("decline_reason"),
+              balance));
     } catch (SQLException e) {
       throw new IllegalStateException("find tran_log by dedupe key failed", e);
     }
@@ -178,6 +216,34 @@ public class TranLogRepository {
    * journal. The row lock the UPDATE takes serialises a 0420 and its 0421 repeat: only the one that
    * sees APPROVED gets {@code true} and posts.
    */
+  /**
+   * Abandons an original that never finished: still {@code RECEIVED} after {@code staleAfter}
+   * (longer than the acquirer's response timeout, docs/03 §9) and with no journal, so it moved no
+   * money. It becomes {@code REVERSED}, the status a reversed original with nothing left to undo
+   * has; a late {@code Authorize} for it then finds no {@code RECEIVED} row and rolls back. One
+   * conditional statement, so it can't interleave with that approval's own outcome write.
+   */
+  public boolean markAbandoned(
+      Connection conn, long tranId, LocalDate businessDate, java.time.Duration staleAfter)
+      throws SQLException {
+    String sql =
+        """
+        UPDATE tran_log t SET status = 'REVERSED',
+                              response_code = '94',
+                              decline_reason = 'abandoned: reversed while still RECEIVED',
+                              updated_at = now()
+        WHERE t.id = ? AND t.business_date = ? AND t.status = 'RECEIVED'
+          AND t.created_at < now() - make_interval(secs => ?)
+          AND NOT EXISTS (SELECT 1 FROM journal_entry je
+                          WHERE je.tran_id = t.id AND je.tran_business_date = t.business_date)""";
+    try (var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, tranId);
+      stmt.setObject(2, businessDate);
+      stmt.setLong(3, staleAfter.toSeconds());
+      return stmt.executeUpdate() == 1;
+    }
+  }
+
   public boolean markReversed(Connection conn, long tranId, LocalDate businessDate)
       throws SQLException {
     String sql =
