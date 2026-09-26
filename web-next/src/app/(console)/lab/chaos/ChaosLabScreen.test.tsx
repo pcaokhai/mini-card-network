@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { HttpResponse, http } from "msw";
+import { HttpResponse, http, ws } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { renderWithIntl } from "@/test/render";
@@ -10,7 +10,8 @@ import { chaosHandlers, resetChaosMock } from "@/mocks/pages/chaos";
 import { useDisplayMode } from "@/shared/state/display-mode";
 import { ChaosLabScreen } from "./ChaosLabScreen";
 
-const server = setupServer(...chaosHandlers, ...scenarioHandlers, ...handlers);
+const stream = ws.link(/\/v1\/stream$/);
+const server = setupServer(...chaosHandlers, ...scenarioHandlers, ...handlers, stream.addEventListener("connection", () => {}));
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 beforeEach(() => {
   resetChaosMock();
@@ -96,5 +97,79 @@ describe("ChaosLabScreen", () => {
     expect(screen.getAllByText("Drop 0210 → timeout → 0420")).toHaveLength(1);
     expect(screen.getByText("0200 timeout → 0420 field 90 → 0430")).toBeInTheDocument();
     expect(screen.getByText("SAF depth")).toBeInTheDocument();
+  });
+
+  const baseRun = { requested: 100, openingBalanceTotal: 500_000_000 };
+
+  it("stops polling and frees the run button when the run is gone (gateway restarted) __CHA_G7", async () => {
+    let polls = 0;
+    server.use(
+      http.post("*/v1/chaos/runs", () => HttpResponse.json({ ...baseRun, runId: "run-lost", status: "RUNNING", completed: 0, seq: 0 }, { status: 202 })),
+      http.get("*/v1/chaos/runs/:runId", () => {
+        polls += 1;
+        return HttpResponse.json({ type: "not-found", title: "not-found", status: 404 }, { status: 404 });
+      }),
+    );
+    renderWithIntl(<ChaosLabScreen />);
+    await screen.findByText("1 sự cố đang bật");
+    const runButton = screen.getByRole("button", { name: "Chạy thử 100 giao dịch" });
+
+    await userEvent.click(runButton);
+
+    await waitFor(() => expect(screen.getByTestId("money-verification")).toHaveAttribute("data-result", "none"));
+    expect(runButton).toBeEnabled();
+    const settled = polls;
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(polls).toBe(settled);
+  }, 10_000);
+
+  it("shows an error, not a calm state, when the scenarios can't be loaded __CHA_G10", async () => {
+    server.use(http.get("*/v1/chaos/scenarios", () => HttpResponse.json({ title: "boom" }, { status: 500 })));
+    renderWithIntl(<ChaosLabScreen />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Không tải được danh sách sự cố. Hãy thử lại.");
+    expect(screen.queryByText("Mọi thứ bình thường")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("scenario-card-SLOW_NETWORK")).not.toBeInTheDocument();
+  });
+
+  it("disables the scenario the stack reports unavailable __CHA_G11", async () => {
+    server.use(
+      http.get("*/v1/chaos/scenarios", () =>
+        HttpResponse.json(
+          ["SLOW_NETWORK", "CONNECTION_CUT", "DROP_RESPONSE", "DUPLICATE_REQUEST", "ISSUER_DOWN", "LATE_RESPONSE"].map((id) => ({
+            id,
+            enabled: false,
+            available: id !== "DROP_RESPONSE",
+            easyText: id,
+            technicalText: id,
+          })),
+        ),
+      ),
+    );
+    renderWithIntl(<ChaosLabScreen />);
+
+    expect(await screen.findByText("Mọi thứ bình thường")).toBeInTheDocument();
+    expect(within(screen.getByTestId("scenario-card-DROP_RESPONSE")).getByRole("button")).toBeDisabled();
+    expect(within(screen.getByTestId("scenario-card-SLOW_NETWORK")).getByRole("button")).toBeEnabled();
+  });
+
+  it("ignores a chaos.run.progress snapshot older than the one on screen __CHA_G13", async () => {
+    const newer = { ...baseRun, runId: "run-ws", status: "RUNNING", completed: 70, approved: 60, seq: 7 };
+    const older = { ...newer, completed: 40, approved: 35, seq: 4 };
+    server.use(
+      http.post("*/v1/chaos/runs", () => HttpResponse.json({ ...baseRun, runId: "run-ws", status: "RUNNING", completed: 0, seq: 0 }, { status: 202 })),
+      http.get("*/v1/chaos/runs/:runId", () => HttpResponse.json(newer)),
+      stream.addEventListener("connection", ({ client }) => {
+        setTimeout(() => client.send(JSON.stringify({ id: "e1", type: "chaos.run.progress", occurredAt: new Date().toISOString(), data: older })), 300);
+      }),
+    );
+    renderWithIntl(<ChaosLabScreen />);
+    await screen.findByText("1 sự cố đang bật");
+
+    await userEvent.click(screen.getByRole("button", { name: "Chạy thử 100 giao dịch" }));
+    expect(await screen.findByText("60 giao dịch được duyệt")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(screen.getByText("60 giao dịch được duyệt")).toBeInTheDocument();
+    expect(screen.queryByText("35 giao dịch được duyệt")).not.toBeInTheDocument();
   });
 });

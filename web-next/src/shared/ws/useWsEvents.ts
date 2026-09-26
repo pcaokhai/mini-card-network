@@ -32,10 +32,10 @@ export function useWsEvents(eventTypes: string[], onEvent: (event: WsEnvelope) =
 
     function connect() {
       if (closed) return;
-      // NEXT_PUBLIC_WS_URL is a workaround for web-next's missing BFF proxy layer (CLAUDE.md
-      // documents Route Handlers under src/app/api/ that were never built) - it points the
-      // browser directly at the gateway. Falls back to same-origin, the intended topology
-      // once the proxy exists.
+      // Route Handlers can't hold a WebSocket open, so the BFF can't proxy /v1/stream: the
+      // browser connects to the gateway at NEXT_PUBLIC_WS_URL (documented in .env.example,
+      // NET-G8). Unset, it falls back to same-origin for a deployment whose reverse proxy
+      // forwards /v1/stream.
       const url =
         process.env.NEXT_PUBLIC_WS_URL ??
         `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/v1/stream`;

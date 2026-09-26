@@ -5,8 +5,10 @@ import { useTranslations } from "next-intl";
 import { useState } from "react";
 import {
   CHAOS_SCENARIO_IDS,
+  ChaosRunGoneError,
   chaosRunKey,
   isRunFinished,
+  newerRun,
   useChaosRun,
   useChaosScenarios,
   useDisableAllChaosScenarios,
@@ -31,7 +33,8 @@ export function ChaosLabScreen() {
   const expert = useDisplayMode((s) => s.mode === "expert");
   const queryClient = useQueryClient();
 
-  const scenarios = useChaosScenarios().data ?? [];
+  const scenariosQuery = useChaosScenarios();
+  const scenarios = scenariosQuery.data ?? [];
   const setScenario = useSetChaosScenario();
   const disableAll = useDisableAllChaosScenarios();
   const startRun = useStartChaosRun();
@@ -39,7 +42,10 @@ export function ChaosLabScreen() {
   const p99LatencyMs = useOverview().data?.p99LatencyMs;
 
   const [runId, setRunId] = useState<string | null>(null);
-  const run = useChaosRun(runId).data;
+  const runQuery = useChaosRun(runId);
+  // A run the gateway forgot (restart) is treated as no run: the panel resets and a new run can
+  // start; the query has stopped polling it (CHA-G7).
+  const run = runQuery.error instanceof ChaosRunGoneError ? undefined : runQuery.data;
   const running = run !== undefined && !isRunFinished(run);
 
   useWsEvents(RUN_EVENT_TYPES, (event: WsEnvelope) => {
@@ -48,7 +54,7 @@ export function ChaosLabScreen() {
       return;
     }
     const data = event.data as ChaosRun;
-    if (data.runId === runId) queryClient.setQueryData(chaosRunKey(data.runId), data);
+    if (data.runId === runId) queryClient.setQueryData<ChaosRun>(chaosRunKey(data.runId), (cached) => newerRun(cached, data));
   });
 
   const active = scenarios.filter((s) => s.enabled).map((s) => s.id);
@@ -70,9 +76,11 @@ export function ChaosLabScreen() {
           <p className="mt-1.5 mb-0 text-[15px] text-muted">{t("subtitle")}</p>
         </div>
         <div className="chaos-actions">
-          <span className="chaos-pill" data-testid="chaos-active-count" data-tone={active.length === 0 ? "ok" : "warn"} aria-live="polite">
-            {active.length === 0 ? t("count.calm") : t("count.active", { count: active.length })}
-          </span>
+          {scenariosQuery.isSuccess && (
+            <span className="chaos-pill" data-testid="chaos-active-count" data-tone={active.length === 0 ? "ok" : "warn"} aria-live="polite">
+              {active.length === 0 ? t("count.calm") : t("count.active", { count: active.length })}
+            </span>
+          )}
           <button type="button" className="chaos-btn" onClick={() => disableAll.mutate(active)}>
             {t("resetAll")}
           </button>
@@ -82,6 +90,11 @@ export function ChaosLabScreen() {
         </div>
       </div>
 
+      {scenariosQuery.isError && (
+        <p role="alert" className="chaos-alert">
+          {t("error.scenarios")}
+        </p>
+      )}
       {(toggleFailed || startRun.isError) && (
         <p role="alert" className="chaos-alert">
           {startRun.isError ? t("error.run") : t("error.toggle")}
@@ -90,11 +103,12 @@ export function ChaosLabScreen() {
 
       <div className="chaos-columns">
         <div className="chaos-cards">
-          {CHAOS_SCENARIO_IDS.map((id) => (
+          {scenariosQuery.isSuccess && CHAOS_SCENARIO_IDS.map((id) => (
             <ScenarioCard
               key={id}
               id={id}
               enabled={active.includes(id)}
+              available={scenarios.find((s) => s.id === id)?.available}
               expert={expert}
               busy={setScenario.isPending && setScenario.variables.scenarioId === id}
               onToggle={(scenarioId, enabled) => setScenario.mutate({ scenarioId, enabled })}

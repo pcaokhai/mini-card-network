@@ -240,6 +240,9 @@
   font-weight: 600;
   color: var(--color-bad);
 }
+.chaos-ledger__alert[data-tone="warn"] {
+  color: var(--color-warn);
+}
 
 .chaos-reaction {
   gap: 12px;
@@ -312,4 +315,16 @@
   font-size: 14px;
   font-weight: 600;
   color: var(--color-bad);
+}
+
+.chaos-card[data-available="false"] {
+  opacity: 0.6;
+}
+.chaos-card__unavailable {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-muted);
+}
+.chaos-card__toggle:disabled {
+  cursor: not-allowed;
 }

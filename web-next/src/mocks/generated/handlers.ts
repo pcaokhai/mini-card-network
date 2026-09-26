@@ -121,6 +121,29 @@ export const handlers = [
         : body;
     return HttpResponse.json(responseJson, init);
   }),
+  http.get(`${baseURL}/v1/chaos/runs`, async ({ request }) => {
+    const shouldEchoRequestBody = false;
+    let requestJson = null;
+    if (shouldEchoRequestBody && ["post", "put", "patch"].includes("get")) {
+      try {
+        requestJson = await request.clone().json();
+      } catch (e) {
+        requestJson = null;
+      }
+    }
+
+    const resultArray = [
+      [await getListChaosRuns200Response(), { status: 200 }],
+    ] as [any, { status: number }][];
+
+    const [body, init] =
+      resultArray[next(`get /v1/chaos/runs`) % resultArray.length];
+    const responseJson =
+      requestJson && body && typeof body === "object" && !Array.isArray(body)
+        ? { ...body, ...requestJson }
+        : body;
+    return HttpResponse.json(responseJson, init);
+  }),
   http.get(`${baseURL}/v1/chaos/scenarios`, async ({ request }) => {
     const shouldEchoRequestBody = false;
     let requestJson = null;
@@ -781,6 +804,29 @@ export const handlers = [
         : body;
     return HttpResponse.json(responseJson, init);
   }),
+  http.get(`${baseURL}/v1/cards/:cardRef/audit`, async ({ request }) => {
+    const shouldEchoRequestBody = false;
+    let requestJson = null;
+    if (shouldEchoRequestBody && ["post", "put", "patch"].includes("get")) {
+      try {
+        requestJson = await request.clone().json();
+      } catch (e) {
+        requestJson = null;
+      }
+    }
+
+    const resultArray = [
+      [await getGetCardAudit200Response(), { status: 200 }],
+    ] as [any, { status: number }][];
+
+    const [body, init] =
+      resultArray[next(`get /v1/cards/:cardRef/audit`) % resultArray.length];
+    const responseJson =
+      requestJson && body && typeof body === "object" && !Array.isArray(body)
+        ? { ...body, ...requestJson }
+        : body;
+    return HttpResponse.json(responseJson, init);
+  }),
   http.get(`${baseURL}/v1/cards/:cardRef/ledger`, async ({ request }) => {
     const shouldEchoRequestBody = false;
     let requestJson = null;
@@ -1091,6 +1137,15 @@ export function getCreatePurchase201Response() {
     merchantName: faker.person.fullName(),
     latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
     createdAt: faker.date.anytime().toISOString(),
+    reversalReason: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "CUSTOMER_CANCELLATION",
+        "TIMEOUT",
+        "MAC_FAILURE",
+        "SEND_FAILURE",
+      ]),
+      null,
+    ]),
     authCode: faker.helpers.arrayElement([faker.lorem.words(), null]),
     approvedAmount: faker.helpers.arrayElement([
       {
@@ -1147,6 +1202,15 @@ export function getCreatePreAuthorization201Response() {
     merchantName: faker.person.fullName(),
     latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
     createdAt: faker.date.anytime().toISOString(),
+    reversalReason: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "CUSTOMER_CANCELLATION",
+        "TIMEOUT",
+        "MAC_FAILURE",
+        "SEND_FAILURE",
+      ]),
+      null,
+    ]),
     authCode: faker.helpers.arrayElement([faker.lorem.words(), null]),
     approvedAmount: faker.helpers.arrayElement([
       {
@@ -1203,6 +1267,15 @@ export function getCreateCompletion201Response() {
     merchantName: faker.person.fullName(),
     latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
     createdAt: faker.date.anytime().toISOString(),
+    reversalReason: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "CUSTOMER_CANCELLATION",
+        "TIMEOUT",
+        "MAC_FAILURE",
+        "SEND_FAILURE",
+      ]),
+      null,
+    ]),
     authCode: faker.helpers.arrayElement([faker.lorem.words(), null]),
     approvedAmount: faker.helpers.arrayElement([
       {
@@ -1259,6 +1332,15 @@ export function getCreateRefund201Response() {
     merchantName: faker.person.fullName(),
     latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
     createdAt: faker.date.anytime().toISOString(),
+    reversalReason: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "CUSTOMER_CANCELLATION",
+        "TIMEOUT",
+        "MAC_FAILURE",
+        "SEND_FAILURE",
+      ]),
+      null,
+    ]),
     authCode: faker.helpers.arrayElement([faker.lorem.words(), null]),
     approvedAmount: faker.helpers.arrayElement([
       {
@@ -1315,6 +1397,15 @@ export function getCreateBalanceInquiry201Response() {
     merchantName: faker.person.fullName(),
     latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
     createdAt: faker.date.anytime().toISOString(),
+    reversalReason: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "CUSTOMER_CANCELLATION",
+        "TIMEOUT",
+        "MAC_FAILURE",
+        "SEND_FAILURE",
+      ]),
+      null,
+    ]),
     authCode: faker.helpers.arrayElement([faker.lorem.words(), null]),
     approvedAmount: faker.helpers.arrayElement([
       {
@@ -1371,6 +1462,15 @@ export function getCancelTransaction202Response() {
     merchantName: faker.person.fullName(),
     latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
     createdAt: faker.date.anytime().toISOString(),
+    reversalReason: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "CUSTOMER_CANCELLATION",
+        "TIMEOUT",
+        "MAC_FAILURE",
+        "SEND_FAILURE",
+      ]),
+      null,
+    ]),
     authCode: faker.helpers.arrayElement([faker.lorem.words(), null]),
     approvedAmount: faker.helpers.arrayElement([
       {
@@ -1434,6 +1534,15 @@ export function getListTransactions200Response() {
         merchantName: faker.person.fullName(),
         latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
         createdAt: faker.date.anytime().toISOString(),
+        reversalReason: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            "CUSTOMER_CANCELLATION",
+            "TIMEOUT",
+            "MAC_FAILURE",
+            "SEND_FAILURE",
+          ]),
+          null,
+        ]),
       }));
     })(),
     nextCursor: faker.helpers.arrayElement([faker.lorem.words(), null]),
@@ -1475,6 +1584,15 @@ export function getGetTransaction200Response() {
     merchantName: faker.person.fullName(),
     latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
     createdAt: faker.date.anytime().toISOString(),
+    reversalReason: faker.helpers.arrayElement([
+      faker.helpers.arrayElement([
+        "CUSTOMER_CANCELLATION",
+        "TIMEOUT",
+        "MAC_FAILURE",
+        "SEND_FAILURE",
+      ]),
+      null,
+    ]),
     authCode: faker.helpers.arrayElement([faker.lorem.words(), null]),
     approvedAmount: faker.helpers.arrayElement([
       {
@@ -1532,6 +1650,15 @@ export function getGetTransactionJourney200Response() {
       merchantName: faker.person.fullName(),
       latencyMs: faker.helpers.arrayElement([faker.number.int(), null]),
       createdAt: faker.date.anytime().toISOString(),
+      reversalReason: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          "CUSTOMER_CANCELLATION",
+          "TIMEOUT",
+          "MAC_FAILURE",
+          "SEND_FAILURE",
+        ]),
+        null,
+      ]),
       authCode: faker.helpers.arrayElement([faker.lorem.words(), null]),
       approvedAmount: faker.helpers.arrayElement([
         {
@@ -1682,6 +1809,7 @@ export function getDecodeMessage200Response() {
         raw: faker.lorem.words(),
       }));
     })(),
+    packed: faker.helpers.arrayElement([faker.lorem.words(), null]),
   };
 }
 
@@ -1719,6 +1847,7 @@ export function getEncodeMessage200Response() {
         raw: faker.lorem.words(),
       }));
     })(),
+    packed: faker.helpers.arrayElement([faker.lorem.words(), null]),
   };
 }
 
@@ -1859,6 +1988,17 @@ export function getListNetworkEvents200Response() {
         id: faker.string.uuid(),
         occurredAt: faker.date.anytime().toISOString(),
         severity: faker.helpers.arrayElement(["INFO", "OK", "WARN", "ERROR"]),
+        code: faker.helpers.arrayElement([
+          "LINK_UP",
+          "LINK_DOWN",
+          "SIGNED_ON",
+          "SIGNED_OFF",
+          "SIGNED_ON_AGAIN",
+          "SIGN_ON_FAILED",
+          "ECHO_OK",
+          "ECHO_FAILED",
+          "LATE_RESPONSE",
+        ]),
         easyText: faker.lorem.words(),
         technicalText: faker.lorem.words(),
       }));
@@ -1896,6 +2036,7 @@ export function getListChaosScenarios200Response() {
         "LATE_RESPONSE",
       ]),
       enabled: faker.datatype.boolean(),
+      available: faker.datatype.boolean(),
       easyText: faker.lorem.words(),
       technicalText: faker.lorem.words(),
     }));
@@ -1913,8 +2054,45 @@ export function getSetChaosScenario200Response() {
       "LATE_RESPONSE",
     ]),
     enabled: faker.datatype.boolean(),
+    available: faker.datatype.boolean(),
     easyText: faker.lorem.words(),
     technicalText: faker.lorem.words(),
+  };
+}
+
+export function getListChaosRuns200Response() {
+  return {
+    items: (() => {
+      const arrayMin = 1;
+      const arrayMax = MAX_ARRAY_LENGTH;
+      const safeMin = Math.min(arrayMin, arrayMax);
+      return [
+        ...new Array(faker.number.int({ min: safeMin, max: arrayMax })).keys(),
+      ].map((_) => ({
+        runId: faker.string.uuid(),
+        status: faker.helpers.arrayElement([
+          "RUNNING",
+          "VERIFYING",
+          "PASSED",
+          "FAILED",
+        ]),
+        requested: faker.number.int(),
+        completed: faker.number.int(),
+        approved: faker.number.int(),
+        declined: faker.number.int(),
+        reversed: faker.number.int(),
+        openingBalanceTotal: faker.number.int(),
+        closingBalanceTotal: faker.number.int(),
+        ledgerDiscrepancy: faker.number.int(),
+        failureKind: faker.helpers.arrayElement([
+          faker.helpers.arrayElement(["LEDGER_MISMATCH", "RUN_ERROR", null]),
+          faker.helpers.arrayElement(["LEDGER_MISMATCH", "RUN_ERROR", null]),
+        ]),
+        failureDetail: faker.helpers.arrayElement([faker.lorem.words(), null]),
+        startedAt: faker.date.anytime().toISOString(),
+        seq: faker.number.int(),
+      }));
+    })(),
   };
 }
 
@@ -1935,6 +2113,13 @@ export function getStartChaosRun202Response() {
     openingBalanceTotal: faker.number.int(),
     closingBalanceTotal: faker.number.int(),
     ledgerDiscrepancy: faker.number.int(),
+    failureKind: faker.helpers.arrayElement([
+      faker.helpers.arrayElement(["LEDGER_MISMATCH", "RUN_ERROR", null]),
+      faker.helpers.arrayElement(["LEDGER_MISMATCH", "RUN_ERROR", null]),
+    ]),
+    failureDetail: faker.helpers.arrayElement([faker.lorem.words(), null]),
+    startedAt: faker.date.anytime().toISOString(),
+    seq: faker.number.int(),
   };
 }
 
@@ -1955,11 +2140,19 @@ export function getGetChaosRun200Response() {
     openingBalanceTotal: faker.number.int(),
     closingBalanceTotal: faker.number.int(),
     ledgerDiscrepancy: faker.number.int(),
+    failureKind: faker.helpers.arrayElement([
+      faker.helpers.arrayElement(["LEDGER_MISMATCH", "RUN_ERROR", null]),
+      faker.helpers.arrayElement(["LEDGER_MISMATCH", "RUN_ERROR", null]),
+    ]),
+    failureDetail: faker.helpers.arrayElement([faker.lorem.words(), null]),
+    startedAt: faker.date.anytime().toISOString(),
+    seq: faker.number.int(),
   };
 }
 
 export function getGetOverview200Response() {
   return {
+    businessDate: faker.date.past().toISOString().substring(0, 10),
     transactionsToday: faker.number.int(),
     transactionsDeltaPct: faker.number.int(),
     approvalRate: faker.number.int(),
@@ -2264,6 +2457,31 @@ export function getUpdateCardLimits200Response() {
   };
 }
 
+export function getGetCardAudit200Response() {
+  return {
+    items: (() => {
+      const arrayMin = 1;
+      const arrayMax = MAX_ARRAY_LENGTH;
+      const safeMin = Math.min(arrayMin, arrayMax);
+      return [
+        ...new Array(faker.number.int({ min: safeMin, max: arrayMax })).keys(),
+      ].map((_) => ({
+        auditId: faker.string.uuid(),
+        occurredAt: faker.date.anytime().toISOString(),
+        actor: faker.lorem.words(),
+        action: faker.helpers.arrayElement([
+          "CARD_BLOCKED",
+          "CARD_UNBLOCKED",
+          "CARD_LIMITS_UPDATED",
+        ]),
+        before: faker.helpers.arrayElement([{}, null]),
+        after: faker.helpers.arrayElement([{}, null]),
+      }));
+    })(),
+    nextCursor: faker.helpers.arrayElement([faker.lorem.words(), null]),
+  };
+}
+
 export function getGetCardLedger200Response() {
   return {
     items: (() => {
@@ -2485,6 +2703,8 @@ export function getGetSettlementDay200Response() {
       },
       null,
     ]),
+    participantId: faker.string.uuid(),
+    currency: faker.helpers.fromRegExp(new RegExp("^[0-9]{3}$")),
   };
 }
 
@@ -2546,6 +2766,8 @@ export function getTriggerCutover202Response() {
       },
       null,
     ]),
+    participantId: faker.string.uuid(),
+    currency: faker.helpers.fromRegExp(new RegExp("^[0-9]{3}$")),
   };
 }
 
@@ -2607,6 +2829,8 @@ export function getRunReconciliation202Response() {
       },
       null,
     ]),
+    participantId: faker.string.uuid(),
+    currency: faker.helpers.fromRegExp(new RegExp("^[0-9]{3}$")),
   };
 }
 
