@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mcn/gateway-go/internal/bizdate"
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/iso8583"
 	"github.com/mcn/gateway-go/internal/journey"
@@ -166,15 +167,17 @@ type Service struct {
 	hsm         hsm.Module
 	zak         []byte
 	mac         purchase.MACVerifier
+	calendar    bizdate.Calendar
 }
 
 // NewService builds a Service, reusing the same dependency shapes purchase.NewService takes -
 // Ruling 2: a sibling service, not a re-derivation of purchase.Service's already-proven wiring.
-// safQueuer and keyStore are the same SAF queue and dual-key MAC lookup purchases use.
-func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency purchase.IdempotencyPort, hub HubPort, safQueuer SAFQueuer, hsmModule hsm.Module, zak []byte, keyStore purchase.RetiredKeyFinder) *Service {
+// safQueuer and keyStore are the same SAF queue and dual-key MAC lookup purchases use; calendar
+// is the acquirer's business date (ADR-007).
+func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency purchase.IdempotencyPort, hub HubPort, safQueuer SAFQueuer, hsmModule hsm.Module, zak []byte, keyStore purchase.RetiredKeyFinder, calendar bizdate.Calendar) *Service {
 	return &Service{
 		mux: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, idempotency: idempotency, hub: hub,
-		saf: safQueuer, hsm: hsmModule, zak: zak, mac: purchase.NewMACVerifier(hsmModule, zak, keyStore),
+		saf: safQueuer, hsm: hsmModule, zak: zak, mac: purchase.NewMACVerifier(hsmModule, zak, keyStore), calendar: calendar,
 	}
 }
 
@@ -193,6 +196,7 @@ type sendParams struct {
 	terminalID   string
 	requestedAmt Money
 	originalRRN  string
+	businessDate time.Time // set by send: the business date open when DE 7 was built
 }
 
 // nextSTAN allocates the network STAN. linkUp is false when the issuer link can't carry the
@@ -209,6 +213,8 @@ func (s *Service) nextSTAN() (stan string, linkUp bool) {
 // rewritten only for flows whose message carries it (completion's 0220 has none), and before the
 // MAC so the MAC covers it.
 func (s *Service) finalizeFields(ctx context.Context, p sendParams) (store.Merchant, error) {
+	// DE 15, mandatory in the 0100, 0200 and 0220 (docs/03 §3), carries the business date.
+	p.fields[15] = bizdate.MMDD(p.businessDate)
 	merchant, err := s.merchants.Merchant(ctx, p.terminalID)
 	if err != nil {
 		return store.Merchant{}, fmt.Errorf("resolve merchant for terminal %s: %w", p.terminalID, err)
@@ -239,7 +245,7 @@ func (s *Service) fromLog(ctx context.Context, rrn string) (Transaction, bool, e
 		RRN: row.RRN, STAN: row.NetworkSTAN, Type: row.Type, Status: row.Status, ResponseCode: row.ResponseCode,
 		Amount: Money{Amount: row.Amount, Currency: row.Currency}, MaskedPAN: row.MaskedPAN, TerminalID: row.TerminalID,
 		MerchantName: row.MerchantName, AuthCode: row.AuthCode, OriginalRRN: row.OriginalRRN,
-		BusinessDate: row.CreatedAt.UTC().Format(time.DateOnly), CreatedAt: row.CreatedAt,
+		BusinessDate: bizdate.Format(row.BusinessDate), CreatedAt: row.CreatedAt,
 		ResponseLabel: purchase.ResponseLabel(row.ResponseCode), LatencyMs: journey.LatencyMs(row), TraceID: row.TraceID,
 	}
 	if row.ApprovedAmount != nil {
@@ -255,6 +261,8 @@ func (s *Service) fromLog(ctx context.Context, rrn string) (Transaction, bool, e
 // flow's send path runs (Global Constraints: every outgoing message is MAC'd, no new path
 // bypasses it).
 func (s *Service) send(ctx context.Context, p sendParams) (Transaction, error) {
+	// The business date the request is sent in, which it keeps even if answered after cutover.
+	p.businessDate = s.calendar.Current(p.sentAt)
 	merchant, err := s.finalizeFields(ctx, p)
 	if err != nil {
 		return Transaction{}, err
@@ -283,7 +291,7 @@ func (s *Service) sendAndRecord(ctx context.Context, p sendParams, merchant stor
 	row := store.TranLogRow{
 		RRN: p.rrn, Type: p.txnType, Status: statusCreated, Amount: p.requestedAmt.Amount, Currency: p.requestedAmt.Currency,
 		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: merchant.MID, NetworkSTAN: p.stan, MTI: p.mti,
-		ProcessingCode: p.fields[3], POSEntryMode: p.posEntryMode, SentAt: &p.sentAt, CardToken: p.cardToken,
+		ProcessingCode: p.fields[3], POSEntryMode: p.posEntryMode, SentAt: &p.sentAt, CardToken: p.cardToken, BusinessDate: p.businessDate,
 		OriginalRRN: p.originalRRN, TraceID: obs.TraceID(ctx),
 	}
 	id, err := s.insert(ctx, p, row)
@@ -476,7 +484,7 @@ func (s *Service) recordLinkDown(ctx context.Context, p sendParams, merchant sto
 	row := store.TranLogRow{
 		RRN: p.rrn, Type: p.txnType, Status: statusDeclined, Amount: p.requestedAmt.Amount, Currency: p.requestedAmt.Currency,
 		MaskedPAN: p.maskedPAN, TerminalID: p.terminalID, MerchantID: merchant.MID, ResponseCode: rcLinkDown, MTI: p.mti,
-		OriginalRRN: p.originalRRN, TraceID: txn.TraceID,
+		OriginalRRN: p.originalRRN, TraceID: txn.TraceID, BusinessDate: p.businessDate,
 	}
 	if _, err := s.tranLog.Insert(ctx, row); err != nil {
 		return Transaction{}, fmt.Errorf("insert tran_log for link-down decline: %w", err)
@@ -502,7 +510,7 @@ func (s *Service) describe(ctx context.Context, txn Transaction, p sendParams, m
 	txn.TraceID = obs.TraceID(ctx)
 	now := time.Now().UTC()
 	txn.CreatedAt = now
-	txn.BusinessDate = now.Format("2006-01-02")
+	txn.BusinessDate = bizdate.Format(p.businessDate)
 	return txn
 }
 

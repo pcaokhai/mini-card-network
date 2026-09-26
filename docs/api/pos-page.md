@@ -105,7 +105,7 @@ The balance in "Số dư còn {balance} ₫" comes from §4.6, not from this res
   5. `tran_log` moves CREATED → SENT → outcome, and each transition is written to `tran_state_history`.
   6. A 0210 with RC `00` ⇒ APPROVED; any other RC ⇒ DECLINED. A 0210 whose MAC fails (against the current ZAK and, for 5 minutes after a rotation, the retired one) is returned as DECLINED RC `96`, and a 0420 with reason `06` is queued in SAF.
   7. No 0210 within 30 s, or any other send failure after the write (broken connection, cancelled request) ⇒ the row goes TIMED_OUT, a 0420 with reason `68` is queued in SAF, and the response carries the row's real status, `REVERSAL_PENDING`. The 0200 is never resent (root CLAUDE.md §6.4). A link that drops before the write is DECLINED RC `91`.
-  8. `maskedPan` is first 6 + last 4. `businessDate` is the UTC date of the request.
+  8. `maskedPan` is first 6 + last 4. `businessDate` is the acquirer's business date the 0200 was sent in (ADR-007), also its DE 15 and the stored `tran_log.business_date`.
   9. One `transaction.created` WS event is broadcast with the returned transaction.
 - **Errors.** Problem `type` values are bare slugs today (OVW-G12 in [overview-page.md](overview-page.md)).
 

@@ -278,7 +278,7 @@ func newTestServiceWithReversal(mux *fakeMux) (*Service, *fakeTranLog, *fakeIdem
 	idem := &fakeIdempotency{}
 	hub := &fakeHub{}
 	reversal := &fakeReversal{}
-	svc := NewService(mux, purchase.DefaultCardTokens(), testMerchants, tranLog, idem, hub, reversal, fakeHSM{}, testZAK, nil)
+	svc := NewService(mux, purchase.DefaultCardTokens(), testMerchants, tranLog, idem, hub, reversal, fakeHSM{}, testZAK, nil, testCalendar)
 	return svc, tranLog, idem, hub, reversal
 }
 
@@ -824,4 +824,26 @@ func TestSend_aLateAnswerNeverOverwritesASweptRow__N1(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, statusTimedOut, tranLog.rows[0].Status, "the sweep's reversal stands")
 	require.Equal(t, statusTimedOut, txn.Status)
+}
+
+// fixedCalendar is a BusinessCalendar whose business date never moves.
+type fixedCalendar struct{ date time.Time }
+
+func (c fixedCalendar) Current(time.Time) time.Time    { return c.date }
+func (c fixedCalendar) Previous(d time.Time) time.Time { return d.AddDate(0, 0, -1) }
+func (c fixedCalendar) OpenedAt(d time.Time) time.Time { return d }
+
+// testCalendar's business date is deliberately not today's UTC date.
+var testCalendar = fixedCalendar{date: time.Date(2031, 12, 31, 0, 0, 0, 0, time.UTC)}
+
+func TestSend_carriesTheBusinessDateInDE15AndTheRow__OVW_G7(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+
+	txn, err := svc.CreatePreAuth(context.Background(), samplePreAuthRequest(), "idem-business-date")
+
+	require.NoError(t, err)
+	require.Equal(t, "1231", mux.lastFields[15], "DE 15 is mandatory in the 0100 (docs/03 §3)")
+	require.Equal(t, testCalendar.date, tranLog.rows[0].BusinessDate)
+	require.Equal(t, "2031-12-31", txn.BusinessDate)
 }

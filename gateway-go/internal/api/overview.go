@@ -7,18 +7,27 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mcn/gateway-go/internal/bizdate"
 	"github.com/mcn/gateway-go/internal/journey"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
 // OverviewReader is the read-side port overview.go needs; *store.TranLogRepository satisfies it.
 type OverviewReader interface {
-	Overview(ctx context.Context, now time.Time) (store.OverviewStats, error)
+	Overview(ctx context.Context, now time.Time, day store.BusinessDay) (store.OverviewStats, error)
 }
 
-// MountOverview registers GET /v1/metrics/overview (contracts/openapi.yaml, tag "metrics").
-func MountOverview(r chi.Router, reader OverviewReader) {
-	r.Get("/v1/metrics/overview", handleGetOverview(reader))
+// MountOverview registers GET /v1/metrics/overview (contracts/openapi.yaml, tag "metrics"). Its
+// "today" is calendar's current business date (ADR-007 §3).
+func MountOverview(r chi.Router, reader OverviewReader, calendar bizdate.Calendar) {
+	r.Get("/v1/metrics/overview", handleGetOverview(reader, calendar))
+}
+
+// businessDay is the business date open at now and the one before it, with their openings.
+func businessDay(calendar bizdate.Calendar, now time.Time) store.BusinessDay {
+	today := calendar.Current(now)
+	previous := calendar.Previous(today)
+	return store.BusinessDay{Date: today, Previous: previous, OpenedAt: calendar.OpenedAt(today), PreviousOpenedAt: calendar.OpenedAt(previous)}
 }
 
 type throughputSampleDTO struct {
@@ -33,6 +42,7 @@ type declineReasonDTO struct {
 }
 
 type overviewDTO struct {
+	BusinessDate         string                `json:"businessDate"`
 	TransactionsToday    int64                 `json:"transactionsToday"`
 	TransactionsDeltaPct *float64              `json:"transactionsDeltaPct,omitempty"`
 	ApprovalRate         float64               `json:"approvalRate"`
@@ -43,14 +53,18 @@ type overviewDTO struct {
 	DeclineReasons       []declineReasonDTO    `json:"declineReasons"`
 }
 
-func handleGetOverview(reader OverviewReader) http.HandlerFunc {
+func handleGetOverview(reader OverviewReader, calendar bizdate.Calendar) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		stats, err := reader.Overview(req.Context(), time.Now().UTC())
+		now := time.Now().UTC()
+		day := businessDay(calendar, now)
+		stats, err := reader.Overview(req.Context(), now, day)
 		if err != nil {
 			problem(w, http.StatusInternalServerError, "overview-read-failed", err.Error())
 			return
 		}
-		writeJSONBody(w, http.StatusOK, toOverviewDTO(stats))
+		dto := toOverviewDTO(stats)
+		dto.BusinessDate = bizdate.Format(day.Date)
+		writeJSONBody(w, http.StatusOK, dto)
 	}
 }
 

@@ -54,6 +54,8 @@ type TranLogRow struct {
 	ReversalReasonCode string
 	// CompletedBy is the RRN of the completion that consumed this pre-authorization.
 	CompletedBy string
+	// BusinessDate is the acquirer's business date the row belongs to (ADR-007), midnight UTC.
+	BusinessDate time.Time
 }
 
 // Money is an amount in integer minor units and its ISO 4217 numeric currency.
@@ -158,13 +160,22 @@ func insertTranLog(ctx context.Context, q rowQuerier, row TranLogRow) (int64, er
 	err := q.QueryRow(ctx,
 		`INSERT INTO tran_log (business_date, client_request_id, tran_type, tid, mid, network_stan, rrn, masked_pan, amount, currency, state, response_code, auth_code,
 		                       processing_code, pos_entry_mode, sent_at, card_token, mti, original_rrn, trace_id)
-		 VALUES (CURRENT_DATE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''),
+		 VALUES (coalesce($20::date, CURRENT_DATE), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''),
 		         NULLIF($13, ''), NULLIF($14, ''), $15, NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''))
 		 RETURNING id`,
 		row.RRN, row.Type, row.TerminalID, row.MerchantID, row.NetworkSTAN, row.RRN, row.MaskedPAN, row.Amount, row.Currency, row.Status, row.ResponseCode, row.AuthCode,
-		row.ProcessingCode, row.POSEntryMode, row.SentAt, row.CardToken, row.MTI, row.OriginalRRN, row.TraceID,
+		row.ProcessingCode, row.POSEntryMode, row.SentAt, row.CardToken, row.MTI, row.OriginalRRN, row.TraceID, nullableDate(row.BusinessDate),
 	).Scan(&id)
 	return id, err
+}
+
+// nullableDate is nil for a zero date. ponytail: only repository tests insert without a business
+// date (they get CURRENT_DATE); every service sets it from the BusinessCalendar.
+func nullableDate(d time.Time) *time.Time {
+	if d.IsZero() {
+		return nil
+	}
+	return &d
 }
 
 // UpdateStatus sets the current state, response code, and auth code of the tran_log row
@@ -231,7 +242,7 @@ func (r *TranLogRepository) ListStateHistory(ctx context.Context, id int64) ([]S
 }
 
 const tranLogSelectColumns = `t.id, t.rrn, t.tran_type, t.state, t.amount, t.currency, t.masked_pan, t.tid, t.mid, m.name, coalesce(t.response_code, ''), coalesce(t.auth_code, ''), t.created_at, coalesce(t.late_response_code, ''), t.late_response_at, coalesce(t.network_stan, ''), coalesce(t.processing_code, ''), coalesce(t.pos_entry_mode, ''), t.sent_at, coalesce(t.card_token, ''), t.responded_at, coalesce(t.mti, ''),
-	t.approved_amount, t.balance_amount, coalesce(t.balance_currency, ''), coalesce(t.original_rrn, ''), coalesce(t.trace_id, ''), coalesce(t.reversal_reason, ''), coalesce(t.completed_by, '')`
+	t.approved_amount, t.balance_amount, coalesce(t.balance_currency, ''), coalesce(t.original_rrn, ''), coalesce(t.trace_id, ''), coalesce(t.reversal_reason, ''), coalesce(t.completed_by, ''), t.business_date`
 
 // Get reads the tran_log row for the given RRN.
 func (r *TranLogRepository) Get(ctx context.Context, rrn string) (TranLogRow, error) {
@@ -250,7 +261,7 @@ func scanTranLogRow(scanner pgx.Row) (TranLogRow, error) {
 	var balanceCurrency string
 	err := scanner.Scan(&row.ID, &row.RRN, &row.Type, &row.Status, &row.Amount, &row.Currency, &row.MaskedPAN, &row.TerminalID, &row.MerchantID, &row.MerchantName, &row.ResponseCode, &row.AuthCode, &row.CreatedAt, &row.LateResponseCode, &row.LateResponseAt,
 		&row.NetworkSTAN, &row.ProcessingCode, &row.POSEntryMode, &row.SentAt, &row.CardToken, &row.RespondedAt, &row.MTI,
-		&row.ApprovedAmount, &balanceAmount, &balanceCurrency, &row.OriginalRRN, &row.TraceID, &row.ReversalReasonCode, &row.CompletedBy)
+		&row.ApprovedAmount, &balanceAmount, &balanceCurrency, &row.OriginalRRN, &row.TraceID, &row.ReversalReasonCode, &row.CompletedBy, &row.BusinessDate)
 	if err != nil {
 		return TranLogRow{}, err
 	}

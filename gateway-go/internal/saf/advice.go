@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mcn/gateway-go/internal/bizdate"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
@@ -35,6 +36,15 @@ type advice struct {
 // issuer, so there is nothing to reverse and DE 90 could not identify it anyway.
 var errNeverSent = errors.New("transaction was never sent to the issuer")
 
+// originalDE15 is the business date the original was sent in (ADR-007 §2); a row without one
+// falls back to the UTC date of its DE 7, which is what it was sent with before ADR-007.
+func originalDE15(original store.TranLogRow) string {
+	if original.BusinessDate.IsZero() {
+		return original.SentAt.UTC().Format("0102")
+	}
+	return bizdate.MMDD(original.BusinessDate)
+}
+
 // reversalAdvice builds the 0420 fields that repeat original (contracts/iso8583/vectors/
 // 0420-reversal-timeout.json). DE 2, 7, 11 and 128 are added per send by the Worker.
 func reversalAdvice(original store.TranLogRow, reasonCode string) (advice, error) {
@@ -55,7 +65,7 @@ func reversalAdvice(original store.TranLogRow, reasonCode string) (advice, error
 			4:  fmt.Sprintf("%012d", original.Amount),
 			12: local.Format("150405"),
 			13: local.Format("0102"),
-			15: sent.Format("0102"),
+			15: originalDE15(original),
 			22: original.POSEntryMode,
 			25: posConditionCode,
 			32: acquirerID,

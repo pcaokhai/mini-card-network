@@ -16,10 +16,39 @@ import (
 
 type fakeOverviewReader struct {
 	stats store.OverviewStats
+	day   store.BusinessDay
 }
 
-func (f *fakeOverviewReader) Overview(context.Context, time.Time) (store.OverviewStats, error) {
+func (f *fakeOverviewReader) Overview(_ context.Context, _ time.Time, day store.BusinessDay) (store.OverviewStats, error) {
+	f.day = day
 	return f.stats, nil
+}
+
+// fixedCalendar is a BusinessCalendar whose business date never moves.
+type fixedCalendar struct{ date time.Time }
+
+func (c fixedCalendar) Current(time.Time) time.Time    { return c.date }
+func (c fixedCalendar) Previous(d time.Time) time.Time { return d.AddDate(0, 0, -1) }
+func (c fixedCalendar) OpenedAt(d time.Time) time.Time { return d.Add(-7 * time.Hour) }
+
+var testCalendar = fixedCalendar{date: time.Date(2031, 12, 31, 0, 0, 0, 0, time.UTC)}
+
+func TestGetOverview_countsTheCurrentBusinessDate__OVW_G7(t *testing.T) {
+	r := chi.NewRouter()
+	reader := &fakeOverviewReader{}
+	MountOverview(r, reader, testCalendar)
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/v1/metrics/overview", nil)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"businessDate":"2031-12-31"`)
+	require.Equal(t, store.BusinessDay{
+		Date: testCalendar.date, Previous: time.Date(2031, 12, 30, 0, 0, 0, 0, time.UTC),
+		OpenedAt: time.Date(2031, 12, 30, 17, 0, 0, 0, time.UTC), PreviousOpenedAt: time.Date(2031, 12, 29, 17, 0, 0, 0, time.UTC),
+	}, reader.day)
+	requireMatchesSpec(t, req, rec)
 }
 
 func TestGetOverview_returnsKpisAndDeclineLabels__MCN_306(t *testing.T) {
@@ -31,7 +60,7 @@ func TestGetOverview_returnsKpisAndDeclineLabels__MCN_306(t *testing.T) {
 		Throughput:        []store.ThroughputSample{{At: time.Unix(0, 0).UTC(), TPS: 2.5}},
 		DeclineReasons:    []store.DeclineReasonCount{{ResponseCode: "51", Count: 2}, {ResponseCode: "62", Count: 1}},
 	}}
-	MountOverview(r, reader)
+	MountOverview(r, reader, testCalendar)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/metrics/overview", nil)
 	rec := httptest.NewRecorder()
@@ -74,7 +103,7 @@ func TestGetOverview_returnsKpisAndDeclineLabels__MCN_306(t *testing.T) {
 func TestGetOverview_emptyDeclineReasonsHasNoShareDivideByZero__MCN_306(t *testing.T) {
 	r := chi.NewRouter()
 	reader := &fakeOverviewReader{stats: store.OverviewStats{}}
-	MountOverview(r, reader)
+	MountOverview(r, reader, testCalendar)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/metrics/overview", nil)
 	rec := httptest.NewRecorder()
@@ -87,7 +116,7 @@ func TestGetOverview_emptyDeclineReasonsHasNoShareDivideByZero__MCN_306(t *testi
 func TestGetOverview_exposesP50AndDeltaWhenKnown__MCN_306(t *testing.T) {
 	delta := 0.12
 	r := chi.NewRouter()
-	MountOverview(r, &fakeOverviewReader{stats: store.OverviewStats{P50LatencyMs: 96, P99LatencyMs: 212, TransactionsDeltaPct: &delta}})
+	MountOverview(r, &fakeOverviewReader{stats: store.OverviewStats{P50LatencyMs: 96, P99LatencyMs: 212, TransactionsDeltaPct: &delta}}, testCalendar)
 
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/metrics/overview", nil))
@@ -100,7 +129,7 @@ func TestGetOverview_exposesP50AndDeltaWhenKnown__MCN_306(t *testing.T) {
 
 func TestGetOverview_omitsDeltaWithoutBaseline__MCN_306(t *testing.T) {
 	r := chi.NewRouter()
-	MountOverview(r, &fakeOverviewReader{stats: store.OverviewStats{}})
+	MountOverview(r, &fakeOverviewReader{stats: store.OverviewStats{}}, testCalendar)
 
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/metrics/overview", nil))

@@ -71,3 +71,13 @@ func TestReversalAdvice_de90NamesTheOriginalMTI__POS_G4(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "0200", legacy.Fields[90][:4], "rows logged before tran_log.mti was written are purchases")
 }
+
+func TestReversalAdvice_reusesTheOriginalsBusinessDate__OVW_G7(t *testing.T) {
+	original := goldenOriginal()
+	original.BusinessDate = time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC) // sent 07:32 UTC on the 21st, after a local-evening cutover
+
+	adv, err := reversalAdvice(original, "68")
+
+	require.NoError(t, err)
+	require.Equal(t, "0922", adv.Fields[15], "an advice keeps its original's DE 15")
+}

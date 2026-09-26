@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata" // CUTOVER_TZ must resolve even on a minimal container image
 )
 
 // Config is the validated runtime configuration.
@@ -52,6 +53,10 @@ type Config struct {
 	// KeyLifetimeDays is the rotation policy per key type (KEY_LIFETIME_DAYS, e.g. "ZPK=30,ZAK=30"),
 	// behind GET /v1/keys/acquirer's lifetimeDays and daysRemaining (SEC-G9).
 	KeyLifetimeDays map[string]int
+	// CutoverTime (time since local midnight) and CutoverTZ are when the business date rolls
+	// (ADR-007, docs/03 §7.6).
+	CutoverTime time.Duration
+	CutoverTZ   *time.Location
 }
 
 // defaultKeyLifetimes: working keys rotate monthly, the ZMK yearly (the Security page's canvas).
@@ -107,12 +112,30 @@ func Load(getenv func(string) string) (Config, error) {
 	if err := loadOptionalKeys(getenv, &cfg); err != nil {
 		return Config{}, err
 	}
+	if err := loadCutover(getenv, &cfg); err != nil {
+		return Config{}, err
+	}
 	// ponytail: an unset SAF_ENC_KEY leaves cfg.SafEncKey nil, and saf.encodePayload/decodePayload
 	// treat a nil key as "store the SAF payload unencrypted" - acceptable for local/dev
 	// docker-compose where nothing but this repo ever reads the volume; production deployments
 	// must set SAF_ENC_KEY (docs/10-engineering-standards.md §2 PCI DSS).
 
 	return cfg, nil
+}
+
+// loadCutover reads CUTOVER_TIME (HH:MM:SS, default 23:59:59) and CUTOVER_TZ (an IANA zone,
+// default Asia/Ho_Chi_Minh).
+func loadCutover(getenv func(string) string, cfg *Config) error {
+	raw := valueOr(getenv("CUTOVER_TIME"), "23:59:59")
+	at, err := time.Parse(time.TimeOnly, raw)
+	if err != nil {
+		return fmt.Errorf("CUTOVER_TIME: want HH:MM:SS: %w", err)
+	}
+	cfg.CutoverTime = time.Duration(at.Hour())*time.Hour + time.Duration(at.Minute())*time.Minute + time.Duration(at.Second())*time.Second
+	if cfg.CutoverTZ, err = time.LoadLocation(valueOr(getenv("CUTOVER_TZ"), "Asia/Ho_Chi_Minh")); err != nil {
+		return fmt.Errorf("CUTOVER_TZ: %w", err)
+	}
+	return nil
 }
 
 // loadOptionalKeys reads the keys a lab stack may leave unset: SAF_ENC_KEY (base64, 32 bytes)

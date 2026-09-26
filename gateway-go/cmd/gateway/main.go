@@ -20,6 +20,7 @@ import (
 
 	"github.com/mcn/gateway-go/internal/advtxn"
 	"github.com/mcn/gateway-go/internal/api"
+	"github.com/mcn/gateway-go/internal/bizdate"
 	"github.com/mcn/gateway-go/internal/chaos"
 	"github.com/mcn/gateway-go/internal/chaos/fakeissuer"
 	"github.com/mcn/gateway-go/internal/config"
@@ -86,11 +87,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	terminalRepo := store.NewTerminalRepository(pool)
+	calendar := bizdate.NewClockCalendar(cfg.CutoverTime, cfg.CutoverTZ)
 	// A response MAC is retried under a PENDING key of unknown outcome, else the recently retired
 	// key (review S2 of #121).
 	macFallback := keyStoreRepo.MACFallback()
-	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, macFallback, linkRepo)
-	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, reversalQueuer, hsmModule, zak, macFallback)
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, macFallback, linkRepo, calendar)
+	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, reversalQueuer, hsmModule, zak, macFallback, calendar)
 	rotationRepo := rotation.NewRepository(pool)
 	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK,
 		rotation.WithActivationHook(reloadOnActivate(activeKeys, logger)), rotation.WithSendAttempts(cfg.RotationSendAttempts), rotation.WithSendTimeout(cfg.EchoTimeout))
@@ -127,7 +129,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	api.MountPurchases(r, purchaseService)
 	api.MountAdvancedTransactions(r, advtxnService)
 	api.MountTransactionsQuery(r, tranLogRepo, saf.NewReversalLookup(safRepo, cfg.SafEncKey))
-	api.MountOverview(r, tranLogRepo)
+	api.MountOverview(r, tranLogRepo, calendar)
 	api.MountKeys(r, keyStoreRepo, cfg.KeyLifetimeDays)
 	api.MountRotations(r, rotationAdapter{runner: rotationRunner, repo: rotationRepo})
 	api.MountChaos(r, toxiproxyClient, chaosRunner, hub)

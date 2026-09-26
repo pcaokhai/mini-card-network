@@ -78,7 +78,7 @@ Every REST call is a `GET`, idempotent, and cached per query key by TanStack Que
 
 - **Summary.** Today's KPIs, the last 60 minutes of throughput and the decline breakdown, in one snapshot.
 - **Request.** No parameters, no body. Headers: only `traceparent`, which the BFF forwards when present.
-- **Response.** `200`, schema `Overview`. "Today" is the UTC calendar day of the request (OVW-G7).
+- **Response.** `200`, schema `Overview`. "Today" is the acquirer's current business date (ADR-007), returned as `businessDate`. It rolls at `CUTOVER_TIME` (default 23:59:59) in `CUTOVER_TZ` (default Asia/Ho_Chi_Minh), so the KPIs reset once, at cutover. Until MCN-702 persists real cutovers, the gateway derives it from the clock: a late or manual cutover isn't reflected.
 
 | Field | Type | Req. | UI element | Easy mode | Expert mode |
 | --- | --- | --- | --- | --- | --- |
@@ -95,7 +95,7 @@ Every REST call is a `GET`, idempotent, and cached per query key by TanStack Que
   1. `throughput` is 24 samples of 150 s (2.5 min) covering the last 60 minutes, ascending by `at`, and dense: a bucket with no transactions is present with `tps: 0`. `tps` = transactions in the bucket / 150. The UI draws one bar per sample, scaled to the largest `tps`, and highlights the last one as "now". The Expert caption says "TPS theo từng 2,5 phút · 60 phút qua", so a different bucket size makes the caption wrong.
   2. `approvalRate` = approved / (approved + declined) today; `0` when neither exists.
   3. `p50LatencyMs` / `p99LatencyMs` are percentiles of SENT → first terminal state (APPROVED, DECLINED, TIMED_OUT) today, in ms; `0` when there is no sample.
-  4. `transactionsDeltaPct` compares today with the same elapsed window yesterday, as a fraction (`0.12` = +12 %). It is omitted when yesterday's window has no transactions; `0` never means "unknown".
+  4. `transactionsDeltaPct` compares the business date with the previous one over the same time elapsed since each opened (its cutover instant), as a fraction (`0.12` = +12 %). It is omitted when yesterday's window has no transactions; `0` never means "unknown".
   5. `declineReasons[].share` values sum to 1. The provider returns every code, presentation-free. A declined row always carries an RC: a response without DE 39 is recorded as RC `30` (format error), and older rows with no RC are left out of `declineReasons`.
 - **Errors.**
 
@@ -345,7 +345,7 @@ Payload bounds: `throughput` always has 24 elements; `declineReasons` has at mos
 | OVW-G4 | ~~`key_store` empty until the first rotation, so a fresh stack had no ZAK and every purchase failed its MAC~~ | **Fixed**: startup registers `ZAK_HEX`/`ZPK_HEX` (verified live, §4.7) | GW | Done (MCN-002 seed work) |
 | OVW-G5 | The canvas folds the tail into "Lý do khác"; the UI lists every code | `DeclineReasonsBreakdown.tsx` sorts and renders all rows | WEB | **Fixed** in #125: the top four coded reasons, the rest folded client-side into "Lý do khác" |
 | OVW-G6 | ~~`TransactionSummary.latencyMs` always `null`~~ | **Fixed**: `toSummaryDTO` sets it from `journey.LatencyMs` (live values `8059`, `20`) | GW | Done (MCN-304 journey canvas) |
-| OVW-G7 | "Today" is the UTC day, so in Vietnam (UTC+7) the KPIs reset at 07:00 local | `now.Truncate(24 * time.Hour)` in `internal/store/overview.go` | GW + product | Decide business date (cutover) vs local calendar day; record it as a ruling |
+| OVW-G7 | ~~"Today" is the UTC day, so in Vietnam (UTC+7) the KPIs reset at 07:00 local~~ | **Fixed** (#120): ADR-007. `bizdate.Calendar` (clock adapter on `CUTOVER_TIME`/`CUTOVER_TZ`) sets `tran_log.business_date` and DE 15 at send; the Overview counts `business_date = Current`, compares with `Previous` over the same time since each cutover, and returns `businessDate`; `Transaction.businessDate` is the stored column | GW + product | Done |
 | OVW-G8 | No loading or error state for the page | `OverviewScreen.tsx`: `if (!overviewQuery.data) return null;` | WEB | **Fixed** in #125: a loading skeleton and a problem banner |
 | OVW-G9 | The live feed's socket never connects on the BFF origin | `useWsEvents` falls back to `ws://{location.host}/v1/stream`; `curl :3000/v1/stream` → 404; `NEXT_PUBLIC_WS_URL` is set nowhere in the repo | WEB + PLAT | **Fixed** in #124 (documented): `web-next/.env.example` sets `NEXT_PUBLIC_WS_URL`; Route Handlers can't proxy the upgrade |
 | OVW-G10 | WS authentication differs from docs/04 §1 | The hub's `CheckOrigin` accepts every origin and reads no `token`; there is no `/api/stream-token` route under `web-next/src/app/api` | GW + WEB | Implement the token, or amend docs/04 through an ADR |
@@ -386,7 +386,7 @@ Defects the seed exposed (all fixed):
 | Bars scaled to `max(1, peak)` and TPS rendered as a raw float | A flat chart at real (< 1 TPS) volume | WEB |
 | Mocks embedded full test PANs | PCI rule (root CLAUDE.md §6.2) broken in web source | WEB: last-4 only |
 
-Still open for this page: OVW-G1, G5, G7 to G10, G12. Also:
+Still open for this page: OVW-G1, G10, G12. Also:
 - **R-12**: the gateway never forwards a PIN block, so RC 55 ("Sai mã PIN") can't be produced (`docs/09-risk-register.md`).
 - A REVERSED row shows its original approval's RC 00 ("Đã tự hủy · RC 00"). Showing the 0420's reason code (for example 17, customer cancellation) needs a new `TransactionSummary` field. That is a contract change, so it goes in its own contract PR.
 
@@ -398,3 +398,4 @@ Still open for this page: OVW-G1, G5, G7 to G10, G12. Also:
 | 2.0 | 2026-09-25 | Rewritten into the per-page template, with real examples from the local stack. G2, G4 and G6 marked fixed. Added G9–G12 (WS origin, WS authentication, empty-RC decline bucket, problem format) |
 | 2.1 | 2026-09-26 | OVW-G5, OVW-G8 fixed; OVW-G9 closed by #124; the date shown is `Overview.businessDate` (ADR-007) (#125) |
 | 2.2 | 2026-09-25 | OVW-G3 and OVW-G11 fixed (#117) |
+| 2.3 | 2026-09-26 | OVW-G7 fixed (#120): "today" is the acquirer's business date (ADR-007) |
