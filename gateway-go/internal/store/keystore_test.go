@@ -136,7 +136,7 @@ func TestKeyStoreRepository_findRecentlyRetiredSkipsKeysNeverActivated__SEC_S1(t
 	require.Equal(t, firstID, recent.ID, "the fallback is the previously active key, not the never-used one")
 }
 
-func TestKeyStoreRepository_macFallbackPrefersAPendingKeyOfUnknownOutcome__SEC_S2(t *testing.T) {
+func TestKeyStoreRepository_fallbackKeysArePendingThenRetired__SEC_R2_S2(t *testing.T) {
 	repo := NewKeyStoreRepository(newTestPool(t))
 	ctx := context.Background()
 	oldID, err := repo.Insert(ctx, KeyRow{KeyType: typeZAK, KeyUnderLMKHex: "aa", KCV: "444444"})
@@ -145,15 +145,35 @@ func TestKeyStoreRepository_macFallbackPrefersAPendingKeyOfUnknownOutcome__SEC_S
 	activeID, err := repo.Insert(ctx, KeyRow{KeyType: typeZAK, KeyUnderLMKHex: "bb", KCV: "555555"})
 	require.NoError(t, err)
 	require.NoError(t, repo.Activate(ctx, activeID))
-	fallback := repo.MACFallback()
 
-	got, err := fallback.FindRecentlyRetired(ctx, typeZAK, "", 5*time.Minute)
+	keys, err := repo.MACFallback().FallbackKeys(ctx, typeZAK, "", 5*time.Minute)
 	require.NoError(t, err)
-	require.Equal(t, oldID, got.ID, "no pending key: the recently retired one")
+	require.Equal(t, []int64{oldID}, ids(keys), "no pending key: only the recently retired one")
 
 	pendingID, err := repo.Insert(ctx, KeyRow{KeyType: typeZAK, KeyUnderLMKHex: "cc", KCV: "666666"})
 	require.NoError(t, err)
-	got, err = fallback.FindRecentlyRetired(ctx, typeZAK, "", 5*time.Minute)
+	keys, err = repo.MACFallback().FallbackKeys(ctx, typeZAK, "", 5*time.Minute)
 	require.NoError(t, err)
-	require.Equal(t, pendingID, got.ID, "the issuer may already use a key whose rotation outcome is unknown")
+	require.Equal(t, []int64{pendingID, oldID}, ids(keys), "a key of unknown outcome first, then the retired one")
+}
+
+func TestKeyStoreRepository_activateRetiresStalePendingKeysOfTheType__SEC_R2_S2(t *testing.T) {
+	repo := NewKeyStoreRepository(newTestPool(t))
+	ctx := context.Background()
+	staleID, err := repo.Insert(ctx, KeyRow{KeyType: typeZAK, KeyUnderLMKHex: "aa", KCV: "777777"}) // unknown outcome
+	require.NoError(t, err)
+	otherTypeID, err := repo.Insert(ctx, KeyRow{KeyType: typeZPK, KeyUnderLMKHex: "bb", KCV: "888888"})
+	require.NoError(t, err)
+	newID, err := repo.Insert(ctx, KeyRow{KeyType: typeZAK, KeyUnderLMKHex: "cc", KCV: "999999"})
+	require.NoError(t, err)
+
+	require.NoError(t, repo.Activate(ctx, newID)) // a later rotation succeeded
+
+	current, err := repo.ListCurrent(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []int64{otherTypeID, newID}, ids(current))
+	require.NotContains(t, ids(current), staleID)
+	stale, err := repo.Get(ctx, staleID)
+	require.NoError(t, err)
+	require.Nil(t, stale.ActivatedAt, "retired without ever being active, so never a MAC fallback")
 }

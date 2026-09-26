@@ -86,6 +86,16 @@ func (r *KeyStoreRepository) Activate(ctx context.Context, id int64) error {
 		`UPDATE key_store SET status = 'ACTIVE', activated_at = now() WHERE id = $1`, id); err != nil {
 		return err
 	}
+	// A PENDING key of the same type left by an unknown-outcome rotation is superseded: the
+	// issuer has just confirmed this one, so the stale key must not linger (review of #121).
+	if _, err := tx.Exec(ctx,
+		`UPDATE key_store SET status = 'RETIRED', retired_at = now()
+		 WHERE status = 'PENDING' AND id <> $1
+		   AND key_type = (SELECT key_type FROM key_store WHERE id = $1)
+		   AND coalesce(owner_ref, '') = (SELECT coalesce(owner_ref, '') FROM key_store WHERE id = $1)`,
+		id); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -197,22 +207,38 @@ func (r *KeyStoreRepository) FindPending(ctx context.Context, keyType, ownerRef 
 	return &row, nil
 }
 
-// MACFallbackKeys picks the one extra key a response MAC is retried under. A PENDING key comes
-// first: it only survives a rotation whose 0810 never arrived, and the issuer may already MAC
-// with it (review S2). Otherwise it is the key retired within the dual-key window (MCN-504-AC2).
-// It satisfies purchase.RetiredKeyFinder, hence the method name.
+// MACFallbackKeys lists the keys a response MAC is retried under after the ACTIVE one fails: a
+// PENDING key first (it only survives a rotation whose 0810 never arrived, and the issuer may
+// already MAC with it, review S2 of #121), then the key retired within the dual-key window
+// (MCN-504-AC2). It satisfies purchase.RetiredKeyFinder and purchase.FallbackKeyFinder.
 type MACFallbackKeys struct{ repo *KeyStoreRepository }
 
-// MACFallback adapts r for the MAC verifier's single fallback key.
+// MACFallback adapts r for the MAC verifier.
 func (r *KeyStoreRepository) MACFallback() MACFallbackKeys { return MACFallbackKeys{repo: r} }
 
-// FindRecentlyRetired returns the pending key of (keyType, ownerRef) if any, else the key retired
-// within the window, else nil.
-func (f MACFallbackKeys) FindRecentlyRetired(ctx context.Context, keyType, ownerRef string, within time.Duration) (*KeyRow, error) {
+// FallbackKeys returns the PENDING key of (keyType, ownerRef), if any, then the key retired within
+// the window, if any.
+func (f MACFallbackKeys) FallbackKeys(ctx context.Context, keyType, ownerRef string, within time.Duration) ([]KeyRow, error) {
+	var keys []KeyRow
 	pending, err := f.repo.FindPending(ctx, keyType, ownerRef)
-	if err != nil || pending != nil {
-		return pending, err
+	if err != nil {
+		return nil, err
 	}
+	if pending != nil {
+		keys = append(keys, *pending)
+	}
+	retired, err := f.repo.FindRecentlyRetired(ctx, keyType, ownerRef, within)
+	if err != nil {
+		return nil, err
+	}
+	if retired != nil {
+		keys = append(keys, *retired)
+	}
+	return keys, nil
+}
+
+// FindRecentlyRetired is the single-key form for callers that only know RetiredKeyFinder.
+func (f MACFallbackKeys) FindRecentlyRetired(ctx context.Context, keyType, ownerRef string, within time.Duration) (*KeyRow, error) {
 	return f.repo.FindRecentlyRetired(ctx, keyType, ownerRef, within)
 }
 

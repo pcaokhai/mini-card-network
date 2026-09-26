@@ -49,6 +49,7 @@ type Runner struct {
 	onActivate func(ctx context.Context, keyType string)
 
 	sendAttempts int
+	sendTimeout  time.Duration
 
 	mu      sync.Mutex
 	base    context.Context // Serve's context; nil when not serving
@@ -62,6 +63,13 @@ type Option func(*Runner)
 // defaultSendAttempts is how often an unanswered 0800/161 is sent before the outcome is unknown.
 const defaultSendAttempts = 3
 
+// defaultSendTimeout bounds one 0800/161 round trip, like the supervisor's echo timeout.
+const defaultSendTimeout = 10 * time.Second
+
+// WithSendTimeout bounds each 0800/161 attempt; without it a lost 0810 would wait on Serve's
+// context forever (review B1).
+func WithSendTimeout(d time.Duration) Option { return func(r *Runner) { r.sendTimeout = d } }
+
 // WithSendAttempts sets how many times an unanswered 0800/161 is sent, with the same key (min 1).
 func WithSendAttempts(n int) Option { return func(r *Runner) { r.sendAttempts = max(n, 1) } }
 
@@ -74,7 +82,7 @@ func WithActivationHook(fn func(ctx context.Context, keyType string)) Option {
 // NewRunner builds a Runner. zmk is the clear Zone Master Key used to wrap the new key for
 // transport in DE 48 of the 0800 (docs/03 §7.3's key-change convention).
 func NewRunner(repo *Repository, keyStore *store.KeyStoreRepository, hsmModule hsm.Module, mux Mux, zmk []byte, opts ...Option) *Runner {
-	r := &Runner{repo: repo, keyStore: keyStore, hsm: hsmModule, mux: mux, zmk: zmk, sendAttempts: defaultSendAttempts}
+	r := &Runner{repo: repo, keyStore: keyStore, hsm: hsmModule, mux: mux, zmk: zmk, sendAttempts: defaultSendAttempts, sendTimeout: defaultSendTimeout}
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -243,7 +251,9 @@ func (r *Runner) runSend0800161(ctx context.Context, id int64, keyType string, u
 			lastErr = errors.New("issuer link not signed on")
 			continue
 		}
-		resp, err := r.mux.Send(ctx, "0800", map[int]string{7: nowDE7(), 11: stan, 70: keyChangeDE70, 48: de48})
+		attemptCtx, cancel := context.WithTimeout(ctx, r.sendTimeout)
+		resp, err := r.mux.Send(attemptCtx, "0800", map[int]string{7: nowDE7(), 11: stan, 70: keyChangeDE70, 48: de48})
+		cancel()
 		if err != nil {
 			lastErr = fmt.Errorf("send 0800 (attempt %d): %w", attempt+1, err)
 			continue

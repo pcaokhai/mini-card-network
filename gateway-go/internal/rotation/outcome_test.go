@@ -2,7 +2,10 @@ package rotation
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -118,4 +121,52 @@ func TestRunner_serveResolvesInterruptedRotationsByStep__SEC_N1_S2(t *testing.T)
 	require.Equal(t, "FAILED", waitStatus(t, repo, sent, "FAILED").Status)
 	require.Equal(t, "FAILED", waitStatus(t, repo, early, "FAILED").Status)
 	require.Len(t, pendingKeys(t, keyStore), 1, "the generated key's outcome is unknown, so it stays PENDING")
+}
+
+// silentMux accepts every 0800 and never answers: Send returns only when its ctx ends, like the
+// real MUX on a lost 0810.
+type silentMux struct {
+	mu    sync.Mutex
+	de48s []string
+}
+
+func (m *silentMux) NextSTAN() (string, bool) { return "000001", true }
+
+func (m *silentMux) Send(ctx context.Context, _ string, fields map[int]string) (map[int]string, error) {
+	m.mu.Lock()
+	m.de48s = append(m.de48s, fields[48])
+	m.mu.Unlock()
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (m *silentMux) sent() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.de48s...)
+}
+
+func TestRunner_eachSendAttemptHasItsOwnDeadline__SEC_R2_B1(t *testing.T) {
+	pool := newTestPool(t)
+	repo := NewRepository(pool)
+	keyStore := store.NewKeyStoreRepository(pool)
+	mux := &silentMux{}
+	runner := NewRunner(repo, keyStore, fakeHSM{}, mux, testZMK, WithSendAttempts(3), WithSendTimeout(50*time.Millisecond))
+	serveRunner(t, runner)
+
+	row, err := runner.Start(context.Background(), typeZPK, "")
+	require.NoError(t, err)
+
+	final := waitStatus(t, repo, row.ID, "FAILED")
+	require.Equal(t, StatusFailed, stepStatus(final.Steps, StepSend0800161))
+	sent := mux.sent()
+	require.Len(t, sent, 3)
+	require.Equal(t, sent[0], sent[1])
+	require.Equal(t, sent[1], sent[2])
+	require.Len(t, pendingKeys(t, keyStore), 1)
+
+	require.Eventually(t, func() bool {
+		_, err := runner.Start(context.Background(), typeZPK, "")
+		return !errors.Is(err, ErrRotationInProgress)
+	}, time.Second, 10*time.Millisecond, "the runner is free again after an unknown outcome")
 }
