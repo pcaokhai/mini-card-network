@@ -583,3 +583,63 @@ func (r *IdempotencyRepository) Reclaim(ctx context.Context, key, route, request
 	}
 	return token, err
 }
+
+// FindOrphans returns up to limit rows sent before sentBefore whose outcome was never followed
+// up (POS-G16): still SENT - the gateway stopped between the send and recording the answer - or
+// TIMED_OUT with nothing queued in saf_queue - it stopped, or failed, before queueing the reversal
+// or the advice repeat - or DECLINED RC 96 (a bad incoming MAC) with nothing queued, whose
+// reason-06 reversal was never queued. A balance inquiry owes nothing, so it is never an orphan
+// once it has left SENT, and a completion's bad MAC leaves it TIMED_OUT, not DECLINED.
+func (r *TranLogRepository) FindOrphans(ctx context.Context, sentBefore time.Time, limit int) ([]TranLogRow, error) {
+	rows, err := r.pool.Query(ctx, `SELECT `+tranLogSelectColumns+` FROM tran_log t JOIN merchant m ON m.mid = t.mid
+		WHERE t.sent_at < $1
+		  AND (t.state = 'SENT'
+		       OR (t.state = 'TIMED_OUT' AND t.tran_type <> 'BALANCE'
+		           AND NOT EXISTS (SELECT 1 FROM saf_queue s WHERE s.tran_id = t.id))
+		       OR (t.state = 'DECLINED' AND t.response_code = '96' AND t.tran_type NOT IN ('BALANCE', 'COMPLETION')
+		           AND NOT EXISTS (SELECT 1 FROM saf_queue s WHERE s.tran_id = t.id)))
+		ORDER BY t.id LIMIT $2`, sentBefore, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTranLogRows(rows)
+}
+
+// MarkTimedOut moves row id from SENT to TIMED_OUT, recording the transition, and reports whether
+// it moved; a row that already left SENT is left alone.
+func (r *TranLogRepository) MarkTimedOut(ctx context.Context, id int64) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	moved, err := tx.Exec(ctx, `UPDATE tran_log SET state = 'TIMED_OUT' WHERE id = $1 AND state = 'SENT'`, id)
+	if err != nil || moved.RowsAffected() == 0 {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tran_state_history (tran_id, from_state, to_state) VALUES ($1, 'SENT', 'TIMED_OUT')`, id); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// ErrStateMoved means a guarded update found the row no longer in the state it expected.
+var ErrStateMoved = errors.New("transaction state moved on")
+
+// UpdateStatusFrom is UpdateStatus only while row id is still in from: a request's late outcome
+// never overwrites a row the orphan sweeper already moved (#123 review N1).
+func (r *TranLogRepository) UpdateStatusFrom(ctx context.Context, id int64, from, status, responseCode, authCode string) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE tran_log SET state = $2, response_code = NULLIF($3, ''), auth_code = NULLIF($4, ''), responded_at = now()
+		 WHERE id = $1 AND state = $5`,
+		id, status, responseCode, authCode, from)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("update tran_log %d from %s to %s: %w", id, from, status, ErrStateMoved)
+	}
+	return nil
+}

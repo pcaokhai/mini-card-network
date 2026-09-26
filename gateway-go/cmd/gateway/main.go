@@ -98,6 +98,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	ackAnnouncer := reversalAckAnnouncer{Port: safRepo, rrnOf: safRepo.TranRRN, announce: purchaseService.BroadcastUpdate, logger: logger}
 	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, zak, ackAnnouncer, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 	safWorker.SetLogger(logger)
+	// Orphans are rows older than the 30 s send timeout plus the 10 s a request takes to record
+	// its outcome, with a margin (POS-G16).
+	sweeper := saf.NewSweeper(tranLogRepo, reversalQueuer, 90*time.Second, 30*time.Second)
+	sweeper.SetLogger(logger)
 
 	fakeIssuer, toxiproxyOpts, err := setupFakeIssuer(cfg)
 	if err != nil {
@@ -153,6 +157,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	g.Go(func() error { return serve(metricsServer, metricsLn) })
 	g.Go(func() error { return supervisor.Run(gctx) })
 	g.Go(func() error { return safWorker.Run(gctx) })
+	g.Go(func() error { return sweeper.Run(gctx) })
 	g.Go(func() error { return chaosRunner.Serve(gctx) })
 	g.Go(func() error { return rotationRunner.Serve(gctx) })
 	if fakeIssuer != nil {

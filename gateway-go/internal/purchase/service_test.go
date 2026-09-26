@@ -51,6 +51,13 @@ func (f *fakeTranLog) Insert(_ context.Context, row store.TranLogRow) (int64, er
 	f.rows = append(f.rows, row)
 	return int64(len(f.rows)), nil
 }
+func (f *fakeTranLog) UpdateStatusFrom(ctx context.Context, id int64, from, status, responseCode, authCode string) error {
+	if f.rows[id-1].Status != from {
+		return store.ErrStateMoved
+	}
+	return f.UpdateStatus(ctx, id, status, responseCode, authCode)
+}
+
 func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, responseCode, authCode string) error {
 	if status == f.failStatus {
 		return errors.New("db down")
@@ -836,4 +843,17 @@ func TestCreatePurchase_aHolderWhoseKeyWasReclaimedNeverSends__S1(t *testing.T) 
 	require.Nil(t, mux.lastFields, "a second 0200 under one key would be a double charge")
 	require.Empty(t, idem.released, "the new holder's reservation is left alone")
 	require.True(t, idem.pending["key-slow"+purchaseRoute])
+}
+
+func TestCreatePurchase_aLateAnswerNeverOverwritesASweptRow__N1(t *testing.T) {
+	tranLog := &fakeTranLog{}
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}}
+	mux.onSend = func() { tranLog.rows[0].Status = statusTimedOut } // the sweeper gave up on the stalled request
+	svc := newIdemTestService(mux, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{})
+
+	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-swept")
+
+	require.NoError(t, err)
+	require.Equal(t, statusTimedOut, tranLog.rows[0].Status, "the sweep's reversal stands")
+	require.Equal(t, statusTimedOut, txn.Status, "answered from the row, not the stale answer")
 }
