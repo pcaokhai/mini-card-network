@@ -16,7 +16,6 @@ const (
 	testMerchantID   = "GOCPHO000000001"
 	tranTypePurchase = "PURCHASE"
 	statusSent       = "SENT"
-	statusTimedOut   = "TIMED_OUT"
 )
 
 func newTestPool(t *testing.T) *store.Pool {

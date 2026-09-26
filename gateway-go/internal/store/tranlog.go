@@ -583,3 +583,40 @@ func (r *IdempotencyRepository) Reclaim(ctx context.Context, key, route, request
 	}
 	return token, err
 }
+
+// FindOrphans returns up to limit rows sent before sentBefore whose outcome was never followed
+// up (POS-G16): still SENT - the gateway stopped between the send and recording the answer - or
+// TIMED_OUT with nothing queued in saf_queue - it stopped, or failed, before queueing the reversal
+// or the advice repeat. A timed-out balance inquiry owes nothing, so it is never an orphan.
+func (r *TranLogRepository) FindOrphans(ctx context.Context, sentBefore time.Time, limit int) ([]TranLogRow, error) {
+	rows, err := r.pool.Query(ctx, `SELECT `+tranLogSelectColumns+` FROM tran_log t JOIN merchant m ON m.mid = t.mid
+		WHERE t.sent_at < $1
+		  AND (t.state = 'SENT'
+		       OR (t.state = 'TIMED_OUT' AND t.tran_type <> 'BALANCE'
+		           AND NOT EXISTS (SELECT 1 FROM saf_queue s WHERE s.tran_id = t.id)))
+		ORDER BY t.id LIMIT $2`, sentBefore, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTranLogRows(rows)
+}
+
+// MarkTimedOut moves row id from SENT to TIMED_OUT, recording the transition, and reports whether
+// it moved; a row that already left SENT is left alone.
+func (r *TranLogRepository) MarkTimedOut(ctx context.Context, id int64) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	moved, err := tx.Exec(ctx, `UPDATE tran_log SET state = 'TIMED_OUT' WHERE id = $1 AND state = 'SENT'`, id)
+	if err != nil || moved.RowsAffected() == 0 {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO tran_state_history (tran_id, from_state, to_state) VALUES ($1, 'SENT', 'TIMED_OUT')`, id); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
