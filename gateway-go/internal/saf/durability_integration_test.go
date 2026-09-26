@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -40,7 +41,7 @@ func TestSafWorker_survivesRestart_deliversEveryPendingReversal__MCN_401_AC4(t *
 
 	// A fresh Worker instance recovers the stale IN_FLIGHT row and delivers it.
 	mux := &fakeMux{response: map[int]string{39: "00"}}
-	w := NewWorker(mux, fakeCards{testCardToken: testPAN}, &recordingHSM{}, make([]byte, 16), safRepo, nil,
+	w := NewWorker(mux, fakeCards{testCardToken: testPAN}, &recordingHSM{}, hsm.StaticZAK(make([]byte, 16)), acceptAllMACs{}, safRepo, nil,
 		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
 	require.NoError(t, w.deliverOnce(ctx))
 

@@ -209,7 +209,7 @@ type Service struct {
 	hub           HubPort
 	reversal      ReversalQueuer
 	hsm           hsm.Module
-	zak           []byte
+	zak           hsm.ZAKSource // read per message, so a rotated ZAK applies without a restart (SEC-G10)
 	mac           MACVerifier
 	calendar      bizdate.Calendar
 	events        NetworkEventRecorder
@@ -224,9 +224,8 @@ func (s *Service) SetChaosDuplicateHook(fn func() bool) { s.duplicateHook = fn }
 
 // NewService builds a Service. mux also serves as the LinkStatusPort (e.g. *isonet.Supervisor
 // implements both). tranLog also serves as the TranLogGetter (*store.TranLogRepository
-// implements both). zak is the clear ZAK used for the Retail MAC (MCN-502-AC1/AC2), unwrapped
-// once at construction - not per-request, matching how Service already holds its other
-// long-lived dependencies. keyStore backs the dual-key acceptance retry (MCN-504-AC2); a nil
+// implements both). zak yields the clear ZAK for the Retail MAC (MCN-502-AC1/AC2); it is read
+// per message, so a ZAK rotation applies without a restart (SEC-G10). keyStore backs the dual-key acceptance retry (MCN-504-AC2); a nil
 // keyStore simply disables the retry (existing single-key MAC verification, unchanged). events
 // persists the late-response network event. calendar is the acquirer's business date (ADR-007).
 func NewService(mux interface {
@@ -235,7 +234,7 @@ func NewService(mux interface {
 }, cardTokens *CardTokenRegistry, merchants MerchantResolver, tranLog interface {
 	TranLogPort
 	TranLogGetter
-}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder, events NetworkEventRecorder, calendar bizdate.Calendar) *Service {
+}, idempotency IdempotencyPort, hub HubPort, reversal ReversalQueuer, hsmModule hsm.Module, zak hsm.ZAKSource, keyStore RetiredKeyFinder, events NetworkEventRecorder, calendar bizdate.Calendar) *Service {
 	return &Service{mux: mux, linkStatus: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, tranLogGet: tranLog, idempotency: idempotency, hub: hub, reversal: reversal, hsm: hsmModule, zak: zak, mac: NewMACVerifier(hsmModule, zak, keyStore), events: events, calendar: calendar}
 }
 
@@ -432,7 +431,7 @@ func (s *Service) attachMAC(fields map[int]string) error {
 	if err != nil {
 		return fmt.Errorf("pack for MAC: %w", err)
 	}
-	mac, err := s.hsm.ComputeMAC([]byte(packed), s.zak)
+	mac, err := s.hsm.ComputeMAC([]byte(packed), s.zak.ActiveZAK())
 	if err != nil {
 		return fmt.Errorf("compute MAC: %w", err)
 	}

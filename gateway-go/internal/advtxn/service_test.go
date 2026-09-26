@@ -232,7 +232,7 @@ func (fakeHSM) ComputeMAC(_ []byte, _ []byte) ([]byte, error) {
 
 var _ hsm.Module = fakeHSM{}
 
-var testZAK = make([]byte, 16)
+var testZAK = hsm.StaticZAK(make([]byte, 16))
 
 // fakeMerchants resolves terminals from a fixed table; anything else is an unknown terminal.
 type fakeMerchants map[string]store.Merchant

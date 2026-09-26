@@ -165,7 +165,7 @@ type Service struct {
 	hub         HubPort
 	saf         SAFQueuer
 	hsm         hsm.Module
-	zak         []byte
+	zak         hsm.ZAKSource // read per message (SEC-G10)
 	mac         purchase.MACVerifier
 	calendar    bizdate.Calendar
 }
@@ -174,7 +174,7 @@ type Service struct {
 // Ruling 2: a sibling service, not a re-derivation of purchase.Service's already-proven wiring.
 // safQueuer and keyStore are the same SAF queue and dual-key MAC lookup purchases use; calendar
 // is the acquirer's business date (ADR-007).
-func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency purchase.IdempotencyPort, hub HubPort, safQueuer SAFQueuer, hsmModule hsm.Module, zak []byte, keyStore purchase.RetiredKeyFinder, calendar bizdate.Calendar) *Service {
+func NewService(mux MuxSender, cardTokens *purchase.CardTokenRegistry, merchants purchase.MerchantResolver, tranLog TranLogPort, idempotency purchase.IdempotencyPort, hub HubPort, safQueuer SAFQueuer, hsmModule hsm.Module, zak hsm.ZAKSource, keyStore purchase.RetiredKeyFinder, calendar bizdate.Calendar) *Service {
 	return &Service{
 		mux: mux, cardTokens: cardTokens, merchants: merchants, tranLog: tranLog, idempotency: idempotency, hub: hub,
 		saf: safQueuer, hsm: hsmModule, zak: zak, mac: purchase.NewMACVerifier(hsmModule, zak, keyStore), calendar: calendar,
@@ -222,7 +222,7 @@ func (s *Service) finalizeFields(ctx context.Context, p sendParams) (store.Merch
 	if _, ok := p.fields[42]; ok {
 		p.fields[42] = merchant.MID
 	}
-	if err := attachMAC(s.hsm, s.zak, p.mti, p.fields); err != nil {
+	if err := attachMAC(s.hsm, s.zak.ActiveZAK(), p.mti, p.fields); err != nil {
 		return store.Merchant{}, fmt.Errorf("compute outgoing MAC: %w", err)
 	}
 	return merchant, nil

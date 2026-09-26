@@ -1,11 +1,13 @@
 package purchase
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -133,7 +136,12 @@ func (f *fakeRetiredKeyFinder) FindRecentlyRetired(context.Context, string, stri
 }
 
 // testZAK satisfies hsm.Module.ComputeMAC's 16-byte length check; fakeHSM ignores its value.
-var testZAK = make([]byte, 16)
+var testZAK = hsm.StaticZAK(make([]byte, 16))
+
+// rotatingZAK is a ZAKSource a test can rotate, as rotation.ActiveKeys does on activation.
+type rotatingZAK struct{ key []byte }
+
+func (r *rotatingZAK) ActiveZAK() []byte { return r.key }
 
 // stdMACHex is hex.EncodeToString(stdHSM()'s fixed MAC) - tests that don't care about MAC
 // verification set their fakeMux response's DE 64 to this so verifyIncomingMAC still passes.
@@ -900,4 +908,24 @@ func TestCancelPurchase_reportsTheStoredBusinessDate__OVW_G7(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "2031-01-02", txn.BusinessDate)
+}
+
+func TestCreatePurchase_aRotatedZAKIsUsedWithoutARestart__SEC_G10(t *testing.T) {
+	oldZAK, newZAK := bytes.Repeat([]byte{0x01}, 16), bytes.Repeat([]byte{0x02}, 16)
+	oldMAC, newMAC := []byte{1, 1, 1, 1, 1, 1, 1, 1}, []byte{2, 2, 2, 2, 2, 2, 2, 2}
+	h := &fakeHSM{macForKey: map[string][]byte{hex.EncodeToString(oldZAK): oldMAC, hex.EncodeToString(newZAK): newMAC}}
+	zak := &rotatingZAK{key: oldZAK}
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: hex.EncodeToString(oldMAC)}}
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, h, zak, nil, &fakeEvents{}, testCalendar)
+	first, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-before-rotation")
+	require.NoError(t, err)
+	require.Equal(t, statusApproved, first.Status)
+
+	zak.key = newZAK // the rotation activated the new ZAK
+	mux.response = map[int]string{39: "00", 38: "654321", 64: hex.EncodeToString(newMAC)}
+	second, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-after-rotation")
+
+	require.NoError(t, err)
+	require.Equal(t, statusApproved, second.Status, "the issuer's response under the new ZAK verifies without a restart")
+	require.Equal(t, strings.ToUpper(hex.EncodeToString(newMAC)), mux.lastFields[64], "and the 0200 is MACed under it")
 }

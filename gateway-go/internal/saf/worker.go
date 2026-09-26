@@ -57,13 +57,20 @@ type Port interface {
 	UpdatePayload(ctx context.Context, id int64, payload []byte) error
 }
 
+// ResponseVerifier checks the MAC an issuer response carries, as the MTI it arrived as;
+// purchase.MACVerifier satisfies it.
+type ResponseVerifier interface {
+	Verify(ctx context.Context, mti string, resp map[int]string) bool
+}
+
 // Worker polls saf_queue and delivers due advices, repeating as x21 after the first attempt,
 // full-jitter backing off between attempts, and dead-lettering after max_attempts.
 type Worker struct {
 	mux          MuxSender
 	cards        CardPANs
 	hsm          hsm.Module
-	zak          []byte
+	zak          hsm.ZAKSource // read per send, so a rotated ZAK applies without a restart (SEC-G10)
+	verifier     ResponseVerifier
 	saf          Port
 	encKey       []byte
 	backoff      isonet.Backoff
@@ -75,8 +82,8 @@ type Worker struct {
 // NewWorker builds a Worker. zak is the clear ZAK every advice is MACed under; encKey decrypts
 // saf_queue.payload_enc (nil stores payloads unencrypted, which is safe only because they never
 // hold a PAN).
-func NewWorker(mux MuxSender, cards CardPANs, hsmModule hsm.Module, zak []byte, saf Port, encKey []byte, backoff isonet.Backoff, pollInterval time.Duration) *Worker {
-	return &Worker{mux: mux, cards: cards, hsm: hsmModule, zak: zak, saf: saf, encKey: encKey, backoff: backoff, pollInterval: pollInterval, sendTimeout: sendTimeout, log: slog.Default()}
+func NewWorker(mux MuxSender, cards CardPANs, hsmModule hsm.Module, zak hsm.ZAKSource, verifier ResponseVerifier, saf Port, encKey []byte, backoff isonet.Backoff, pollInterval time.Duration) *Worker {
+	return &Worker{mux: mux, cards: cards, hsm: hsmModule, zak: zak, verifier: verifier, saf: saf, encKey: encKey, backoff: backoff, pollInterval: pollInterval, sendTimeout: sendTimeout, log: slog.Default()}
 }
 
 // SetLogger routes the worker's logs through the gateway's JSON logger.
@@ -147,6 +154,11 @@ func (w *Worker) deliverRow(ctx context.Context, row store.SafRow) error {
 	if err != nil {
 		return w.retryLater(ctx, row, err)
 	}
+	return w.settle(ctx, row, mti, resp)
+}
+
+// settle acknowledges row only for a response that proves the issuer recorded the advice.
+func (w *Worker) settle(ctx context.Context, row store.SafRow, mti string, resp map[int]string) error {
 	// Advices are never declined, so anything but "00" (91 link not signed on, 30 rejected frame)
 	// means the issuer has not recorded the reversal yet (docs/03 §7.3). 91 is the link, not the
 	// advice, so like a refused send it waits without counting an attempt.
@@ -156,8 +168,20 @@ func (w *Worker) deliverRow(ctx context.Context, row store.SafRow) error {
 	if rc := resp[39]; rc != acknowledged {
 		return w.retryLater(ctx, row, fmt.Errorf("%s not acknowledged: DE 39 %q", mti[:3]+"0", rc))
 	}
+	// Only the issuer holds the ZAK, so only a response whose MAC verifies proves the issuer
+	// recorded the advice (NET-G20). A mismatch may be tampering or corruption: it is never an
+	// acknowledgement, and the advice is repeated like any other unacknowledged send.
+	if respMTI := responseMTI(mti); !w.verifier.Verify(ctx, respMTI, resp) {
+		obs.MacFailureTotal.Inc()
+		w.log.WarnContext(ctx, "advice response failed MAC verification; not acknowledged", "saf_id", row.ID, "mti", respMTI)
+		return w.retryLater(ctx, row, fmt.Errorf("%s MAC verification failed", respMTI))
+	}
 	return w.saf.MarkAcked(ctx, row.ID)
 }
+
+// responseMTI is the issuer's answer to an advice sent as mti: its x30 (a 0420 or 0421 is answered
+// by a 0430, a 0220 or 0221 by a 0230).
+func responseMTI(mti string) string { return mti[:2] + "30" }
 
 // assignNetworkIdentity gives an advice its STAN and DE 7 on its first attempt and persists them
 // before anything is sent, so every x21 repeat is the same message with only the MTI changed
@@ -206,7 +230,7 @@ func (w *Worker) frame(mti string, adv advice) (map[int]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pack for MAC: %w", err)
 	}
-	mac, err := w.hsm.ComputeMAC([]byte(packed), w.zak)
+	mac, err := w.hsm.ComputeMAC([]byte(packed), w.zak.ActiveZAK())
 	if err != nil {
 		return nil, fmt.Errorf("compute MAC: %w", err)
 	}

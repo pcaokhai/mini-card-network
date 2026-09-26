@@ -56,7 +56,7 @@ func TestRunner_anUnknownOutcomeFailsButKeepsThePendingKey__SEC_S2(t *testing.T)
 func TestRunner_anExplicitDeclineRetiresTheNewKey__SEC_S2(t *testing.T) {
 	pool := newTestPool(t)
 	keyStore := store.NewKeyStoreRepository(pool)
-	runner := NewRunner(NewRepository(pool), keyStore, fakeHSM{}, &fakeMux{rc: "96"}, testZMK)
+	runner := NewRunner(NewRepository(pool), keyStore, fakeHSM{}, &fakeMux{rc: rcDeclined}, testZMK)
 
 	row, err := runner.Run(context.Background(), typeZPK, "")
 
@@ -169,4 +169,38 @@ func TestRunner_eachSendAttemptHasItsOwnDeadline__SEC_R2_B1(t *testing.T) {
 		_, err := runner.Start(context.Background(), typeZPK, "")
 		return !errors.Is(err, ErrRotationInProgress)
 	}, time.Second, 10*time.Millisecond, "the runner is free again after an unknown outcome")
+}
+
+// rcDeclined is a business decline of the key change: any RC but "00" and the ambiguous "96".
+const rcDeclined = "12"
+
+// The issuer can commit a key's activation and still answer 0810 96 (its audit write failed
+// after activate), so a 96 proves nothing: it is resent like a lost 0810, never retired.
+func TestRunner_a0810With96IsAnUnknownOutcome__SEC_G23(t *testing.T) {
+	pool := newTestPool(t)
+	keyStore := store.NewKeyStoreRepository(pool)
+	mux := &fakeMux{rc: "96"}
+	runner := NewRunner(NewRepository(pool), keyStore, fakeHSM{}, mux, testZMK, WithSendAttempts(3))
+
+	row, err := runner.Run(context.Background(), typeZPK, "")
+
+	require.Error(t, err)
+	require.Equal(t, "FAILED", row.Status)
+	require.Equal(t, StatusFailed, stepStatus(row.Steps, StepSend0800161))
+	require.Len(t, mux.de48s, 3, "resent up to ROTATION_SEND_ATTEMPTS")
+	require.Equal(t, mux.de48s[0], mux.de48s[2], "always the same cryptogram")
+	require.Len(t, pendingKeys(t, keyStore), 1, "the issuer may have activated it: kept PENDING, never retired")
+}
+
+func TestRunner_a96ThenAConfirmationCompletesTheRotation__SEC_G23(t *testing.T) {
+	pool := newTestPool(t)
+	mux := &fakeMux{rcs: []string{"96", "00"}}
+	runner := NewRunner(NewRepository(pool), store.NewKeyStoreRepository(pool), fakeHSM{}, mux, testZMK, WithSendAttempts(3))
+
+	row, err := runner.Run(context.Background(), typeZPK, "")
+
+	require.NoError(t, err)
+	require.Equal(t, "COMPLETED", row.Status)
+	require.Len(t, mux.de48s, 2)
+	require.Equal(t, mux.de48s[0], mux.de48s[1])
 }

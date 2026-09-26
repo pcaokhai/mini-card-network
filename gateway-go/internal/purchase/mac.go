@@ -32,12 +32,12 @@ type FallbackKeyFinder interface {
 // request verifies its response through it, so none can skip the check (POS-G5).
 type MACVerifier struct {
 	hsm      hsm.Module
-	zak      []byte
+	zak      hsm.ZAKSource
 	keyStore RetiredKeyFinder
 }
 
 // NewMACVerifier builds a MACVerifier. A nil keyStore disables the dual-key retry.
-func NewMACVerifier(hsmModule hsm.Module, zak []byte, keyStore RetiredKeyFinder) MACVerifier {
+func NewMACVerifier(hsmModule hsm.Module, zak hsm.ZAKSource, keyStore RetiredKeyFinder) MACVerifier {
 	return MACVerifier{hsm: hsmModule, zak: zak, keyStore: keyStore}
 }
 
@@ -61,7 +61,7 @@ func (v MACVerifier) Verify(ctx context.Context, mti string, resp map[int]string
 	if err != nil {
 		return false
 	}
-	if v.macMatches(packed, macHex, v.zak) {
+	if v.macMatches(packed, macHex, v.zak.ActiveZAK()) {
 		return true
 	}
 	return v.macMatchesRecentlyRetiredZAK(ctx, packed, macHex)
