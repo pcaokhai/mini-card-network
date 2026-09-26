@@ -166,6 +166,7 @@ type LinkStatusPort interface {
 type TranLogPort interface {
 	Insert(ctx context.Context, row store.TranLogRow) (int64, error)
 	UpdateStatus(ctx context.Context, id int64, status, responseCode, authCode string) error
+	UpdateStatusFrom(ctx context.Context, id int64, from, status, responseCode, authCode string) error
 	RecordStateTransition(ctx context.Context, id int64, fromStatus, toStatus string) error
 	UpdateLateResponse(ctx context.Context, rrn, responseCode string) error
 }
@@ -455,6 +456,11 @@ func (s *Service) sendDuplicateIfActive(ctx context.Context, fields map[int]stri
 // The response reports the row's real status (docs/04 §4), REVERSAL_PENDING after a timeout.
 func (s *Service) finalizeSendResult(ctx context.Context, row store.TranLogRow, txn Transaction, macFailed bool) (Transaction, error) {
 	current, recordErr := s.recordStatus(ctx, row.ID, txn)
+	if errors.Is(recordErr, store.ErrStateMoved) {
+		// The orphan sweeper gave up on this request and followed it up; the caller is answered
+		// from the row it left.
+		return Transaction{}, recordErr
+	}
 	reason := reversalReasonFor(txn.Status, macFailed)
 	if reason == "" {
 		return txn, recordErr
@@ -471,7 +477,7 @@ func (s *Service) finalizeSendResult(ctx context.Context, row store.TranLogRow, 
 
 // recordStatus moves row id from SENT to txn's status and returns the status the row now holds.
 func (s *Service) recordStatus(ctx context.Context, id int64, txn Transaction) (current string, err error) {
-	if err := s.tranLog.UpdateStatus(ctx, id, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
+	if err := s.tranLog.UpdateStatusFrom(ctx, id, statusSent, txn.Status, txn.ResponseCode, txn.AuthCode); err != nil {
 		return statusSent, fmt.Errorf("update tran_log to %s: %w", txn.Status, err)
 	}
 	if err := s.tranLog.RecordStateTransition(ctx, id, statusSent, txn.Status); err != nil {

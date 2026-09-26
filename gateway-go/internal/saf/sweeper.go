@@ -18,6 +18,8 @@ const (
 	statusTimedOut     = "TIMED_OUT"
 	mtiCompletion      = "0220"
 	reasonTimeout      = "68" // docs/03 §7.3 DE 39 of the 0420: no response
+	reasonMacFailure   = "06" // docs/03 §7.3 DE 39 of the 0420: error (a bad incoming MAC)
+	statusDeclined     = "DECLINED"
 )
 
 // OrphanRows is the tran_log access the Sweeper needs; *store.TranLogRepository satisfies it.
@@ -85,6 +87,9 @@ func (s *Sweeper) SweepOnce(ctx context.Context) error {
 }
 
 func (s *Sweeper) followUp(ctx context.Context, row store.TranLogRow) error {
+	if row.Status == statusDeclined { // a bad incoming MAC whose reversal was never queued
+		return s.queuer.Queue(ctx, row, reasonMacFailure)
+	}
 	if row.Status != statusTimedOut {
 		moved, err := s.rows.MarkTimedOut(ctx, row.ID)
 		if err != nil || !moved {
@@ -96,6 +101,12 @@ func (s *Sweeper) followUp(ctx context.Context, row store.TranLogRow) error {
 	case tranTypeBalance:
 		return nil
 	case tranTypeCompletion:
+		if row.OriginalRRN == "" {
+			// Rows written before original_rrn existed can't name their pre-auth in DE 37, so their
+			// 0220 can't be packed; they need an operator.
+			s.log.WarnContext(ctx, "completion orphan has no original RRN; not repeated", "rrn", row.RRN)
+			return nil
+		}
 		return s.queuer.QueueAdvice(ctx, row.ID, mtiCompletion, completionAdvice(row))
 	}
 	return s.queuer.Queue(ctx, row, reasonTimeout)

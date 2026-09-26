@@ -1,9 +1,11 @@
 package saf
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ type fakeOrphans struct {
 	rows     []store.TranLogRow
 	timedOut []int64
 	findErr  error
+	answered map[int64]bool // rows whose request recorded an outcome after FindOrphans read them
 }
 
 func (f *fakeOrphans) FindOrphans(context.Context, time.Time, int) ([]store.TranLogRow, error) {
@@ -23,6 +26,9 @@ func (f *fakeOrphans) FindOrphans(context.Context, time.Time, int) ([]store.Tran
 }
 
 func (f *fakeOrphans) MarkTimedOut(_ context.Context, id int64) (bool, error) {
+	if f.answered[id] {
+		return false, nil
+	}
 	f.timedOut = append(f.timedOut, id)
 	return true, nil
 }
@@ -91,4 +97,41 @@ func TestSweeper_runStopsOnCancel__POS_G16(t *testing.T) {
 	go func() { done <- NewSweeper(&fakeOrphans{}, &recordingQueuer{}, time.Minute, time.Millisecond).Run(ctx) }()
 	cancel()
 	require.NoError(t, <-done)
+}
+
+func TestSweeper_leavesARowItsRequestAnsweredMeanwhile__B2(t *testing.T) {
+	orphans := &fakeOrphans{rows: []store.TranLogRow{orphan(1, "PURCHASE", "SENT"), orphan(2, "PURCHASE", "SENT")}, answered: map[int64]bool{1: true}}
+	queuer := &recordingQueuer{}
+
+	require.NoError(t, NewSweeper(orphans, queuer, time.Minute, time.Second).SweepOnce(context.Background()))
+
+	require.Len(t, queuer.reversals, 1)
+	require.Equal(t, int64(2), queuer.reversals[0].ID, "row 1 left SENT on its own, so nothing is queued for it")
+}
+
+func TestSweeper_reversesAMacFailureWithReasonSix__B1(t *testing.T) {
+	macFailed := orphan(1, "PREAUTH", "DECLINED")
+	macFailed.ResponseCode = "96"
+	orphans := &fakeOrphans{rows: []store.TranLogRow{macFailed}}
+	queuer := &recordingQueuer{}
+
+	require.NoError(t, NewSweeper(orphans, queuer, time.Minute, time.Second).SweepOnce(context.Background()))
+
+	require.Empty(t, orphans.timedOut, "a DECLINED row keeps its status")
+	require.Equal(t, []string{"06"}, queuer.reasons)
+	require.Equal(t, "DECLINED", queuer.reversals[0].Status, "queued from the state the row holds")
+}
+
+func TestSweeper_neverQueuesACompletionWithoutItsPreAuth__N3(t *testing.T) {
+	completion := orphan(1, "COMPLETION", "SENT")
+	var logs bytes.Buffer
+	sweeper := NewSweeper(&fakeOrphans{rows: []store.TranLogRow{completion}}, &recordingQueuer{}, time.Minute, time.Second)
+	sweeper.SetLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+	queuer := sweeper.queuer.(*recordingQueuer)
+
+	require.NoError(t, sweeper.SweepOnce(context.Background()))
+
+	require.Empty(t, queuer.advices, "a 0220 without DE 37 can't be packed")
+	require.Contains(t, logs.String(), completion.RRN)
+	require.Contains(t, logs.String(), "WARN")
 }

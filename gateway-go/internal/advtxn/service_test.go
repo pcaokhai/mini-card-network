@@ -99,6 +99,13 @@ func (f *fakeTranLog) Get(_ context.Context, rrn string) (store.TranLogRow, erro
 	return store.TranLogRow{}, store.ErrNotFound
 }
 
+func (f *fakeTranLog) UpdateStatusFrom(ctx context.Context, id int64, from, status, responseCode, authCode string) error {
+	if f.rows[id-1].Status != from {
+		return store.ErrStateMoved
+	}
+	return f.UpdateStatus(ctx, id, status, responseCode, authCode)
+}
+
 func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, responseCode, authCode string) error {
 	if status == f.failStatus {
 		return errors.New("db down")
@@ -805,4 +812,16 @@ func TestSend_aPreSendFailureLeavesNoSentRow__N2(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, mux.lastFields, "nothing was sent")
 	require.NotEqual(t, statusSent, tranLog.rows[0].Status, "a SENT row would be swept into a 0420 for a request that never left")
+}
+
+func TestSend_aLateAnswerNeverOverwritesASweptRow__N1(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, _, _ := newTestService(mux)
+	mux.onSend = func() { tranLog.rows[0].Status = statusTimedOut } // the sweeper gave up on the stalled request
+
+	txn, err := svc.CreateRefund(context.Background(), sampleRefundRequest(), "key-swept")
+
+	require.NoError(t, err)
+	require.Equal(t, statusTimedOut, tranLog.rows[0].Status, "the sweep's reversal stands")
+	require.Equal(t, statusTimedOut, txn.Status)
 }
