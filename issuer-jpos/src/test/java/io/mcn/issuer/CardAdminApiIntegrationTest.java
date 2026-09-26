@@ -75,7 +75,7 @@ class CardAdminApiIntegrationTest {
             new LedgerRepository(),
             new BusinessDateRepository(ds));
     server = new HealthServer(new Readiness(), cardAdmin);
-    port = server.start(0);
+    port = server.start("127.0.0.1", 0);
   }
 
   @AfterEach
@@ -558,7 +558,7 @@ class CardAdminApiIntegrationTest {
                   new IdempotencyRepository(tinyPool),
                   new LedgerRepository(),
                   new BusinessDateRepository(tinyPool)));
-      int tinyPort = tinyServer.start(0);
+      int tinyPort = tinyServer.start("127.0.0.1", 0);
       try {
         String etag = etagOf(cardRef);
         var start = new CountDownLatch(1);
@@ -733,7 +733,7 @@ class CardAdminApiIntegrationTest {
                 new IdempotencyRepository(closedPool),
                 new LedgerRepository(),
                 new BusinessDateRepository(closedPool)));
-    int brokenPort = brokenServer.start(0);
+    int brokenPort = brokenServer.start("127.0.0.1", 0);
     try {
       var response =
           client.send(
