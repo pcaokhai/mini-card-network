@@ -111,13 +111,14 @@ func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, response
 
 // fakeIdempotency mirrors store.IdempotencyRepository's reserve/store/release contract.
 type fakeIdempotency struct {
-	stored   map[string]store.StoredResponse
-	storeCtx context.Context // the context the last Store ran on
-	hashes   map[string]string
-	pending  map[string]bool
-	released []string
-	rrns     map[string]string    // AttachRRN, by key+route
-	reserved map[string]time.Time // when each pending key was reserved
+	stored    map[string]store.StoredResponse
+	storeCtx  context.Context // the context the last Store ran on
+	hashes    map[string]string
+	pending   map[string]bool
+	released  []string
+	rrns      map[string]string // AttachRRN, by key+route
+	attachErr error
+	reserved  map[string]time.Time // when each pending key was reserved
 }
 
 // pendAt makes key a reservation made at reservedAt that sent rrn, as a crashed request leaves it.
@@ -137,6 +138,9 @@ func (f *fakeIdempotency) Reclaim(_ context.Context, key, route, hash string, st
 }
 
 func (f *fakeIdempotency) AttachRRN(_ context.Context, key, route, rrn string) error {
+	if f.attachErr != nil {
+		return f.attachErr
+	}
 	f.rrns[key+route] = rrn
 	return nil
 }
@@ -766,4 +770,16 @@ func TestCreateCompletion_anUnknownOutcomeKeepsTheClaim__S2(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotEmpty(t, tranLog.rows[0].CompletedBy, "the 0220 is repeated through SAF, so the hold stays taken")
+}
+
+func TestSend_aPreSendFailureLeavesNoSentRow__N2(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00", 64: stdMACHex}}
+	svc, tranLog, idem, _ := newTestService(mux)
+	idem.attachErr = errors.New("db down")
+
+	_, err := svc.CreateRefund(context.Background(), sampleRefundRequest(), "key-attach-fails")
+
+	require.Error(t, err)
+	require.Nil(t, mux.lastFields, "nothing was sent")
+	require.NotEqual(t, statusSent, tranLog.rows[0].Status, "a SENT row would be swept into a 0420 for a request that never left")
 }

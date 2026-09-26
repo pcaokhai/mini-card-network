@@ -340,18 +340,19 @@ func (s *Service) sendPurchase(ctx context.Context, req PurchaseRequest, card Ca
 	if err != nil {
 		return Transaction{}, fmt.Errorf("insert tran_log: %w", err)
 	}
+	if err := s.attachMAC(fields); err != nil {
+		return Transaction{}, fmt.Errorf("compute outgoing MAC: %w", err)
+	}
+	if err := AttachRRN(ctx, rrn); err != nil {
+		return Transaction{}, err
+	}
+	// SENT is the last step before the send: a row that fails before it stays CREATED, so the
+	// orphan sweeper never reverses a request that never left.
 	if err := s.tranLog.UpdateStatus(ctx, id, statusSent, "", ""); err != nil {
 		return Transaction{}, fmt.Errorf("update tran_log to %s: %w", statusSent, err)
 	}
 	if err := s.tranLog.RecordStateTransition(ctx, id, statusCreated, statusSent); err != nil {
 		return Transaction{}, fmt.Errorf("record %s->%s: %w", statusCreated, statusSent, err)
-	}
-	if err := AttachRRN(ctx, rrn); err != nil {
-		return Transaction{}, err
-	}
-
-	if err := s.attachMAC(fields); err != nil {
-		return Transaction{}, fmt.Errorf("compute outgoing MAC: %w", err)
 	}
 
 	s.sendDuplicateIfActive(ctx, fields)

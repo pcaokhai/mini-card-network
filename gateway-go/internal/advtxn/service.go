@@ -338,13 +338,14 @@ func afterSend(err error) error {
 	return fmt.Errorf("%w: %w", purchase.ErrAfterSend, err)
 }
 
-// markSending moves row id to SENT and records its RRN on the idempotency key, the last steps
-// before the send.
+// markSending records the RRN on the idempotency key and then moves row id to SENT, the last
+// step before the send: a row that fails before it stays CREATED, so the orphan sweeper never
+// reverses (or repeats) a request that never left.
 func (s *Service) markSending(ctx context.Context, id int64, p sendParams) error {
-	if err := s.transition(ctx, id, statusCreated, statusSent, "", ""); err != nil {
+	if err := purchase.AttachRRN(ctx, p.rrn); err != nil {
 		return err
 	}
-	return purchase.AttachRRN(ctx, p.rrn)
+	return s.transition(ctx, id, statusCreated, statusSent, "", "")
 }
 
 // releaseClaim frees a completion's claim on its pre-auth when the completion consumed nothing:

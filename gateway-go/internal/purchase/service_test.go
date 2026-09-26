@@ -784,3 +784,15 @@ func TestCreatePurchase_aStaleKeyThatNeverSentIsRetried__S1(t *testing.T) {
 	require.Equal(t, statusApproved, txn.Status)
 	require.Len(t, tranLog.rows, 1, "sent once")
 }
+
+func TestCreatePurchase_aPreSendFailureLeavesNoSentRow__N2(t *testing.T) {
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 64: stdMACHex}}
+	tranLog := &fakeTranLog{}
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, &fakeHSM{macErr: errors.New("hsm down")}, testZAK, nil, &fakeEvents{})
+
+	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "key-mac-fails")
+
+	require.Error(t, err)
+	require.Nil(t, mux.lastFields, "nothing was sent")
+	require.NotEqual(t, statusSent, tranLog.rows[0].Status, "a SENT row would be swept into a 0420 for a request that never left")
+}
