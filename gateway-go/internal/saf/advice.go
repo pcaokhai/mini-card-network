@@ -41,6 +41,10 @@ func reversalAdvice(original store.TranLogRow, reasonCode string) (advice, error
 	if original.SentAt == nil || original.NetworkSTAN == "" {
 		return advice{}, fmt.Errorf("reverse %s: %w", original.RRN, errNeverSent)
 	}
+	originalMTI := original.MTI
+	if originalMTI == "" {
+		originalMTI = mtiPurchase // rows logged before tran_log.mti was written are all purchases
+	}
 	sent := original.SentAt.UTC()
 	local := sent.In(terminalLocation)
 	de7 := sent.Format("0102150405")
@@ -62,7 +66,7 @@ func reversalAdvice(original store.TranLogRow, reasonCode string) (advice, error
 			49: original.Currency,
 			// docs/03 §7.3: original MTI + STAN + DE 7 + acquirer ID right-justified zero-filled
 			// + forwarding institution (zeros in v1).
-			90: mtiPurchase + original.NetworkSTAN + de7 + fmt.Sprintf("%011s", acquirerID) + forwardingInstitutionID,
+			90: originalMTI + original.NetworkSTAN + de7 + fmt.Sprintf("%011s", acquirerID) + forwardingInstitutionID,
 		},
 	}, nil
 }

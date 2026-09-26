@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
@@ -17,6 +21,7 @@ type fakeMux struct {
 	lastFields   map[int]string
 	response     map[int]string
 	err          error
+	onSend       func() // runs inside Send, e.g. to cancel the caller's context mid-flight
 }
 
 func (f *fakeMux) IsSignedOn() bool { return f.linkSignedOn }
@@ -30,16 +35,25 @@ func (f *fakeMux) NextSTAN() (string, bool) {
 
 func (f *fakeMux) Send(_ context.Context, _ string, fields map[int]string) (map[int]string, error) {
 	f.lastFields = fields
+	if f.onSend != nil {
+		f.onSend()
+	}
 	return f.response, f.err
 }
 
-type fakeTranLog struct{ rows []store.TranLogRow }
+type fakeTranLog struct {
+	rows       []store.TranLogRow
+	failStatus string // UpdateStatus to this status fails, leaving the row as it was
+}
 
 func (f *fakeTranLog) Insert(_ context.Context, row store.TranLogRow) (int64, error) {
 	f.rows = append(f.rows, row)
 	return int64(len(f.rows)), nil
 }
 func (f *fakeTranLog) UpdateStatus(_ context.Context, id int64, status, responseCode, authCode string) error {
+	if status == f.failStatus {
+		return errors.New("db down")
+	}
 	f.rows[id-1].Status = status
 	f.rows[id-1].ResponseCode = responseCode
 	f.rows[id-1].AuthCode = authCode
@@ -120,7 +134,8 @@ const stdMACHex = "0102030405060708"
 func stdHSM() *fakeHSM { return &fakeHSM{macToReturn: []byte{1, 2, 3, 4, 5, 6, 7, 8}} }
 
 type fakeIdempotency struct {
-	stored map[string]store.StoredResponse
+	stored   map[string]store.StoredResponse
+	storeCtx context.Context // the context the last Store ran on
 }
 
 func (f *fakeIdempotency) Find(_ context.Context, key, route string) (*store.StoredResponse, error) {
@@ -130,7 +145,11 @@ func (f *fakeIdempotency) Find(_ context.Context, key, route string) (*store.Sto
 	}
 	return &stored, nil
 }
-func (f *fakeIdempotency) Store(_ context.Context, key, route, _ string, status int, body []byte) error {
+func (f *fakeIdempotency) Store(ctx context.Context, key, route, _ string, status int, body []byte) error {
+	f.storeCtx = ctx
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if f.stored == nil {
 		f.stored = map[string]store.StoredResponse{}
 	}
@@ -224,8 +243,48 @@ func TestCreatePurchase_timeoutQueuesReversalWithReasonSixtyEight__MCN_401_AC1(t
 	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-key-timeout")
 
 	require.NoError(t, err)
-	require.Equal(t, "TIMED_OUT", txn.Status)
+	require.Equal(t, "REVERSAL_PENDING", txn.Status, "POS-G9: the response reports the row's real status")
 	require.Equal(t, []string{reasonTimeout}, reversal.calls)
+}
+
+func TestCreatePurchase_everyPostSendFailureQueuesReversal__POS_G4(t *testing.T) {
+	failures := map[string]error{
+		"timeout":           context.DeadlineExceeded,
+		"request cancelled": context.Canceled,
+		"broken pipe":       fmt.Errorf("write request: %w", syscall.EPIPE),
+		"connection closed": io.EOF,
+	}
+	for name, sendErr := range failures {
+		t.Run(name, func(t *testing.T) {
+			mux := &fakeMux{linkSignedOn: true, err: sendErr}
+			reversal := &fakeReversal{}
+			tranLog := &fakeTranLog{}
+			svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+			txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-"+name)
+
+			require.NoError(t, err, "an unknown outcome is not an HTTP error")
+			require.Equal(t, "REVERSAL_PENDING", txn.Status)
+			require.Equal(t, []string{reasonTimeout}, reversal.calls)
+			require.Equal(t, "TIMED_OUT", reversal.queued[0].Status, "queued from the state the row holds")
+			require.Equal(t, "TIMED_OUT", tranLog.rows[0].Status)
+		})
+	}
+}
+
+func TestCreatePurchase_linkDroppedBeforeSendDeclinesRc91WithoutReversal__POS_G4(t *testing.T) {
+	mux := &fakeMux{linkSignedOn: true, err: isonet.ErrNotSignedOn}
+	reversal := &fakeReversal{}
+	tranLog := &fakeTranLog{}
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+	txn, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-link-dropped")
+
+	require.NoError(t, err)
+	require.Equal(t, "DECLINED", txn.Status)
+	require.Equal(t, "91", txn.ResponseCode)
+	require.Empty(t, reversal.calls, "nothing left the gateway, so nothing to reverse")
+	require.Equal(t, "DECLINED", tranLog.rows[0].Status)
 }
 
 func TestCreatePurchase_timeoutReturnsErrorWhenReversalQueueingFails__MCN_401_AC1(t *testing.T) {
@@ -333,7 +392,7 @@ func TestSendPurchase_computesAndAttachesMACOnOutgoing0200__MCN_502_AC1(t *testi
 
 func TestSendPurchase_badIncomingMACFailsTransactionAndQueuesReversal__MCN_502_AC3(t *testing.T) {
 	hsmFake := stdHSM()
-	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: "FFFFFFFFFFFFFFFF"}}
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: badMACHex}}
 	reversal := &fakeReversal{}
 	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, nil)
 
@@ -379,7 +438,7 @@ func TestSendPurchase_incomingMACVerifiesAgainstRecentlyRetiredZAKDuringRotation
 
 func TestSendPurchase_incomingMACStillFailsWhenNoRecentlyRetiredZAKMatches__MCN_504_AC2(t *testing.T) {
 	hsmFake := stdHSM()
-	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: "FFFFFFFFFFFFFFFF"}}
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: badMACHex}}
 	reversal := &fakeReversal{}
 	keyStore := &fakeRetiredKeyFinder{row: nil}
 	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, &fakeIdempotency{}, &fakeHub{}, reversal, hsmFake, testZAK, keyStore)
@@ -458,8 +517,61 @@ func TestCreatePurchase_recordsWhatA0420MustRepeat__MCN_401(t *testing.T) {
 	require.NoError(t, err)
 	row := tranLog.rows[0]
 	require.Equal(t, "tok_normal", row.CardToken)
+	require.Equal(t, "0200", row.MTI)
 	require.Equal(t, mux.lastFields[3], row.ProcessingCode)
 	require.Equal(t, mux.lastFields[22], row.POSEntryMode)
 	require.NotNil(t, row.SentAt)
 	require.Equal(t, mux.lastFields[7], row.SentAt.UTC().Format("0102150405"), "DE 90 repeats the DE 7 that was sent")
 }
+
+func TestCreatePurchase_callerGivingUpMidSendStillStoresTheOutcome__POS_G4(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mux := &fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 38: "123456", 64: stdMACHex}, onSend: cancel}
+	idem := &fakeIdempotency{}
+	svc := NewService(mux, DefaultCardTokens(), testMerchants, &fakeTranLog{}, idem, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+
+	txn, err := svc.CreatePurchase(ctx, newTestRequest(), "idem-gave-up")
+
+	require.NoError(t, err)
+	require.Equal(t, "APPROVED", txn.Status)
+	require.Len(t, idem.stored, 1, "a retry with the same key must replay, never resend the 0200")
+	_, hasDeadline := idem.storeCtx.Deadline()
+	require.True(t, hasDeadline, "work after the send is detached from the caller but still bounded")
+}
+
+func TestCreatePurchase_linkDroppedBeforeWriteLogsOneRow__POS_G4(t *testing.T) {
+	tranLog := &fakeTranLog{}
+	svc := NewService(&fakeMux{linkSignedOn: true, err: isonet.ErrNotSignedOn}, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, &fakeReversal{}, stdHSM(), testZAK, nil)
+
+	_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-dropped-once")
+
+	require.NoError(t, err)
+	require.Len(t, tranLog.rows, 1)
+}
+
+func TestCreatePurchase_reversalIsQueuedEvenWhenTheStatusUpdateFails__POS_G4(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mux    *fakeMux
+		fail   string
+		reason string
+	}{
+		"timeout": {&fakeMux{linkSignedOn: true, err: context.DeadlineExceeded}, "TIMED_OUT", reasonTimeout},
+		"bad MAC": {&fakeMux{linkSignedOn: true, response: map[int]string{39: "00", 64: badMACHex}}, "DECLINED", reasonMacFailure},
+	} {
+		t.Run(name, func(t *testing.T) {
+			reversal := &fakeReversal{}
+			tranLog := &fakeTranLog{failStatus: tc.fail}
+			svc := NewService(tc.mux, DefaultCardTokens(), testMerchants, tranLog, &fakeIdempotency{}, &fakeHub{}, reversal, stdHSM(), testZAK, nil)
+
+			_, err := svc.CreatePurchase(context.Background(), newTestRequest(), "idem-status-fails")
+
+			require.Error(t, err, "the failed update is still reported")
+			require.Equal(t, []string{tc.reason}, reversal.calls)
+			require.Equal(t, "SENT", reversal.queued[0].Status, "queued from the state the row still holds")
+		})
+	}
+}
+
+// badMACHex never matches the fake HSM's MAC.
+const badMACHex = "FFFFFFFFFFFFFFFF"

@@ -35,10 +35,7 @@ func (s *Service) CreatePreAuth(ctx context.Context, req PreAuthRequest, idempot
 	}
 	maskedPAN := obs.MaskPAN(card.PAN)
 
-	stan, ok := s.mux.NextSTAN()
-	if !ok {
-		return Transaction{}, fmt.Errorf("advtxn: no STAN available")
-	}
+	stan, linkUp := s.nextSTAN()
 	now := time.Now().UTC()
 	rrn := purchase.BuildRRN(now, stan)
 
@@ -60,7 +57,8 @@ func (s *Service) CreatePreAuth(ctx context.Context, req PreAuthRequest, idempot
 
 	return s.send(ctx, sendParams{
 		mti: "0100", txnType: tranTypePreAuth, route: routePreAuth, fields: fields,
-		rrn: rrn, stan: stan, maskedPAN: maskedPAN, terminalID: req.TerminalID,
+		rrn: rrn, stan: stan, linkUp: linkUp, sentAt: now, maskedPAN: maskedPAN, terminalID: req.TerminalID,
+		cardToken: req.CardToken, posEntryMode: fields[22],
 		requestedAmt: req.Amount, idempotencyKey: idempotencyKey, requestHash: hashRequest(req),
 	})
 }

@@ -2,7 +2,6 @@ package advtxn
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/mcn/gateway-go/internal/obs"
@@ -23,10 +22,7 @@ func (s *Service) CreateBalanceInquiry(ctx context.Context, req BalanceInquiryRe
 	}
 	maskedPAN := obs.MaskPAN(card.PAN)
 
-	stan, ok := s.mux.NextSTAN()
-	if !ok {
-		return Transaction{}, fmt.Errorf("advtxn: no STAN available")
-	}
+	stan, linkUp := s.nextSTAN()
 	now := time.Now().UTC()
 	rrn := purchase.BuildRRN(now, stan)
 
@@ -45,7 +41,8 @@ func (s *Service) CreateBalanceInquiry(ctx context.Context, req BalanceInquiryRe
 
 	return s.send(ctx, sendParams{
 		mti: "0200", txnType: tranTypeBalance, route: routeBalance, fields: fields,
-		rrn: rrn, stan: stan, maskedPAN: maskedPAN, terminalID: req.TerminalID,
+		rrn: rrn, stan: stan, linkUp: linkUp, sentAt: now, maskedPAN: maskedPAN, terminalID: req.TerminalID,
+		cardToken: req.CardToken, posEntryMode: fields[22],
 		idempotencyKey: idempotencyKey, requestHash: hashRequest(req),
 	})
 }

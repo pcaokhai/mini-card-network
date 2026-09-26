@@ -211,12 +211,13 @@ func TestTranLogRepository_roundTripsTheFieldsAReversalNeeds__MCN_401(t *testing
 	_, err := repo.Insert(ctx, TranLogRow{
 		RRN: "626514000701", Type: tranTypePurchase, Status: "CREATED", Amount: 600000, Currency: "704",
 		MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000124",
-		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: "tok_normal",
+		ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sentAt, CardToken: "tok_normal", MTI: "0100",
 	})
 	require.NoError(t, err)
 
 	got, err := repo.Get(ctx, "626514000701")
 	require.NoError(t, err)
+	require.Equal(t, "0100", got.MTI, "DE 90 of the 0420 names the original MTI")
 	require.Equal(t, "000124", got.NetworkSTAN)
 	require.Equal(t, "000000", got.ProcessingCode)
 	require.Equal(t, "051", got.POSEntryMode)
