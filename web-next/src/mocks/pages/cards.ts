@@ -5,6 +5,7 @@ import { MOCK_CARDS, MOCK_LEDGERS } from "../journey-fixtures";
 type CardDetail = components["schemas"]["CardDetail"];
 type CardLimits = components["schemas"]["CardLimits"];
 type JournalEntry = components["schemas"]["JournalEntry"];
+type AuditEntry = components["schemas"]["AuditEntry"];
 type Hold = CardDetail["holds"][number];
 
 const vnd = (amount: number) => ({ amount, currency: "704" });
@@ -101,9 +102,26 @@ function initialState(): Map<string, CardState> {
 // ponytail: one in-memory store per page load (or per test file); a reload starts from the canvas again.
 let state = initialState();
 
+// Admin actions per card, newest first, as the issuer's audit_log returns them.
+let audit = new Map<string, AuditEntry[]>();
+
 /** Tests that block, unblock or change limits start from the canvas values again. */
 export function resetCardsMock() {
   state = initialState();
+  audit = new Map();
+}
+
+/** The BFF names the actor (X-Actor); straight MSW calls in dev:mock skip the BFF, so default it. */
+function recordAudit(cardRef: string, request: Request, action: AuditEntry["action"]) {
+  const entry: AuditEntry = {
+    auditId: `a${Date.now()}${Math.random().toString(16).slice(2, 6)}`,
+    occurredAt: new Date().toISOString(),
+    actor: request.headers.get("X-Actor") ?? "console",
+    action,
+    before: null,
+    after: null,
+  };
+  audit = new Map(audit).set(cardRef, [entry, ...(audit.get(cardRef) ?? [])]);
 }
 
 const etagOf = (cardRef: string) => `"v${state.get(cardRef)?.version ?? 0}"`;
@@ -165,14 +183,20 @@ export const cardsHandlers = [
     const items = all.slice(start, start + limit);
     return HttpResponse.json({ items, nextCursor: items.length === limit ? (items.at(-1)?.journalId ?? null) : null });
   }),
-  http.post("*/v1/cards/:cardRef/blocks", ({ params }) => {
+  http.get("*/v1/cards/:cardRef/audit", ({ params, request }) => {
+    const limit = Number(new URL(request.url).searchParams.get("limit") ?? 50);
+    return HttpResponse.json({ items: (audit.get(String(params.cardRef)) ?? []).slice(0, limit), nextCursor: null });
+  }),
+  http.post("*/v1/cards/:cardRef/blocks", ({ params, request }) => {
     const cardRef = String(params.cardRef);
     withCard(cardRef, (c) => ({ ...c, status: "BLOCKED" }));
+    recordAudit(cardRef, request, "CARD_BLOCKED");
     return detailResponse(cardRef);
   }),
-  http.delete("*/v1/cards/:cardRef/blocks", ({ params }) => {
+  http.delete("*/v1/cards/:cardRef/blocks", ({ params, request }) => {
     const cardRef = String(params.cardRef);
     withCard(cardRef, (c) => ({ ...c, status: "ACTIVE" }));
+    recordAudit(cardRef, request, "CARD_UNBLOCKED");
     return detailResponse(cardRef);
   }),
   http.put("*/v1/cards/:cardRef/limits", async ({ params, request }) => {
@@ -181,6 +205,7 @@ export const cardsHandlers = [
     if (request.headers.get("If-Match") !== etagOf(cardRef)) return staleEtag();
     const limits = (await request.json()) as CardLimits;
     withCard(cardRef, (c) => ({ ...c, limits, version: c.version + 1 }));
+    recordAudit(cardRef, request, "CARD_LIMITS_UPDATED");
     return detailResponse(cardRef);
   }),
 ];

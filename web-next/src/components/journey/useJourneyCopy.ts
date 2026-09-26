@@ -50,8 +50,10 @@ export function useJourneyCopy(journey: Journey) {
     const reason = txn.responseCode && tRc.has(txn.responseCode) ? tRc(txn.responseCode) : (txn.responseLabel ?? "");
     // "The whole journey took …" is the time until the POS answered, not until a later reversal.
     const params = { last4: txn.maskedPan.slice(-4), merchant: txn.merchantName, amount, reason, total: total(s.offsetMs) };
-    const title = k ? t(`${k}.title`) : s.title;
-    const easy = k ? t(`${k}.easy`, params) : s.easyText;
+    // A code this build has no copy for (a newer provider) falls back to the provider's text (JRN-G11).
+    const known = k !== null && t.has(`${k}.title`);
+    const title = known ? t(`${k}.title`) : s.title;
+    const easy = known ? t(`${k}.easy`, params) : s.easyText;
     return {
       title,
       easy,

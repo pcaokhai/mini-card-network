@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GET, PUT } from "./route";
+import { GET, POST, PUT } from "./route";
 
 const ctx = (...path: string[]) => ({ params: Promise.resolve({ path }) });
 
@@ -32,6 +32,21 @@ describe("BFF proxy (web-next/CLAUDE.md: the browser talks only to Next.js)", ()
       "http://localhost:8081/v1/accounts/acc_1",
       "http://localhost:8080/v1/keys/acquirer",
     ]);
+  });
+
+  it("names the console as the actor on issuer card calls, whatever the browser sent CARDS-G3", async () => {
+    const upstream = stubUpstream();
+    const request = new Request("http://web/api/v1/cards/crd_1/blocks", {
+      method: "POST",
+      headers: { "X-Actor": "someone-else", "Content-Type": "application/json" },
+      body: '{"reason":"CUSTOMER_REQUEST"}',
+    });
+
+    await POST(request, ctx("v1", "cards", "crd_1", "blocks"));
+    await GET(new Request("http://web/api/v1/transactions"), ctx("v1", "transactions"));
+
+    expect(new Headers(upstream.mock.calls[0][1]?.headers).get("X-Actor")).toBe("console");
+    expect(new Headers(upstream.mock.calls[1][1]?.headers).get("X-Actor")).toBeNull();
   });
 
   it("sends everything else to the gateway", async () => {

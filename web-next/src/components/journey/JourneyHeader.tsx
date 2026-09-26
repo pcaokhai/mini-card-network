@@ -5,6 +5,8 @@ export const JOURNEY_VIEWS = ["approved", "declined", "reversed"] as const;
 export type JourneyView = (typeof JOURNEY_VIEWS)[number];
 
 export const VIEW_STATUS = { approved: "APPROVED", declined: "DECLINED", reversed: "REVERSED" } as const;
+/** "Đã tự hủy" means reversed by the gateway after a timeout, not a cancellation or a MAC failure (JRN-G7). */
+export const VIEW_REVERSAL_REASON = { reversed: "TIMEOUT" } as const;
 
 interface JourneyHeaderProps {
   /** The tab whose newest transaction is on screen; none when a specific RRN was opened. */

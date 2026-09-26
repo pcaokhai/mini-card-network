@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTopology, echoAge, endpointName, gatewayEventKey, linkTone, todaysEvents } from "./network-model";
+import { buildTopology, echoAge, endpointName, linkTone, networkEventKey, todaysEvents } from "./network-model";
 import type { Link, NetworkEvent, SwitchStatus } from "@/shared/api/network-client";
 
 const NOW = Date.parse("2026-09-21T14:41:10");
@@ -87,13 +87,15 @@ describe("todaysEvents", () => {
   });
 });
 
-describe("gatewayEventKey", () => {
-  it("MCN-205-AC3: maps every text gateway-go emits to a copy key and leaves unknown text alone", () => {
-    expect(gatewayEventKey("Link to issuer is up")).toBe("linkUp");
-    expect(gatewayEventKey("Link to issuer is down")).toBe("linkDown");
-    expect(gatewayEventKey("Signed on again: the issuer had the link signed off")).toBe("signedOnAgain");
-    expect(gatewayEventKey("Issuer still holds the link signed off")).toBe("stillSignedOff");
-    expect(gatewayEventKey("A response arrived too late for a transaction")).toBe("lateResponse");
-    expect(gatewayEventKey("Something new")).toBeUndefined();
+describe("networkEventKey", () => {
+  const evt = (code?: NetworkEvent["code"], easyText = "Link to issuer is up"): NetworkEvent => ({
+    id: "1", occurredAt: "2026-09-21T14:41:00Z", severity: "INFO", easyText, technicalText: "", code,
+  });
+
+  it("maps the event by its language-neutral code, never by the English text __NET_G15", () => {
+    expect(networkEventKey(evt("LINK_UP"))).toBe("LINK_UP");
+    expect(networkEventKey(evt("SIGNED_OFF", "Reworded by a newer gateway"))).toBe("SIGNED_OFF");
+    expect(networkEventKey(evt("LATE_RESPONSE"))).toBe("LATE_RESPONSE");
+    expect(networkEventKey(evt(undefined))).toBeUndefined(); // an older row without a code keeps its text
   });
 });

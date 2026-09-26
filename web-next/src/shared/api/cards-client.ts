@@ -7,6 +7,7 @@ export type CardSummary = components["schemas"]["CardSummary"];
 export type CardDetail = components["schemas"]["CardDetail"];
 export type CardLimits = components["schemas"]["CardLimits"];
 export type JournalEntry = components["schemas"]["JournalEntry"];
+export type CardAuditEntry = components["schemas"]["AuditEntry"];
 export type BlockReason = "CUSTOMER_REQUEST" | "LOST" | "STOLEN" | "FRAUD_SUSPECTED";
 
 const client = createClient<paths>({ baseUrl: apiBaseUrl() });
@@ -95,6 +96,24 @@ export function useUpdateLimits(cardRef: string) {
       return data;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: cardKey(cardRef) }),
+  });
+}
+
+// The panel shows the recent actions; older ones are in the issuer's audit_log.
+const AUDIT_PAGE_SIZE = 10;
+
+/** Who blocked, unblocked or changed the limits of this card, newest first (GET …/audit). */
+export function useCardAudit(cardRef: string) {
+  return useQuery({
+    queryKey: [...cardKey(cardRef), "audit"],
+    queryFn: async (): Promise<CardAuditEntry[]> => {
+      const { data, error } = await client.GET("/v1/cards/{cardRef}/audit", {
+        params: { path: { cardRef }, query: { limit: AUDIT_PAGE_SIZE } },
+        fetch: liveFetch,
+      });
+      if (error) throw error;
+      return data.items;
+    },
   });
 }
 

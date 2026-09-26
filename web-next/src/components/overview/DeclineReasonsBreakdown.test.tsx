@@ -46,4 +46,24 @@ describe("DeclineReasonsBreakdown", () => {
     );
     expect(screen.queryByText(/RC 51/)).not.toBeInTheDocument();
   });
+
+  it("folds everything after the top four into one 'Lý do khác' row __OVW_G5", () => {
+    renderWithIntl(
+      <DeclineReasonsBreakdown
+        declineReasons={[
+          { responseCode: "91", label: "Issuer unavailable", share: 0.03 },
+          { responseCode: "51", label: "Insufficient funds", share: 0.41 },
+          { responseCode: "55", label: "Incorrect PIN", share: 0.23 },
+          { responseCode: "61", label: "Exceeds limit", share: 0.18 },
+          { responseCode: "62", label: "Card is blocked", share: 0.12 },
+          { responseCode: "54", label: "Expired card", share: 0.03 },
+        ]}
+      />,
+    );
+    const rows = screen.getAllByText(/%$/);
+    expect(rows).toHaveLength(5);
+    expect(screen.getByText("Lý do khác")).toBeInTheDocument();
+    expect(rows[4]).toHaveTextContent("6%");
+    expect(screen.queryByText("Thẻ hết hạn")).not.toBeInTheDocument();
+  });
 });

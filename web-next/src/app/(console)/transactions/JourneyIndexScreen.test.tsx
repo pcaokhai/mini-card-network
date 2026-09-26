@@ -60,4 +60,20 @@ describe("/transactions (was a 'coming in R3' placeholder)", () => {
     expect(await screen.findByText("No transaction of this kind yet")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open the POS" })).toHaveAttribute("href", "/pos");
   });
+
+  it("asks the reversed tab for automatic (timeout) reversals only, not cancellations or MAC failures __JRN_G7", async () => {
+    let query: URLSearchParams | undefined;
+    server.use(
+      http.get("*/v1/transactions", ({ request }) => {
+        query = new URL(request.url).searchParams;
+        return HttpResponse.json({ items: [], nextCursor: null });
+      }),
+    );
+    search = new URLSearchParams("view=reversed");
+    renderIndex();
+
+    await screen.findByText("No transaction of this kind yet");
+    expect(query?.get("status")).toBe("REVERSED");
+    expect(query?.get("reversalReason")).toBe("TIMEOUT");
+  });
 });
