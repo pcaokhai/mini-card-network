@@ -147,16 +147,16 @@ func TestGetKeysAcquirerRotation_returns200__MCN_504_AC1(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"status":"RUNNING"`)
 }
 
-func TestPostRotation_ZAKIsDisabledUntilTheIssuerLoadsItsActiveZAK__SEC_G15(t *testing.T) {
+func TestPostRotation_ZAKRotatesNowThatBothSidesReadTheActiveKey__SEC_G10(t *testing.T) {
 	r := chi.NewRouter()
-	rotator := &fakeRotator{}
+	rotator := &fakeRotator{result: rotation.Row{ID: 11, KeyType: "ZAK", Status: rotationRunning}}
 	MountRotations(r, rotator)
 
 	code, got := postRotation(t, r, testLinkKey, "ZAK")
-	require.Equal(t, http.StatusConflict, code)
-	require.Equal(t, "conflict", got["type"])
-	require.Contains(t, got["detail"], "SEC-G15")
-	require.Zero(t, rotator.starts)
+
+	require.Equal(t, http.StatusAccepted, code, "the issuer reads its ACTIVE ZAK live (#122) and the gateway reloads on activation")
+	require.Equal(t, "ZAK", got["keyType"])
+	require.Equal(t, 1, rotator.starts)
 }
 
 func TestPostRotation_aReplayCarriesLocation__SEC_N4(t *testing.T) {

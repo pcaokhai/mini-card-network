@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/isonet"
 	"github.com/mcn/gateway-go/internal/store"
 )
@@ -105,7 +106,7 @@ func TestReversal_cancellationIsDeliveredAndCompletes__MCN_401(t *testing.T) {
 
 	require.NoError(t, NewReversalQueuer(pool, nil).Queue(ctx, original, "17"))
 	mux := &fakeMux{response: map[int]string{39: "00"}}
-	w := NewWorker(mux, fakeCards{testCardToken: testPAN}, &recordingHSM{}, make([]byte, 16), safRepo, nil,
+	w := NewWorker(mux, fakeCards{testCardToken: testPAN}, &recordingHSM{}, hsm.StaticZAK(make([]byte, 16)), acceptAllMACs{}, safRepo, nil,
 		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
 	require.NoError(t, w.deliverOnce(ctx))
 
@@ -181,19 +182,19 @@ func TestAdviceQueuer_repeatsAnUnknownCompletionUntilThe0230__POS_G4(t *testing.
 	id, err := tranLog.Insert(ctx, store.TranLogRow{RRN: "626514000322", Type: "COMPLETION", Status: statusTimedOut, Amount: 5000, Currency: "704", MTI: "0220",
 		TerminalID: "00000042", MerchantID: testMerchantID, NetworkSTAN: "000322"})
 	require.NoError(t, err)
-	sent := map[int]string{3: "000000", 4: "000000005000", 7: "0925101500", 11: "000322", 32: "970499", 37: "626514000300",
+	sent := map[int]string{3: "000000", 4: "000000005000", 7: sentDE7, 11: "000322", 32: "970499", 37: "626514000300",
 		41: "00000042", 42: testMerchantID, 49: "704", 64: staleMACHex}
 
 	require.NoError(t, NewReversalQueuer(pool, nil).QueueAdvice(ctx, id, "0220", sent))
 	mux := &fakeMux{response: map[int]string{39: "00"}}
-	w := NewWorker(mux, fakeCards{}, &recordingHSM{}, make([]byte, 16), safRepo, nil,
+	w := NewWorker(mux, fakeCards{}, &recordingHSM{}, hsm.StaticZAK(make([]byte, 16)), acceptAllMACs{}, safRepo, nil,
 		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
 	require.NoError(t, w.deliverOnce(ctx))
 
 	require.Equal(t, []string{"0221"}, mux.sentMTIs, "the 0220 may already be at the issuer")
 	frame := mux.sentFields[0]
 	require.Equal(t, "000322", frame[11], "the same message, only the MTI changed")
-	require.Equal(t, "0925101500", frame[7])
+	require.Equal(t, sentDE7, frame[7])
 	require.NotContains(t, frame, 2, "a completion carries no PAN")
 	require.NotContains(t, frame, 128)
 	require.NotEqual(t, staleMACHex, frame[64], "MACed afresh for the 0221")

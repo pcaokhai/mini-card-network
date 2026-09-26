@@ -14,10 +14,12 @@ import (
 
 	"github.com/mcn/gateway-go/internal/hsm"
 	"github.com/mcn/gateway-go/internal/isonet"
+	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
 const (
+	sentDE7       = "0925101500" // the DE 7 a queued advice was first sent with
 	testPAN       = "9704360000004417"
 	testCardToken = "tok_normal"
 )
@@ -133,14 +135,14 @@ func sentRow(t *testing.T, id int64, attempts int) store.SafRow {
 	t.Helper()
 	adv, err := reversalAdvice(goldenOriginal(), "68")
 	require.NoError(t, err)
-	adv.Fields[11], adv.Fields[7] = "000777", "0925101500"
+	adv.Fields[11], adv.Fields[7] = "000777", sentDE7
 	payload, err := encodePayload(nil, adv)
 	require.NoError(t, err)
 	return store.SafRow{ID: id, MTI: "0420", Attempts: attempts, MaxAttempts: 20, Payload: payload}
 }
 
 func newTestWorker(mux *fakeMux, safPort *fakeSaf, h *recordingHSM) *Worker {
-	return NewWorker(mux, fakeCards{testCardToken: testPAN}, h, make([]byte, 16), safPort, nil,
+	return NewWorker(mux, fakeCards{testCardToken: testPAN}, h, hsm.StaticZAK(make([]byte, 16)), acceptAllMACs{}, safPort, nil,
 		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
 }
 
@@ -325,5 +327,81 @@ func TestWorker_notSignedOnNeverCountsAsAnAttempt__MCN_401(t *testing.T) {
 
 		require.Empty(t, safPort.dead, name)
 		require.Equal(t, []int{19}, safPort.inFlights, name)
+	}
+}
+
+// acceptAllMACs is a ResponseVerifier for tests that aren't about the response MAC.
+type acceptAllMACs struct{}
+
+func (acceptAllMACs) Verify(context.Context, string, map[int]string) bool { return true }
+
+// recordingVerifier answers ok and records the MTI each response was verified as.
+type recordingVerifier struct {
+	ok   bool
+	mtis []string
+}
+
+func (v *recordingVerifier) Verify(_ context.Context, mti string, _ map[int]string) bool {
+	v.mtis = append(v.mtis, mti)
+	return v.ok
+}
+
+func TestWorker_a0430WithABadMACIsNeverAcknowledged__NET_G20(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00"}}
+	safPort := &fakeSaf{rows: []store.SafRow{queuedRow(t, 1, 0)}}
+	verifier := &recordingVerifier{ok: false}
+	w := NewWorker(mux, fakeCards{testCardToken: testPAN}, &recordingHSM{}, hsm.StaticZAK(make([]byte, 16)), verifier, safPort, nil,
+		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
+
+	require.NoError(t, w.deliverOnce(context.Background()))
+
+	require.Empty(t, safPort.acked, "a forged or corrupted 0430 must not complete a reversal")
+	require.Equal(t, []int{1}, safPort.inFlights, "it is retried like any unacknowledged send")
+	require.Contains(t, safPort.lastErrs[0], "MAC")
+	require.Equal(t, []string{"0430"}, verifier.mtis)
+}
+
+func TestWorker_verifiesEachResponseAsItsOwnMTI__NET_G20(t *testing.T) {
+	mux := &fakeMux{response: map[int]string{39: "00"}}
+	completion, err := encodePayload(nil, advice{Fields: map[int]string{3: "000000", 7: sentDE7, 11: "000322", 37: "626514000300"}})
+	require.NoError(t, err)
+	safPort := &fakeSaf{rows: []store.SafRow{queuedRow(t, 1, 0), {ID: 2, MTI: "0220", MaxAttempts: 20, Payload: completion}}}
+	verifier := &recordingVerifier{ok: true}
+	w := NewWorker(mux, fakeCards{testCardToken: testPAN}, &recordingHSM{}, hsm.StaticZAK(make([]byte, 16)), verifier, safPort, nil,
+		isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
+
+	require.NoError(t, w.deliverOnce(context.Background()))
+
+	require.Equal(t, []string{"0430", "0230"}, verifier.mtis, "a 0420 is answered by a 0430, a 0221 repeat by a 0230")
+	require.Equal(t, []int64{1, 2}, safPort.acked)
+}
+
+// fixedMACHSM MACs every message the same, so a response carrying that MAC verifies.
+type fixedMACHSM struct{ recordingHSM }
+
+func (fixedMACHSM) ComputeMAC([]byte, []byte) ([]byte, error) {
+	return []byte{1, 2, 3, 4, 5, 6, 7, 8}, nil
+}
+
+func TestWorker_checksThe0430sDE128WithTheGatewaysMACVerifier__NET_G20(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mac   string
+		acked bool
+	}{
+		"correct MAC": {"0102030405060708", true},
+		"wrong MAC":   {"FFFFFFFFFFFFFFFF", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := &fixedMACHSM{}
+			zak := hsm.StaticZAK(make([]byte, 16))
+			mux := &fakeMux{response: map[int]string{11: "000777", 37: "626514000124", 39: "00", 90: "0200000124092107324400000970499" + "00000000000", 128: tc.mac}}
+			safPort := &fakeSaf{rows: []store.SafRow{queuedRow(t, 1, 0)}}
+			w := NewWorker(mux, fakeCards{testCardToken: testPAN}, h, zak, purchase.NewMACVerifier(h, zak, nil), safPort, nil,
+				isonet.Backoff{Base: time.Millisecond, Cap: 10 * time.Millisecond}, time.Millisecond)
+
+			require.NoError(t, w.deliverOnce(context.Background()))
+
+			require.Equal(t, tc.acked, len(safPort.acked) == 1)
+		})
 	}
 }

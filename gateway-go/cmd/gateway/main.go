@@ -81,9 +81,6 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// ponytail: the services below still take the ZAK as a byte slice read once here; switching
-	// them to activeKeys (hsm.ZAKSource) waits for #114/#117, which rewrite those constructors.
-	zak := activeKeys.ActiveZAK()
 	safRepo := store.NewSafRepository(pool)
 	reversalQueuer := saf.NewReversalQueuer(pool, cfg.SafEncKey)
 	terminalRepo := store.NewTerminalRepository(pool)
@@ -91,14 +88,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// A response MAC is retried under a PENDING key of unknown outcome, else the recently retired
 	// key (review S2 of #121).
 	macFallback := keyStoreRepo.MACFallback()
-	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, zak, macFallback, linkRepo, calendar)
-	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, reversalQueuer, hsmModule, zak, macFallback, calendar)
+	purchaseService := purchase.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), hub, reversalQueuer, hsmModule, activeKeys, macFallback, linkRepo, calendar)
+	advtxnService := advtxn.NewService(supervisor, purchase.DefaultCardTokens(), terminalRepo, tranLogRepo, store.NewIdempotencyRepository(pool), advtxnHubAdapter{hub: hub}, reversalQueuer, hsmModule, activeKeys, macFallback, calendar)
 	rotationRepo := rotation.NewRepository(pool)
 	rotationRunner := rotation.NewRunner(rotationRepo, keyStoreRepo, hsmModule, supervisor, cfg.ZMK,
 		rotation.WithActivationHook(reloadOnActivate(activeKeys, logger)), rotation.WithSendAttempts(cfg.RotationSendAttempts), rotation.WithSendTimeout(cfg.EchoTimeout))
 	supervisor.SetLateResponseHandler(newLateResponseHandler(ctx, logger, purchaseService))
 	ackAnnouncer := reversalAckAnnouncer{Port: safRepo, rrnOf: safRepo.TranRRN, announce: purchaseService.BroadcastUpdate, logger: logger}
-	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, zak, ackAnnouncer, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
+	safWorker := saf.NewWorker(supervisor, purchase.DefaultCardTokens(), hsmModule, activeKeys,
+		purchase.NewMACVerifier(hsmModule, activeKeys, macFallback), ackAnnouncer, cfg.SafEncKey, isonet.Backoff{Base: 2 * time.Second, Cap: 60 * time.Second}, time.Second)
 	safWorker.SetLogger(logger)
 	// Orphans are rows older than the 30 s send timeout plus the 10 s a request takes to record
 	// its outcome, with a margin (POS-G16).

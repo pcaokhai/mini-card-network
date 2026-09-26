@@ -23,3 +23,9 @@ type Module interface {
 type ZAKSource interface {
 	ActiveZAK() []byte
 }
+
+// StaticZAK is a ZAKSource that never rotates, for tests and fixed-key tools.
+type StaticZAK []byte
+
+// ActiveZAK returns the key itself.
+func (z StaticZAK) ActiveZAK() []byte { return z }
