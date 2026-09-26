@@ -145,6 +145,31 @@ public class KeyStoreRepository {
     }
   }
 
+  /** Every RETIRED row for {@code (keyType, counterparty)}, newest first (replay check). */
+  public List<KeyStoreRow> findRetired(String keyType, String counterparty) {
+    String sql =
+        """
+        SELECT id, key_type, counterparty, key_under_lmk, kcv, status, activated_at, retired_at,
+               created_at
+        FROM key_store
+        WHERE key_type = ? AND COALESCE(counterparty, '') = ? AND status = 'RETIRED'
+        ORDER BY id DESC""";
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement(sql)) {
+      stmt.setString(1, keyType);
+      stmt.setString(2, counterparty == null ? "" : counterparty);
+      try (ResultSet rs = stmt.executeQuery()) {
+        List<KeyStoreRow> rows = new ArrayList<>();
+        while (rs.next()) {
+          rows.add(mapRow(rs));
+        }
+        return rows;
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException("find retired key_store rows failed", e);
+    }
+  }
+
   public List<KeyStoreRow> findAll() {
     String sql =
         "SELECT id, key_type, counterparty, key_under_lmk, kcv, status, activated_at, retired_at, "

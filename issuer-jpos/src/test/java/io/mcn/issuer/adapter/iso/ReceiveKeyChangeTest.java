@@ -123,4 +123,61 @@ class ReceiveKeyChangeTest {
         .activate(org.mockito.ArgumentMatchers.anyLong());
     org.mockito.Mockito.verifyNoInteractions(auditLogRepository);
   }
+
+  @Test
+  @org.junit.jupiter.api.DisplayName(
+      "SEC-G18: a key change carrying a key that was already RETIRED is a replay - declined, no"
+          + " insert, no activation, and audited")
+  void should_rejectAReplayedRetiredKey() throws Exception {
+    SecurityModule securityModule = mock(SecurityModule.class);
+    KeyStoreRepository keyStoreRepository = mock(KeyStoreRepository.class);
+    AuditLogRepository auditLogRepository = mock(AuditLogRepository.class);
+    byte[] zmk = HexFormat.of().parseHex("00".repeat(16));
+    byte[] cryptogramUnderZmk = HexFormat.of().parseHex("22".repeat(16));
+    byte[] activeUnderLmk = HexFormat.of().parseHex("aa".repeat(16));
+    byte[] retiredUnderLmk = HexFormat.of().parseHex("bb".repeat(16));
+    when(securityModule.unwrapUnderKey(eq(cryptogramUnderZmk), eq(zmk)))
+        .thenReturn(HexFormat.of().parseHex("11".repeat(16))); // the old key, replayed
+    when(securityModule.unwrap(activeUnderLmk))
+        .thenReturn(HexFormat.of().parseHex("99".repeat(16)));
+    when(securityModule.unwrap(retiredUnderLmk))
+        .thenReturn(HexFormat.of().parseHex("11".repeat(16)));
+    when(keyStoreRepository.findActive("ZAK", "970499"))
+        .thenReturn(java.util.Optional.of(row(8, activeUnderLmk, "ACTIVE")));
+    when(keyStoreRepository.findRetired("ZAK", "970499"))
+        .thenReturn(java.util.List.of(row(7, retiredUnderLmk, "RETIRED")));
+    ReceiveKeyChange receiveKeyChange =
+        new ReceiveKeyChange(securityModule, keyStoreRepository, auditLogRepository, zmk, "970499");
+
+    ISOMsg request = new ISOMsg("0800");
+    request.set(70, "161");
+    request.set(48, "ZAK:" + HexFormat.of().formatHex(cryptogramUnderZmk));
+
+    assertThat(receiveKeyChange.receive(request)).isFalse(); // the caller answers 0810 RC 96
+    verify(keyStoreRepository, org.mockito.Mockito.never()).insert(any());
+    verify(keyStoreRepository, org.mockito.Mockito.never())
+        .activate(org.mockito.ArgumentMatchers.anyLong());
+    verify(auditLogRepository)
+        .record(
+            eq("issuer"),
+            eq("key_change.replay_rejected"),
+            eq("key_store"),
+            eq("7"),
+            any(),
+            org.mockito.ArgumentMatchers.argThat(
+                (String after) -> after.contains("ZAK") && !after.contains("1111")));
+  }
+
+  private static KeyStoreRow row(long id, byte[] underLmk, String status) {
+    return new KeyStoreRow(
+        id,
+        "ZAK",
+        "970499",
+        HexFormat.of().formatHex(underLmk),
+        "DDEEFF",
+        status,
+        java.time.Instant.now(),
+        "RETIRED".equals(status) ? java.time.Instant.now() : null,
+        null);
+  }
 }

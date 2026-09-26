@@ -642,6 +642,17 @@ class PurchaseDeclineIntegrationTest {
     return unpack(send(request.pack()));
   }
 
+  private static long auditRows(String action) throws Exception {
+    try (var conn = dataSource.getConnection();
+        var stmt = conn.prepareStatement("SELECT count(*) FROM audit_log WHERE action = ?")) {
+      stmt.setString(1, action);
+      try (ResultSet rs = stmt.executeQuery()) {
+        rs.next();
+        return rs.getLong(1);
+      }
+    }
+  }
+
   private static long keyStoreRows(String keyType) throws Exception {
     try (var conn = dataSource.getConnection();
         var stmt = conn.prepareStatement("SELECT count(*) FROM key_store WHERE key_type = ?")) {
@@ -675,6 +686,10 @@ class PurchaseDeclineIntegrationTest {
     // nothing, or the "recently retired" key would become ZAK2 itself instead of ZAK.
     assertThat(keyChange(57, "ZAK", ZAK2).getString(39)).isEqualTo("00");
     assertThat(keyStoreRows("ZAK")).isEqualTo(2);
+    // SEC-G18: replaying the key this change just retired must not bring it back.
+    assertThat(keyChange(60, "ZAK", ZAK).getString(39)).isEqualTo("96");
+    assertThat(keyStoreRows("ZAK")).isEqualTo(2);
+    assertThat(auditRows("key_change.replay_rejected")).isEqualTo(1);
 
     ISOMsg response = purchaseUnder(51, "9704360000005540", 1_000L, ZAK2, ZPK);
 
