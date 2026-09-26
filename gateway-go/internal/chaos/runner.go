@@ -4,28 +4,58 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/mcn/gateway-go/internal/purchase"
 	"github.com/mcn/gateway-go/internal/store"
 )
 
 const (
-	statusRunning  = "RUNNING"
-	statusPassed   = "PASSED"
-	statusFailed   = "FAILED"
-	statusReversed = "REVERSED"
+	statusRunning   = "RUNNING"
+	statusVerifying = "VERIFYING"
+	statusPassed    = "PASSED"
+	statusFailed    = "FAILED"
+	statusReversed  = "REVERSED"
+
+	failureLedgerMismatch = "LEDGER_MISMATCH"
+	failureRunError       = "RUN_ERROR"
+
+	eventRunProgress = "chaos.run.progress"
 
 	fixedAmountMinor = 10000 // one fixed small amount per synthetic purchase; simplest thing that verifies the invariant
 	currency         = "704"
 	terminalID       = "00000042" // migration 00002's terminal, always present even before `make seed`
 
-	safDrainPollInterval = 500 * time.Millisecond
-	safDrainTimeout      = 65 * time.Second // SAF's own backoff cap (60s) plus margin
+	safDrainPollInterval   = 500 * time.Millisecond
+	defaultSafDrainTimeout = 65 * time.Second // SAF's own backoff cap (60s) plus margin
+	defaultMaxRunDuration  = 10 * time.Minute
 )
+
+var (
+	// ErrRunInProgress is returned by Start while another run is RUNNING or VERIFYING: two runs
+	// at once would move the same seed cards and make each run's money check meaningless.
+	ErrRunInProgress = errors.New("a chaos run is already in progress")
+	// ErrNotServing is returned by Start before Serve runs or once shutdown began.
+	ErrNotServing = errors.New("chaos runner is not serving")
+)
+
+// fixtureCardRefs maps each seed cardToken to the issuer's cardRef (contracts/fixtures/cards.json;
+// a test keeps the two in sync). The gateway only knows tokens; the Issuer Admin API only refs.
+var fixtureCardRefs = map[string]string{
+	"tok_normal":  "crd_normal0001",
+	"tok_low":     "crd_lowbal0002",
+	"tok_blocked": "crd_blockd0003",
+	"tok_expired": "crd_expird0004",
+	"tok_limit":   "crd_limit00005",
+	"tok_second":  "crd_second0006",
+}
 
 // PurchaseCreator is the port Runner needs to fire synthetic purchases. *purchase.Service
 // satisfies it.
@@ -47,6 +77,12 @@ type TranLogGetter interface {
 	Get(ctx context.Context, rrn string) (store.TranLogRow, error)
 }
 
+// BalanceReader reads a card's ledger balance from the issuer, the independent side of the
+// money check (CHA-G1). *IssuerAdminClient satisfies it.
+type BalanceReader interface {
+	LedgerBalance(ctx context.Context, cardRef string) (amountMinor int64, currency string, err error)
+}
+
 // HubPort broadcasts chaos events. *ws.Hub (extended with BroadcastChaos) satisfies it.
 type HubPort interface {
 	BroadcastChaos(eventType string, data any)
@@ -56,60 +92,121 @@ type HubPort interface {
 //
 //nolint:revive // named ChaosRun, not Run, to match the OpenAPI schema name exactly (see purchase.PurchaseRequest's precedent).
 type ChaosRun struct {
-	RunID               string `json:"runId"`
-	Status              string `json:"status"`
-	Requested           int    `json:"requested"`
-	Completed           int    `json:"completed"`
-	Approved            int    `json:"approved"`
-	Declined            int    `json:"declined"`
-	Reversed            int    `json:"reversed"`
-	OpeningBalanceTotal int64  `json:"openingBalanceTotal"`
-	ClosingBalanceTotal int64  `json:"closingBalanceTotal"`
-	LedgerDiscrepancy   int64  `json:"ledgerDiscrepancy"`
+	RunID               string    `json:"runId"`
+	Status              string    `json:"status"`
+	Requested           int       `json:"requested"`
+	Completed           int       `json:"completed"`
+	Approved            int       `json:"approved"`
+	Declined            int       `json:"declined"`
+	Reversed            int       `json:"reversed"`
+	OpeningBalanceTotal int64     `json:"openingBalanceTotal"`
+	ClosingBalanceTotal int64     `json:"closingBalanceTotal"`
+	LedgerDiscrepancy   int64     `json:"ledgerDiscrepancy"`
+	FailureKind         *string   `json:"failureKind"`
+	FailureDetail       *string   `json:"failureDetail"`
+	StartedAt           time.Time `json:"startedAt"`
+	Seq                 int       `json:"seq"`
 }
 
-// Runner drives synthetic load against seed cards and verifies the ledger invariant
-// (opening - approved + reversed = closing, discrepancy 0) once every triggered reversal drains.
+// Runner drives synthetic load against seed cards and verifies the ledger invariant against the
+// issuer's own balances once every triggered reversal drains:
+// (closing - opening) - (-Σ approved) = 0.
 type Runner struct {
 	purchases PurchaseCreator
 	saf       SafDepthPort
 	tranLog   TranLogGetter
+	balances  BalanceReader
 	seedCards []purchase.CardFixture
 	hub       HubPort
 
-	mu   sync.Mutex
-	runs map[string]*ChaosRun
+	log             *slog.Logger
+	maxRunDuration  time.Duration
+	safDrainTimeout time.Duration
+
+	mu     sync.Mutex
+	runs   map[string]*ChaosRun
+	order  []string        // run ids, oldest first
+	active string          // id of the RUNNING/VERIFYING run, "" when idle
+	base   context.Context // Serve's context; nil when not serving
+	wg     sync.WaitGroup
 }
 
+// Option configures optional Runner behaviour.
+type Option func(*Runner)
+
+// WithLogger sets where a failed run's raw error is logged (slog.Default otherwise).
+func WithLogger(l *slog.Logger) Option { return func(r *Runner) { r.log = l } }
+
+// WithMaxRunDuration caps a run's wall-clock time; past it the run ends RUN_ERROR (default 10 min).
+func WithMaxRunDuration(d time.Duration) Option { return func(r *Runner) { r.maxRunDuration = d } }
+
+// WithSafDrainTimeout sets how long a run waits for the SAF queue to empty (default 65 s).
+func WithSafDrainTimeout(d time.Duration) Option { return func(r *Runner) { r.safDrainTimeout = d } }
+
 // NewRunner builds a Runner. seedCards are the cards synthetic purchases are drawn from
-// (purchase.DefaultCardTokens().Seeds() in production).
-func NewRunner(purchases PurchaseCreator, saf SafDepthPort, tranLog TranLogGetter, seedCards []purchase.CardFixture, hub HubPort) *Runner {
-	return &Runner{purchases: purchases, saf: saf, tranLog: tranLog, seedCards: seedCards, hub: hub, runs: map[string]*ChaosRun{}}
+// (purchase.DefaultCardTokens().Seeds() in production). Runs start only while Serve runs.
+func NewRunner(purchases PurchaseCreator, saf SafDepthPort, tranLog TranLogGetter, balances BalanceReader, seedCards []purchase.CardFixture, hub HubPort, opts ...Option) *Runner {
+	r := &Runner{
+		purchases: purchases, saf: saf, tranLog: tranLog, balances: balances, seedCards: seedCards, hub: hub,
+		log: slog.Default(), maxRunDuration: defaultMaxRunDuration, safDrainTimeout: defaultSafDrainTimeout,
+		runs: map[string]*ChaosRun{},
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
+
+// Serve owns the run goroutines (root CLAUDE.md §6 rule 9): it accepts Start calls until ctx is
+// cancelled, which also cancels a running run, and returns once that run has stopped.
+func (r *Runner) Serve(ctx context.Context) error {
+	r.mu.Lock()
+	r.base = ctx
+	r.mu.Unlock()
+	<-ctx.Done()
+	r.mu.Lock()
+	r.base = nil // no Start after this point, so wg.Add never races wg.Wait
+	r.mu.Unlock()
+	r.wg.Wait()
+	return nil
+}
+
+func (r *Runner) serving() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.base != nil
 }
 
 // Start kicks off requested synthetic purchases against a random seed card each, and returns
 // immediately with status RUNNING; the run continues in the background. Poll Get or listen for
-// chaos.run.progress / chaos.changed to observe completion.
-func (r *Runner) Start(_ context.Context, requested int) (*ChaosRun, error) {
-	openingTotal := int64(0)
-	for _, c := range r.seedCards {
-		openingTotal += c.Balance
-	}
-
-	run := &ChaosRun{RunID: newRunID(), Status: statusRunning, Requested: requested, OpeningBalanceTotal: openingTotal}
+// chaos.run.progress to observe completion. Returns ErrRunInProgress while another run is active.
+func (r *Runner) Start(ctx context.Context, requested int) (*ChaosRun, error) { //nolint:contextcheck // the run deliberately uses Serve's context, not the request's (see body)
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.base == nil {
+		return nil, ErrNotServing
+	}
+	if r.active != "" {
+		return nil, ErrRunInProgress
+	}
+	run := &ChaosRun{RunID: newRunID(), Status: statusRunning, Requested: requested, StartedAt: time.Now().UTC()}
 	r.runs[run.RunID] = run
-	// The caller gets a snapshot, never the pointer stored in r.runs - drive() (started below,
-	// after unlocking) mutates that pointer from a different goroutine. Snapshotting while still
-	// holding r.mu avoids racing drive() the instant it starts.
+	r.order = append(r.order, run.RunID)
+	r.active = run.RunID
+	// The caller gets a snapshot, never the pointer stored in r.runs - drive() mutates that
+	// pointer from a different goroutine once it can take r.mu.
 	snapshot := *run
-	r.mu.Unlock()
 
-	// ponytail: run.Start's own caller context (an HTTP request) is cancelled once the response
-	// is written, so the background work deliberately uses a fresh, independent context rather
-	// than the caller's - a run must keep going after the 202 response ships.
-	//nolint:contextcheck,gosec // intentional new root context - see comment above.
-	go r.drive(context.Background(), run.RunID)
+	// The run outlives the request (cancelled once the 202 is written), so it runs under Serve's
+	// context, capped at maxRunDuration, and keeps only the request's trace for its logs and the
+	// issuer calls.
+	runCtx, cancel := context.WithTimeout(trace.ContextWithSpanContext(r.base, trace.SpanContextFromContext(ctx)), r.maxRunDuration)
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		defer cancel()
+		r.drive(runCtx, run.RunID, requested)
+	}()
 
 	return &snapshot, nil
 }
@@ -126,94 +223,106 @@ func (r *Runner) Get(runID string) (*ChaosRun, bool) {
 	return &snapshot, true
 }
 
-func (r *Runner) drive(ctx context.Context, runID string) {
-	requested, openingTotal := r.runMeta(runID)
-	var approvedTotal, reversedTotal int64
-	var reversalRRNs []string
+// List returns up to limit run snapshots, newest first. Runs live in memory only (the contract
+// says the list is empty after a restart).
+func (r *Runner) List(limit int) []ChaosRun {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]ChaosRun, 0, min(limit, len(r.order)))
+	for i := len(r.order) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, *r.runs[r.order[i]])
+	}
+	return out
+}
 
+// drive runs one run to its verdict. Whatever stops it early - an error, the time cap, shutdown
+// or a panic - ends it FAILED with RUN_ERROR and frees the slot for the next run.
+func (r *Runner) drive(ctx context.Context, runID string, requested int) {
+	defer func() {
+		if p := recover(); p != nil {
+			r.failRun(ctx, runID, &runError{detail: "the run stopped on an internal error", cause: fmt.Errorf("panic: %v", p)})
+		}
+	}()
+	if err := r.execute(ctx, runID, requested); err != nil {
+		r.failRun(ctx, runID, err)
+	}
+}
+
+func (r *Runner) execute(ctx context.Context, runID string, requested int) error {
+	if err := r.waitForSafDrain(ctx, "before the run"); err != nil {
+		return err
+	}
+	opening, err := r.balanceTotal(ctx)
+	if err != nil {
+		return runErr("could not read the seed cards' opening balances from the issuer", err)
+	}
+	r.update(runID, func(rn *ChaosRun) { rn.OpeningBalanceTotal = opening })
+
+	approvedTotal, reversalRRNs, err := r.fire(ctx, runID, requested)
+	if err != nil {
+		return runErr("a purchase could not be processed", err)
+	}
+
+	r.update(runID, func(rn *ChaosRun) { rn.Status = statusVerifying })
+	if err := r.waitForSafDrain(ctx, "after the run"); err != nil {
+		return err
+	}
+	if err := r.countReversed(ctx, runID, reversalRRNs); err != nil {
+		return runErr("could not read the transaction log", err)
+	}
+	closing, err := r.balanceTotal(ctx)
+	if err != nil {
+		return runErr("could not read the seed cards' closing balances from the issuer", err)
+	}
+	r.verify(runID, opening, closing, approvedTotal)
+	return nil
+}
+
+// fire sends the run's purchases and returns the approved amount and the RRNs left to a reversal.
+func (r *Runner) fire(ctx context.Context, runID string, requested int) (int64, []string, error) {
+	var approvedTotal int64
+	var reversalRRNs []string
 	for i := 0; i < requested; i++ {
 		txn, err := r.purchases.CreatePurchase(ctx, r.randomPurchaseRequest(), fmt.Sprintf("chaos-%s-%d", runID, i))
 		if err != nil {
-			r.finish(runID, statusFailed, 0, 0)
-			return
+			return 0, nil, fmt.Errorf("purchase %d of %d: %w", i+1, requested, err)
 		}
-		switch txn.Status {
-		case "APPROVED":
+		if txn.Status == "APPROVED" {
 			approvedTotal += txn.Amount.Amount
-			r.updateCounts(runID, func(rn *ChaosRun) { rn.Approved++ })
-		case "DECLINED":
-			r.updateCounts(runID, func(rn *ChaosRun) { rn.Declined++ })
-		case "TIMED_OUT", "REVERSAL_PENDING":
+		}
+		if reversalQueued(txn) {
 			reversalRRNs = append(reversalRRNs, txn.RRN)
 		}
-		r.updateCounts(runID, func(rn *ChaosRun) { rn.Completed++ })
-		r.hub.BroadcastChaos("chaos.run.progress", r.snapshot(runID))
+		r.update(runID, func(rn *ChaosRun) {
+			rn.Completed++
+			switch txn.Status {
+			case "APPROVED":
+				rn.Approved++
+			case "DECLINED":
+				rn.Declined++
+			}
+		})
 	}
-
-	r.waitForSafDrain(ctx)
-
-	for _, rrn := range reversalRRNs {
-		row, err := r.tranLog.Get(ctx, rrn)
-		if err == nil && row.Status == statusReversed {
-			reversedTotal += row.Amount
-			r.updateCounts(runID, func(rn *ChaosRun) { rn.Reversed++ })
-		}
-	}
-
-	// ponytail: no gateway-owned ledger balance API exists yet (only issuer-jpos owns real
-	// accounts), so closingTotal is derived from this run's own tallies rather than a live
-	// re-read - it verifies the runner's approved/reversed bookkeeping is internally consistent
-	// (nothing stuck mid-reversal after SAF drains), not a cross-check against the issuer's
-	// actual ledger. Add a real cross-check once the issuer exposes a balance query.
-	closingTotal := openingTotal - approvedTotal + reversedTotal
-	discrepancy := openingTotal - approvedTotal + reversedTotal - closingTotal
-	status := statusPassed
-	if discrepancy != 0 {
-		status = statusFailed
-	}
-	r.finish(runID, status, closingTotal, discrepancy)
+	return approvedTotal, reversalRRNs, nil
 }
 
-func (r *Runner) runMeta(runID string) (requested int, openingTotal int64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	run := r.runs[runID]
-	return run.Requested, run.OpeningBalanceTotal
-}
-
-func (r *Runner) waitForSafDrain(ctx context.Context) {
-	deadline := time.Now().Add(safDrainTimeout)
-	for time.Now().Before(deadline) {
-		_, depth, err := r.saf.ListPending(ctx)
-		if err == nil && depth == 0 {
-			return
-		}
-		time.Sleep(safDrainPollInterval)
-	}
-}
-
-func (r *Runner) updateCounts(runID string, mutate func(*ChaosRun)) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	mutate(r.runs[runID])
-}
-
-func (r *Runner) finish(runID string, status string, closingTotal, discrepancy int64) {
+// update applies mutate, bumps seq and broadcasts the new snapshot. Only the run's own drive
+// goroutine calls it, so broadcasts leave in seq order. Every state, final included, goes out as
+// chaos.run.progress (chaos.changed carries a ChaosScenario, CHA-G2).
+func (r *Runner) update(runID string, mutate func(*ChaosRun)) {
 	r.mu.Lock()
 	live := r.runs[runID]
-	live.Status = status
-	live.ClosingBalanceTotal = closingTotal
-	live.LedgerDiscrepancy = discrepancy
+	mutate(live)
+	live.Seq++
+	if (live.Status == statusPassed || live.Status == statusFailed) && r.active == runID {
+		r.active = ""
+	}
 	snapshot := *live
 	r.mu.Unlock()
-	r.hub.BroadcastChaos("chaos.changed", snapshot)
+	r.hub.BroadcastChaos(eventRunProgress, snapshot)
 }
 
-func (r *Runner) snapshot(runID string) ChaosRun {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return *r.runs[runID]
-}
+func ptr(s string) *string { return &s }
 
 func (r *Runner) randomPurchaseRequest() purchase.PurchaseRequest {
 	card := r.seedCards[randIntn(len(r.seedCards))]

@@ -145,7 +145,8 @@ func (c *ToxiproxyClient) ListScenarios(ctx context.Context) ([]Scenario, error)
 		if hasToxic {
 			enabled = active[toxicName(id)]
 		}
-		scenarios = append(scenarios, Scenario{ID: id, Enabled: enabled, EasyText: text[0], TechnicalText: text[1]})
+		available := id != ScenarioDropResponse || c.dropResponseAddr != ""
+		scenarios = append(scenarios, Scenario{ID: id, Enabled: enabled, Available: available, EasyText: text[0], TechnicalText: text[1]})
 	}
 	return scenarios, nil
 }

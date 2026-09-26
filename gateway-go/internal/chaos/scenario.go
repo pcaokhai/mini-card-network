@@ -31,6 +31,7 @@ var AllScenarios = []ScenarioID{
 type Scenario struct {
 	ID            ScenarioID `json:"id"`
 	Enabled       bool       `json:"enabled"`
+	Available     bool       `json:"available"` // false when this stack can't run it (CHA-G11)
 	EasyText      string     `json:"easyText"`
 	TechnicalText string     `json:"technicalText"`
 }

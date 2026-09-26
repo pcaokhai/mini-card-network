@@ -7,6 +7,7 @@ services:
       HTTP_ADDR: ":8080"
       METRICS_ADDR: ":9464"
       DATABASE_URL: postgres://acquirer:${ACQUIRER_DB_PASSWORD}@postgres:5432/acquirer
+      ISSUER_ADMIN_URL: ${ISSUER_ADMIN_URL:-http://issuer:8081} # chaos runs read card balances here (CHA-G1)
       CHAOS_FAKE_ISSUER_ADDR: ${CHAOS_FAKE_ISSUER_ADDR:-} # opt-in: set for chaos runs only (MCN-407)
       # Without these, config.Load fails fast and the gateway never starts (MCN-501/504).
       # LMK_TEST_VALUE_HEX is a fresh 32-byte lab-only value - NOT gateway-go/internal/config/
