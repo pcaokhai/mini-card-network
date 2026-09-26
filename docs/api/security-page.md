@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/security-page.md` |
-| Version | 1.5 |
+| Version | 1.6 |
 | Status | Approved for integration |
 | Date | 2026-09-25 |
 | Screen | route `/security`, container `web-next/src/app/(console)/security/SecurityScreen.tsx` |
@@ -278,6 +278,10 @@ No NFR in docs/02 §2 sets a latency for key APIs. The figures below are **obser
 | SEC-G16 | A key-change 0800/161 that gets no 0810 within any of its attempts (each bounded by `ECHO_TIMEOUT`) leaves the rotation `FAILED` with an unknown outcome. The issuer may or may not have activated the key, so the gateway keeps it PENDING, and the MAC verifier retries a response under it before the recently retired key (#121). A later successful rotation of the same type retires it; otherwise nothing settles it. | `internal/rotation/runner.go` `runSend0800161`; `store.MACFallbackKeys` | GW + ISS + contracts | A key-status query (e.g. 0800 with a KCV check) to resolve the outcome, then activate or retire the PENDING key |
 | SEC-G17 | The issuer's `ReceiveKeyChange` is not idempotent: a resent 0800/161 with the same cryptogram (the gateway resends after a lost 0810, SEC-G16) inserts and activates another `key_store` row and moves the issuer's recently-retired key, so the dual-key window can end up pointing at the same key twice. | `issuer-jpos` `ReceiveKeyChange`; `gateway-go/internal/rotation/runner.go` `runSend0800161` | ISS | **Fixed** in #122: a key-change advice whose unwrapped key equals the ACTIVE key (compared in constant time, not by KCV) answers 0810 00 with no insert, no activation and no audit row, so a resend (same cryptogram, or the same key under a fresh nonce) never shifts the recently retired key |
 | SEC-G18 | A replayed key-change advice could bring back an old key: a cryptogram of a key that a later rotation had already retired, sent again, was inserted and activated like a new key | `issuer-jpos` `ReceiveKeyChange` | ISS | **Fixed** in #122: a key change whose unwrapped key equals any RETIRED key of that type and counterparty (constant-time comparison) is declined 0810 RC 96, with no insert and no activation, and writes an `audit_log` row `key_change.replay_rejected` (key type, counterparty and the matching row's id; no key material) |
+| SEC-G19 | Low priority. `ReversalListener`'s 0430 goes out unsigned if key-store access itself fails when signing (key store unreachable). No PAN or key exposure; the row exists so this residual path isn't lost | `ReversalListener.signed` (warn, then send without DE 64/128) | ISS | The general case was fixed in #122 (b368615): both listener 0430s are MACed and the fallback answers 96. This narrow fallback remains. Open |
+| SEC-G20 | Low priority (#122 review N1). The PVV compare is `String.equals` (`VerifySecurity.java:174`), not constant-time. The risk is low (a 4-digit PVV behind a PIN-try limit), but it is inconsistent with the MAC path | `VerifySecurity.pvvMatchesUnder` | ISS | Compare the PVV bytes with `MessageDigest.isEqual`. Open |
+| SEC-G21 | Low priority (#122 review N2). `extractPin` returns a Java `String` PIN, which can't be zeroed, while everything around it (the clear PIN block, the ZPK copy) is | `VerifySecurity.extractPin` | ISS | At minimum a one-line comment; better, compute the PVV from a `char[]`/`byte[]` PIN that is zeroed after use. Open |
+| SEC-G22 | Low priority (#122 review N3). `ReceiveKeyChange`'s `catch (Exception e) { return false; }` swallows the cause with no log, so a decrypt failure and a DB outage look the same (both 0810 RC 96) | `ReceiveKeyChange.receive` (line 110) | ISS | Log the exception class and message type (no key material) before answering 96. Open |
 
 ## 10. Change log
 
@@ -289,3 +293,4 @@ No NFR in docs/02 §2 sets a latency for key APIs. The figures below are **obser
 | 1.3 | 2026-09-26 | #121 re-review: bounded key-change attempts, PENDING-then-retired MAC fallback, stale PENDING keys retired on a later activation (SEC-G16); SEC-G17 added |
 | 1.4 | 2026-09-26 | SEC-G1 fixed; SEC-G8 web part (rows keyed by type + KCV, rotate only on the active ZPK) (#124) |
 | 1.5 | 2026-09-26 | SEC-G15 (issuer never used a rotated ZAK/ZPK, including the 0430 MAC), SEC-G17 (idempotent key-change advice) and SEC-G18 (replayed old key rejected) marked Fixed in #122. |
+| 1.6 | 2026-09-26 | #122 review: SF1 residual (SEC-G19) and N1–N3 (SEC-G20–G22) recorded as low-priority open gaps. |
