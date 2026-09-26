@@ -23,15 +23,24 @@ func (fakeHSM) TranslatePIN(p, _, _ []byte) ([]byte, error) { return p, nil }
 type fakeMux struct {
 	confirmed  bool
 	sendErr    error
+	errs       []error // per attempt, before sendErr
 	rc         string
 	sentFields map[int]string
+	de48s      []string
 }
 
 func (f *fakeMux) NextSTAN() (string, bool) { return "000001", true }
 
 func (f *fakeMux) Send(_ context.Context, _ string, fields map[int]string) (map[int]string, error) {
 	f.sentFields = fields
-	if f.sendErr != nil {
+	f.de48s = append(f.de48s, fields[48])
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		if err != nil {
+			return nil, err
+		}
+	} else if f.sendErr != nil {
 		return nil, f.sendErr
 	}
 	f.confirmed = true

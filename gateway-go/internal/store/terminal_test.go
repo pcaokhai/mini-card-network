@@ -41,3 +41,12 @@ func TestTerminalRepository_upsertFromFixtureAddsAndRenames__MCN_002(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, Merchant{MID: "BANHMA000000001", Name: "Tiệm bánh Mây"}, added)
 }
+
+func TestTerminalRepository_listJoinsMerchants__NET_G13(t *testing.T) {
+	repo := NewTerminalRepository(newTestPool(t))
+
+	terminals, err := repo.List(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, terminals)
+	require.Equal(t, FixtureTerminal{TerminalID: "00000042", MerchantID: "GOCPHO000000001", MerchantName: "Ca phe Goc Pho", MCC: "5814"}, terminals[0])
+}

@@ -12,10 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	toxiproxyAdminAddr = "http://localhost:8474"
-	statusSignedOn     = "SIGNED_ON"
-)
+const toxiproxyAdminAddr = "http://localhost:8474"
 
 // toxiproxyReachable gates the tests that drive the real stack. They sign the lab acquirer on and
 // off and toggle the issuer proxy, which signs the running gateway off at the issuer (every purchase

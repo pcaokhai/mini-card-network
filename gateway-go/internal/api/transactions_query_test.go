@@ -134,7 +134,7 @@ func reversedTimeout(now time.Time) (store.TranLogRow, []store.StateTransition, 
 	sent, responded, acked := now, now.Add(30*time.Second), now.Add(30090*time.Millisecond)
 	row := store.TranLogRow{
 		ID: 1, RRN: "626514000124", Type: tranTypePurchase, Status: "REVERSED", Amount: 600000, Currency: "704",
-		MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: "GOCPHO000000001", MerchantName: testMerchantName,
+		MaskedPAN: testMaskedPAN, TerminalID: "00000042", MerchantID: fixtureMID, MerchantName: testMerchantName,
 		NetworkSTAN: "000124", ProcessingCode: "000000", POSEntryMode: "051", SentAt: &sent, RespondedAt: &responded, CreatedAt: now,
 	}
 	history := []store.StateTransition{
@@ -145,7 +145,7 @@ func reversedTimeout(now time.Time) (store.TranLogRow, []store.StateTransition, 
 	}
 	rev := &journey.Reversal{Status: "ACKED", QueuedAt: now.Add(30010 * time.Millisecond), AckedAt: &acked, Fields: map[int]string{
 		3: "000000", 4: "000000600000", 7: now.Add(30020 * time.Millisecond).UTC().Format("0102150405"), 11: "000125",
-		37: "626514000124", 39: "68", 41: "00000042", 42: "GOCPHO000000001", 49: "704", 90: "0200000124",
+		37: "626514000124", 39: "68", 41: "00000042", 42: fixtureMID, 49: "704", 90: "0200000124",
 	}}
 	return row, history, rev
 }

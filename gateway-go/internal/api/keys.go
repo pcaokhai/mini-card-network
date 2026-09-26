@@ -10,14 +10,12 @@ import (
 	"github.com/mcn/gateway-go/internal/store"
 )
 
-// keyLifetimeDays is the ceiling for daysRemaining (real HSM rotation policy is out of scope
-// here; MCN-502+ can wire a per-key-type policy if that's ever needed).
-// ponytail: fixed lifetime, add per-key-type policy if rotation requirements diverge.
-const keyLifetimeDays = 365
+// defaultKeyLifetimeDays applies to a key type the lifetime policy (KEY_LIFETIME_DAYS) leaves out.
+const defaultKeyLifetimeDays = 365
 
 // KeyLister is the port keys.go needs; *store.KeyStoreRepository satisfies it.
 type KeyLister interface {
-	List(ctx context.Context) ([]store.KeyRow, error)
+	ListCurrent(ctx context.Context) ([]store.KeyRow, error)
 }
 
 // keyInfo mirrors contracts/openapi.yaml's KeyInfo schema. It never carries the wrapped key.
@@ -31,27 +29,32 @@ type keyInfo struct {
 	LifetimeDays  int        `json:"lifetimeDays"`
 }
 
-// MountKeys registers GET /v1/keys/acquirer (contracts/openapi.yaml, tag "keys").
-func MountKeys(r chi.Router, svc KeyLister) {
-	r.Get("/v1/keys/acquirer", handleListAcquirerKeys(svc))
+// MountKeys registers GET /v1/keys/acquirer (contracts/openapi.yaml, tag "keys"). lifetimes is
+// the per-type lifetime policy in days (SEC-G9); a type it leaves out gets 365.
+func MountKeys(r chi.Router, svc KeyLister, lifetimes map[string]int) {
+	r.Get("/v1/keys/acquirer", handleListAcquirerKeys(svc, lifetimes))
 }
 
-func handleListAcquirerKeys(svc KeyLister) http.HandlerFunc {
+func handleListAcquirerKeys(svc KeyLister, lifetimes map[string]int) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		rows, err := svc.List(req.Context())
+		rows, err := svc.ListCurrent(req.Context())
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "list-keys-failed", err.Error())
+			problem(w, http.StatusInternalServerError, problemInternal, "could not read the key inventory")
 			return
 		}
 		infos := make([]keyInfo, 0, len(rows))
 		for _, row := range rows {
-			infos = append(infos, toKeyInfo(row))
+			lifetime, ok := lifetimes[row.KeyType]
+			if !ok {
+				lifetime = defaultKeyLifetimeDays
+			}
+			infos = append(infos, toKeyInfo(row, lifetime))
 		}
 		writeJSONBody(w, http.StatusOK, infos)
 	}
 }
 
-func toKeyInfo(row store.KeyRow) keyInfo {
+func toKeyInfo(row store.KeyRow, lifetimeDays int) keyInfo {
 	var counterparty *string
 	if row.OwnerRef != "" {
 		counterparty = &row.OwnerRef
@@ -62,16 +65,16 @@ func toKeyInfo(row store.KeyRow) keyInfo {
 		KCV:           row.KCV,
 		Status:        row.Status,
 		ActivatedAt:   row.ActivatedAt,
-		DaysRemaining: daysRemaining(row.ActivatedAt),
-		LifetimeDays:  keyLifetimeDays,
+		DaysRemaining: daysRemaining(row.ActivatedAt, lifetimeDays),
+		LifetimeDays:  lifetimeDays,
 	}
 }
 
-func daysRemaining(activatedAt *time.Time) int {
+func daysRemaining(activatedAt *time.Time, lifetimeDays int) int {
 	if activatedAt == nil {
-		return keyLifetimeDays
+		return lifetimeDays
 	}
-	remaining := keyLifetimeDays - int(time.Since(*activatedAt).Hours()/24)
+	remaining := lifetimeDays - int(time.Since(*activatedAt).Hours()/24)
 	if remaining < 0 {
 		return 0
 	}

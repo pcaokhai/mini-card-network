@@ -21,6 +21,13 @@ type RetiredKeyFinder interface {
 	FindRecentlyRetired(ctx context.Context, keyType, ownerRef string, within time.Duration) (*store.KeyRow, error)
 }
 
+// FallbackKeyFinder lists every key a response MAC may be retried under, in order. When the key
+// store passed to NewMACVerifier implements it (store.MACFallbackKeys does), the verifier tries
+// each: a PENDING key of unknown rotation outcome, then the recently retired one.
+type FallbackKeyFinder interface {
+	FallbackKeys(ctx context.Context, keyType, ownerRef string, within time.Duration) ([]store.KeyRow, error)
+}
+
 // MACVerifier checks the Retail MAC on an issuer response (MCN-502-AC3). Every flow that sends a
 // request verifies its response through it, so none can skip the check (POS-G5).
 type MACVerifier struct {
@@ -60,26 +67,44 @@ func (v MACVerifier) Verify(ctx context.Context, mti string, resp map[int]string
 	return v.macMatchesRecentlyRetiredZAK(ctx, packed, macHex)
 }
 
-// macMatchesRecentlyRetiredZAK retries verification against the most recently retired ZAK, if
-// one retired within dualKeyWindow (MCN-504-AC2); a nil keyStore or no such row skips the retry.
+// macMatchesRecentlyRetiredZAK retries verification against the fallback ZAKs: every key a
+// FallbackKeyFinder lists, else the most recently retired ZAK within dualKeyWindow
+// (MCN-504-AC2). A nil keyStore or no candidate skips the retry.
 func (v MACVerifier) macMatchesRecentlyRetiredZAK(ctx context.Context, packed, macHex string) bool {
-	if v.keyStore == nil {
-		return false
+	for _, key := range v.fallbackZAKs(ctx) {
+		keyUnderLMK, err := hex.DecodeString(key.KeyUnderLMKHex)
+		if err != nil {
+			continue
+		}
+		zak, err := v.hsm.Unwrap(keyUnderLMK)
+		if err != nil {
+			continue
+		}
+		if v.macMatches(packed, macHex, zak) {
+			return true
+		}
 	}
-	// The simulator holds one global ZAK, so its owner reference is empty (rotationAdapter).
+	return false
+}
+
+// fallbackZAKs lists the candidate keys. The simulator holds one global ZAK, so its owner
+// reference is empty (rotationAdapter).
+func (v MACVerifier) fallbackZAKs(ctx context.Context) []store.KeyRow {
+	if v.keyStore == nil {
+		return nil
+	}
+	if finder, ok := v.keyStore.(FallbackKeyFinder); ok {
+		keys, err := finder.FallbackKeys(ctx, "ZAK", "", dualKeyWindow)
+		if err != nil {
+			return nil
+		}
+		return keys
+	}
 	retired, err := v.keyStore.FindRecentlyRetired(ctx, "ZAK", "", dualKeyWindow)
 	if err != nil || retired == nil {
-		return false
+		return nil
 	}
-	keyUnderLMK, err := hex.DecodeString(retired.KeyUnderLMKHex)
-	if err != nil {
-		return false
-	}
-	oldZAK, err := v.hsm.Unwrap(keyUnderLMK)
-	if err != nil {
-		return false
-	}
-	return v.macMatches(packed, macHex, oldZAK)
+	return []store.KeyRow{*retired}
 }
 
 func (v MACVerifier) macMatches(packed, macHex string, zak []byte) bool {

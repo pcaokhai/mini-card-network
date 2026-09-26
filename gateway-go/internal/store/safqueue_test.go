@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -92,11 +93,14 @@ func TestSafRepository_listItemsReportsRRNAndDeadCount__MCN_407(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, saf.MarkDead(ctx, deadID, "max attempts exceeded"))
 
-	items, deadCount, err := saf.ListItems(ctx)
+	snap, err := saf.ListItems(ctx)
 
 	require.NoError(t, err)
-	require.Equal(t, 1, deadCount)
+	require.Equal(t, 1, snap.DeadCount)
+	require.Equal(t, 1, snap.Depth) // PENDING + IN_FLIGHT only (NET-G7)
+	items := snap.Items
 	require.Len(t, items, 2)
+	require.Equal(t, pendingID, items[0].ID) // owed advices first, DEAD after
 	byID := map[int64]SafItemRow{}
 	for _, it := range items {
 		byID[it.ID] = it
@@ -195,4 +199,23 @@ func TestSafRepository_findReversalReturnsLatest0420__MCN_304(t *testing.T) {
 	require.Equal(t, 2, got.Attempts)
 	require.False(t, got.CreatedAt.IsZero())
 	require.NotNil(t, got.AckedAt)
+}
+
+func TestSafRepository_listItemsCapsItemsButCountsEverything__NET_G7(t *testing.T) {
+	pool := newTestPool(t)
+	tranLog := NewTranLogRepository(pool)
+	saf := NewSafRepository(pool)
+	ctx := context.Background()
+	for i := 0; i < SafItemsCap+3; i++ {
+		stan := fmt.Sprintf("%06d", 100000+i)
+		tranID := insertTestTran(ctx, t, tranLog, "6265141"+stan[1:], stan)
+		_, err := saf.Enqueue(ctx, tranID, "0420", []byte("payload"))
+		require.NoError(t, err)
+	}
+
+	snap, err := saf.ListItems(ctx)
+
+	require.NoError(t, err)
+	require.Len(t, snap.Items, SafItemsCap)
+	require.Equal(t, SafItemsCap+3, snap.Depth)
 }
