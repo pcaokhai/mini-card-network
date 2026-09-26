@@ -128,6 +128,12 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
       conn.setAutoCommit(false);
       try {
         return approveInOneTransaction(conn, ctx);
+      } catch (ReversedBeforeApproval e) {
+        conn.rollback();
+        // docs/03 §7.3 and §8: an original processed after its reversal is declined RC 94
+        ctx.put(TxnContextKeys.RESPONSE_CODE, "94");
+        ctx.put(TxnContextKeys.DECLINE_REASON, "reversed before approval");
+        return PREPARED;
       } catch (RuntimeException e) {
         conn.rollback();
         throw e;
@@ -155,15 +161,19 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
       return PREPARED;
     }
     String authCode = authCodeGenerator.generate();
-    tranLogRepository.updateOutcome(
-        conn,
-        tranId(ctx),
-        businessDate(ctx),
-        "APPROVED",
-        "00",
-        authCode,
-        null,
-        ctx.<Long>get(TxnContextKeys.BALANCE));
+    boolean recorded =
+        tranLogRepository.updateOutcome(
+            conn,
+            tranId(ctx),
+            businessDate(ctx),
+            "APPROVED",
+            "00",
+            authCode,
+            null,
+            ctx.<Long>get(TxnContextKeys.BALANCE));
+    if (!recorded) {
+      throw new ReversedBeforeApproval(); // a reversal abandoned the row while we held the money
+    }
     conn.commit();
     ctx.put(TxnContextKeys.RESPONSE_CODE, "00");
     ctx.put(TxnContextKeys.AUTH_CODE, authCode);
@@ -213,6 +223,16 @@ public class Authorize implements TransactionParticipant, Configurable, Destroya
     ctx.put(TxnContextKeys.BALANCE, account.availableBalance());
     ctx.put(TxnContextKeys.BALANCE_CURRENCY, account.currency());
     return true;
+  }
+
+  /**
+   * The row is no longer RECEIVED: {@code LocateAndReverse} abandoned it as stale while this
+   * approval was in progress, so the approval must roll back.
+   */
+  private static final class ReversedBeforeApproval extends RuntimeException {
+    ReversedBeforeApproval() {
+      super("tran_log row was reversed before its approval committed", null, false, false);
+    }
   }
 
   /** The row {@code LogAndOutbox} inserted; an approval with none has nothing to post against. */

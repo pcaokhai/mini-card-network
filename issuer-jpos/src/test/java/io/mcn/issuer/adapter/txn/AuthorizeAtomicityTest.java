@@ -113,7 +113,7 @@ class AuthorizeAtomicityTest {
     var failingTranLog =
         new TranLogRepository(ds) {
           @Override
-          public void updateOutcome(
+          public boolean updateOutcome(
               Connection conn,
               long id,
               LocalDate businessDate,
@@ -180,6 +180,94 @@ class AuthorizeAtomicityTest {
         .isInstanceOf(IllegalStateException.class);
     assertThat(scalar("SELECT available_balance FROM account WHERE id = " + accountId))
         .isEqualTo(OPENING);
+  }
+
+  private Context reversalContext() {
+    Context reversal = new Context();
+    reversal.put(TxnContextKeys.ORIGINAL_MTI, "0200");
+    reversal.put(TxnContextKeys.ORIGINAL_STAN, stan);
+    reversal.put(TxnContextKeys.ORIGINAL_DE7, "0922140000");
+    reversal.put(TxnContextKeys.ORIGINAL_ACQUIRER, "970499");
+    reversal.put(TxnContextKeys.BUSINESS_DATE, TODAY);
+    return reversal;
+  }
+
+  private LocateAndReverse locateAndReverse() {
+    return new LocateAndReverse(
+        tranLog,
+        new LedgerRepository(),
+        new ReversalWithoutOriginalRepository(ds),
+        new AccountLockRepository(ds),
+        ds);
+  }
+
+  private void ageTheRow() {
+    execute("UPDATE tran_log SET created_at = now() - interval '2 minutes' WHERE id = " + tranId);
+  }
+
+  @Test
+  @DisplayName(
+      "Stale RECEIVED: an original older than the timeout with no journal is abandoned -"
+          + " REVERSED, 0430 00, nothing posted")
+  void should_abandonTheOriginal_when_itIsStaleAndMovedNoMoney() {
+    ageTheRow();
+
+    int result = locateAndReverse().prepare(2L, reversalContext());
+
+    assertThat(result & org.jpos.transaction.TransactionConstants.PREPARED)
+        .isEqualTo(org.jpos.transaction.TransactionConstants.PREPARED);
+    assertThat(status()).isEqualTo("REVERSED");
+    assertThat(scalar("SELECT count(*) FROM journal_entry WHERE tran_id = " + tranId)).isZero();
+    assertThat(scalar("SELECT available_balance FROM account WHERE id = " + accountId))
+        .isEqualTo(OPENING);
+  }
+
+  @Test
+  @DisplayName("Stale RECEIVED: a fresh RECEIVED original is still in flight - 96, SAF repeats")
+  void should_stillFail_when_theReceivedOriginalIsFresh() {
+    assertThatThrownBy(() -> locateAndReverse().prepare(2L, reversalContext()))
+        .isInstanceOf(IllegalStateException.class);
+    assertThat(status()).isEqualTo("RECEIVED");
+  }
+
+  @Test
+  @DisplayName(
+      "Stale RECEIVED: when the reversal wins, a late Authorize rolls back and declines RC 94,"
+          + " and LogAndOutbox keeps the row REVERSED")
+  void should_rollBackALateApproval_when_theReversalAbandonedTheRowFirst() {
+    ageTheRow();
+    locateAndReverse().prepare(2L, reversalContext());
+    Context late = purchaseContext();
+
+    authorize(tranLog).prepare(1L, late);
+    new LogAndOutbox(tranLog).commit(1L, late);
+
+    assertThat(late.<String>get(TxnContextKeys.RESPONSE_CODE)).isEqualTo("94");
+    assertThat(status()).isEqualTo("REVERSED");
+    assertThat(scalar("SELECT available_balance FROM account WHERE id = " + accountId))
+        .isEqualTo(OPENING);
+    assertThat(scalar("SELECT count(*) FROM journal_entry WHERE tran_id = " + tranId)).isZero();
+    assertThat(scalar("SELECT count(*) FROM velocity_counter WHERE card_id = " + cardId)).isZero();
+  }
+
+  @Test
+  @DisplayName("Stale RECEIVED: LogAndOutbox never overwrites a row that already has its outcome")
+  void should_notOverwriteAnApprovedThenReversedRow_when_logAndOutboxFinishesLate() {
+    Context ctx = purchaseContext();
+    authorize(tranLog).prepare(1L, ctx);
+    locateAndReverse().prepare(2L, reversalContext()); // a fast reversal before finish() runs
+
+    new LogAndOutbox(tranLog).commit(1L, ctx);
+
+    assertThat(status()).isEqualTo("REVERSED");
+  }
+
+  private void execute(String sql) {
+    try (var conn = ds.getConnection()) {
+      conn.createStatement().execute(sql);
+    } catch (java.sql.SQLException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   private String status() {

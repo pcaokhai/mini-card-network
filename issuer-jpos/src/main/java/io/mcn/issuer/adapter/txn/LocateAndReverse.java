@@ -12,6 +12,7 @@ import io.mcn.issuer.adapter.persistence.VelocityCounterRepository;
 import java.io.Serializable;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Map;
 import javax.sql.DataSource;
@@ -41,6 +42,10 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
   private AccountLockRepository accountLockRepository;
   private VelocityCounterRepository velocityCounterRepository;
   private AuditLogRepository auditLogRepository;
+
+  /** Longer than the acquirer's 0200 timeout (docs/03 §9: 30 s) plus a margin. */
+  private Duration staleAfter = Duration.ofSeconds(60);
+
   private DataSource dataSource;
   private HikariDataSource ownedDataSource;
 
@@ -115,6 +120,7 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
     this.accountLockRepository = new AccountLockRepository(ownedDataSource);
     this.velocityCounterRepository = new VelocityCounterRepository(ownedDataSource);
     this.auditLogRepository = new AuditLogRepository(ownedDataSource);
+    this.staleAfter = Duration.ofSeconds(cfg.getLong("stale-received-after-seconds", 60));
   }
 
   @Override
@@ -149,9 +155,10 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
 
     OriginalTransactionRow original = found.get();
     if ("RECEIVED".equals(original.status())) {
-      // The 0200 is still being authorised. A "00" now would let it approve and never be
-      // reversed; aborting answers 96 and the acquirer's SAF repeats the advice.
-      throw new IllegalStateException("original " + original.id() + " still in flight");
+      // Still in flight answers 96 and the acquirer's SAF repeats. A "00" now would let a live
+      // 0200 approve and never be reversed - unless the original is stale and moved nothing.
+      abandonIfStale(original);
+      return PREPARED;
     }
     if (!"APPROVED".equals(original.status())) {
       // Already REVERSED: idempotent repeat, no second journal entry. DECLINED never moved money
@@ -172,6 +179,23 @@ public class LocateAndReverse implements TransactionParticipant, Configurable, D
       throw new IllegalStateException("post reversal journal failed", e);
     }
     return PREPARED;
+  }
+
+  /**
+   * An original still RECEIVED after {@link #staleAfter} with no journal never approved (its
+   * process died before Authorize committed, S1): it is abandoned as REVERSED and the reversal
+   * acknowledged with no ledger effect. Otherwise it may still be approving, so this fails (96).
+   */
+  private void abandonIfStale(OriginalTransactionRow original) {
+    try (Connection conn = dataSource.getConnection()) {
+      if (tranLogRepository.markAbandoned(
+          conn, original.id(), original.businessDate(), staleAfter)) {
+        return;
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException("abandon stale original failed", e);
+    }
+    throw new IllegalStateException("original " + original.id() + " still in flight");
   }
 
   /**

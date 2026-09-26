@@ -22,6 +22,13 @@ class AuthorizeTest {
 
   private final TranLogRepository tranLog = Mockito.mock(TranLogRepository.class);
 
+  @org.junit.jupiter.api.BeforeEach
+  void outcomeRowIsStillReceived() {
+    // the row LogAndOutbox inserted is still RECEIVED, so the approval's outcome write lands
+    when(tranLog.updateOutcome(any(), anyLong(), any(), any(), any(), any(), any(), any()))
+        .thenReturn(true);
+  }
+
   private static DataSource fakeDataSource() throws SQLException {
     DataSource ds = Mockito.mock(DataSource.class);
     Connection conn = Mockito.mock(Connection.class);

@@ -89,9 +89,11 @@ public class TranLogRepository {
 
   /**
    * Same update on the caller's connection, so {@code Authorize} commits the outcome in the
-   * transaction that moves the money (S1, root CLAUDE.md §6.5).
+   * transaction that moves the money (S1, root CLAUDE.md §6.5). Only a row still {@code RECEIVED}
+   * takes an outcome: returns false when it already has one (a reversal abandoned it first, or
+   * {@code Authorize} already wrote it), so nothing ever overwrites a decided row.
    */
-  public void updateOutcome(
+  public boolean updateOutcome(
       Connection conn,
       long tranId,
       LocalDate businessDate,
@@ -104,7 +106,7 @@ public class TranLogRepository {
         """
         UPDATE tran_log SET status = ?, response_code = ?, auth_code = ?, decline_reason = ?,
                              balance = ?, updated_at = now()
-        WHERE id = ? AND business_date = ?""";
+        WHERE id = ? AND business_date = ? AND status = 'RECEIVED'""";
     try (var stmt = conn.prepareStatement(sql)) {
       stmt.setString(1, status);
       stmt.setString(2, responseCode);
@@ -113,9 +115,7 @@ public class TranLogRepository {
       stmt.setObject(5, balance, java.sql.Types.BIGINT);
       stmt.setLong(6, tranId);
       stmt.setObject(7, businessDate);
-      if (stmt.executeUpdate() != 1) {
-        throw new IllegalStateException("tran_log " + tranId + " not found for its outcome");
-      }
+      return stmt.executeUpdate() == 1;
     } catch (SQLException e) {
       throw new IllegalStateException("update tran_log outcome failed", e);
     }
@@ -216,6 +216,33 @@ public class TranLogRepository {
    * journal. The row lock the UPDATE takes serialises a 0420 and its 0421 repeat: only the one that
    * sees APPROVED gets {@code true} and posts.
    */
+  /**
+   * Abandons an original that never finished: still {@code RECEIVED} after {@code staleAfter}
+   * (longer than the acquirer's response timeout, docs/03 §9) and with no journal, so it moved no
+   * money. It becomes {@code REVERSED}, the status a reversed original with nothing left to undo
+   * has; a late {@code Authorize} for it then finds no {@code RECEIVED} row and rolls back. One
+   * conditional statement, so it can't interleave with that approval's own outcome write.
+   */
+  public boolean markAbandoned(
+      Connection conn, long tranId, LocalDate businessDate, java.time.Duration staleAfter)
+      throws SQLException {
+    String sql =
+        """
+        UPDATE tran_log t SET status = 'REVERSED',
+                              decline_reason = 'abandoned: reversed while still RECEIVED',
+                              updated_at = now()
+        WHERE t.id = ? AND t.business_date = ? AND t.status = 'RECEIVED'
+          AND t.created_at < now() - make_interval(secs => ?)
+          AND NOT EXISTS (SELECT 1 FROM journal_entry je
+                          WHERE je.tran_id = t.id AND je.tran_business_date = t.business_date)""";
+    try (var stmt = conn.prepareStatement(sql)) {
+      stmt.setLong(1, tranId);
+      stmt.setObject(2, businessDate);
+      stmt.setLong(3, staleAfter.toSeconds());
+      return stmt.executeUpdate() == 1;
+    }
+  }
+
   public boolean markReversed(Connection conn, long tranId, LocalDate businessDate)
       throws SQLException {
     String sql =
