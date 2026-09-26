@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { JOURNEY_VIEWS, JourneyHeader, VIEW_STATUS, type JourneyView as View } from "@/components/journey/JourneyHeader";
+import { JOURNEY_VIEWS, JourneyHeader, VIEW_REVERSAL_REASON, VIEW_STATUS, type JourneyView as View } from "@/components/journey/JourneyHeader";
 import { JourneyView, Notice } from "@/components/journey/JourneyView";
 import { useLatestTransaction } from "@/shared/api/journey-client";
 
@@ -19,7 +19,7 @@ export function JourneyIndexScreen() {
   const t = useTranslations("journey");
   const router = useRouter();
   const view = viewFrom(useSearchParams().get("view"));
-  const latest = useLatestTransaction(VIEW_STATUS[view]);
+  const latest = useLatestTransaction(VIEW_STATUS[view], view === "reversed" ? VIEW_REVERSAL_REASON.reversed : undefined);
 
   return (
     <div className="flex flex-col gap-5">

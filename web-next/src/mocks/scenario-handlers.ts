@@ -31,12 +31,15 @@ const OVERVIEW: Omit<Overview, "throughput"> = {
   p99LatencyMs: 212,
   p50LatencyMs: 96,
   ledgerMatches: true,
+  businessDate: "2026-09-25",
   declineReasons: [
     { responseCode: "51", label: "Không đủ tiền", share: 0.41 },
     { responseCode: "55", label: "Sai mã PIN", share: 0.23 },
     { responseCode: "61", label: "Vượt hạn mức", share: 0.18 },
     { responseCode: "62", label: "Thẻ bị khóa", share: 0.12 },
-    { responseCode: "", label: "Lý do khác", share: 0.06 },
+    // The provider lists every code; the console folds the tail into "Lý do khác" (OVW-G5).
+    { responseCode: "54", label: "Expired card", share: 0.04 },
+    { responseCode: "91", label: "Issuer or switch inoperative", share: 0.02 },
   ],
 };
 
@@ -191,11 +194,17 @@ const posHandlers = [
   http.post("*/v1/transactions/:rrn/completions", async ({ params, request }) => {
     const { amount } = (await request.clone().json()) as PosRequest;
     const held = heldByRrn.get(String(params.rrn));
-    const tx = once(request, () => {
-      const created = posTransaction("COMPLETION", held?.cardToken ?? "tok_normal", amount?.amount ?? 0);
-      const found = held ? created : { ...created, status: "DECLINED" as const, responseCode: "25", authCode: null };
-      return { ...found, originalRrn: String(params.rrn) };
-    });
+    // The gateway looks the pre-auth up in tran_log and answers 404 for an RRN it doesn't know (POS-G13).
+    if (!held) {
+      return HttpResponse.json(
+        { type: "unknown-transaction", title: "unknown-transaction", status: 404, detail: "no such transaction" },
+        { status: 404, headers: { "Content-Type": "application/problem+json" } },
+      );
+    }
+    const tx = once(request, () => ({
+      ...posTransaction("COMPLETION", held.cardToken, amount?.amount ?? 0),
+      originalRrn: String(params.rrn),
+    }));
     await delay(POS_LATENCY_MS);
     return HttpResponse.json(tx, { status: 201 });
   }),

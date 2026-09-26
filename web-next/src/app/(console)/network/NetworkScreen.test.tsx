@@ -85,13 +85,13 @@ describe("NetworkScreen", () => {
     expect(await screen.findByText("Đường tới issuer chậm")).toBeInTheDocument();
   });
 
-  it("MCN-205-AC3: gateway event texts show in Vietnamese; unknown text and Expert keep the raw gateway text", async () => {
+  it("MCN-205-AC3 / NET-G15: gateway events show in Vietnamese by code; a codeless row and Expert keep the gateway text", async () => {
     const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
     server.use(
       http.get("*/v1/network/events", () =>
         HttpResponse.json({
           items: [
-            { id: "2", occurredAt: at(1), severity: "INFO", easyText: "Link to issuer is up", technicalText: "signed on" },
+            { id: "3", occurredAt: at(1), severity: "INFO", code: "LINK_UP", easyText: "Reworded: issuer link is up", technicalText: "signed on" },
             { id: "1", occurredAt: at(2), severity: "WARN", easyText: "Brand new gateway text", technicalText: "new" },
           ],
           nextCursor: null,

@@ -6,16 +6,18 @@
 
 const GATEWAY_URL = process.env.GATEWAY_URL ?? "http://localhost:8080";
 const ISSUER_ADMIN_URL = process.env.ISSUER_ADMIN_URL ?? "http://localhost:8081";
+// The issuer records who acted in audit_log (docs/04 §2 "Actor"). v1 has no end-user login, so the
+// console names itself; the browser can't set it (CARDS-G3).
+const CONSOLE_ACTOR = process.env.CONSOLE_ACTOR ?? "console";
 
 const FORWARDED_REQUEST_HEADERS = ["accept", "content-type", "idempotency-key", "if-match", "traceparent"];
 const FORWARDED_RESPONSE_HEADERS = ["content-type", "etag", "location", "retry-after"];
 
 type Context = { params: Promise<{ path: string[] }> };
 
-function upstreamFor(path: string[]): string {
-  if (path[0] !== "v1") return GATEWAY_URL;
-  const issuerOwned = path[1] === "cards" || path[1] === "accounts" || (path[1] === "keys" && path[2] === "issuer");
-  return issuerOwned ? ISSUER_ADMIN_URL : GATEWAY_URL;
+function issuerOwned(path: string[]): boolean {
+  if (path[0] !== "v1") return false;
+  return path[1] === "cards" || path[1] === "accounts" || (path[1] === "keys" && path[2] === "issuer");
 }
 
 function pick(headers: Headers, names: string[]): Headers {
@@ -36,12 +38,15 @@ function badGateway(detail: string): Response {
 
 async function proxy(request: Request, { params }: Context): Promise<Response> {
   const { path } = await params;
-  const target = `${upstreamFor(path)}/${path.map(encodeURIComponent).join("/")}${new URL(request.url).search}`;
+  const toIssuer = issuerOwned(path);
+  const target = `${toIssuer ? ISSUER_ADMIN_URL : GATEWAY_URL}/${path.map(encodeURIComponent).join("/")}${new URL(request.url).search}`;
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  const headers = pick(request.headers, FORWARDED_REQUEST_HEADERS);
+  if (toIssuer) headers.set("X-Actor", CONSOLE_ACTOR);
   try {
     const upstream = await fetch(target, {
       method: request.method,
-      headers: pick(request.headers, FORWARDED_REQUEST_HEADERS),
+      headers,
       body: hasBody ? await request.text() : undefined,
       cache: "no-store",
     });

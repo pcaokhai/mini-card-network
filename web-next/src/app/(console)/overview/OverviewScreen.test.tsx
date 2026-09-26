@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
-import { ws } from "msw";
+import { http, HttpResponse, ws } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import vi from "../../../../messages/vi.json";
@@ -69,5 +69,21 @@ describe("OverviewScreen", () => {
     expect(screen.getByText("RRN (DE 37)")).toBeInTheDocument();
     expect(screen.getByText("Không đủ tiền · RC 51", { selector: "[data-testid=feed-status]" })).toBeInTheDocument();
     expect(screen.getByText("p99 end-to-end · p50 96 ms")).toBeInTheDocument();
+  });
+
+  it("shows a loading state, then the business date as today __OVW_G8_ADR_007", async () => {
+    server.use(...scenarioHandlers);
+    renderScreen();
+    expect(screen.getByRole("status", { name: "Đang tải tổng quan…" })).toBeInTheDocument();
+
+    expect(await screen.findByText(/Thứ Sáu, 25\/09\/2026 · ngày giao dịch/)).toBeInTheDocument();
+  });
+
+  it("shows a problem banner when the overview can't be loaded __OVW_G8", async () => {
+    server.use(http.get("*/v1/metrics/overview", () => HttpResponse.json({ type: "internal", status: 500 }, { status: 500 })));
+    renderScreen();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Không tải được số liệu tổng quan. Thử tải lại trang.");
+    expect(screen.queryByTestId("kpi-ledger")).not.toBeInTheDocument();
   });
 });

@@ -10,17 +10,36 @@ const client = createClient<paths>({ baseUrl: apiBaseUrl() });
 // See network-client.ts: pass a thunk so requests use the current global fetch (MSW patches it in tests).
 const liveFetch = (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args);
 
+/** The gateway has no transaction with this RRN (404): a different message, and no retries (JRN-G9). */
+export class JourneyNotFoundError extends Error {
+  constructor(rrn: string) {
+    super(`transaction ${rrn} not found`);
+    this.name = "JourneyNotFoundError";
+  }
+}
+
+const SETTLING_POLL_MS = 2000;
+const SETTLING = new Set(["SENT", "TIMED_OUT", "REVERSAL_PENDING"]);
+
+/** Poll while the outcome is still moving (a timeout waiting for its reversal); stop once final (JRN-G5). */
+export function journeyRefetchInterval(journey: Journey | undefined): number | false {
+  return journey && SETTLING.has(journey.transaction.status) ? SETTLING_POLL_MS : false;
+}
+
 export function useJourney(rrn: string) {
   return useQuery({
     queryKey: ["transactions", rrn, "journey"],
     queryFn: async (): Promise<Journey> => {
-      const { data, error } = await client.GET("/v1/transactions/{rrn}/journey", {
+      const { data, error, response } = await client.GET("/v1/transactions/{rrn}/journey", {
         params: { path: { rrn } },
         fetch: liveFetch,
       });
+      if (response.status === 404) throw new JourneyNotFoundError(rrn);
       if (error) throw error;
       return data;
     },
+    retry: (failureCount, error) => !(error instanceof JourneyNotFoundError) && failureCount < 3,
+    refetchInterval: (query) => journeyRefetchInterval(query.state.data),
   });
 }
 
@@ -28,13 +47,18 @@ export type TransactionSummary = components["schemas"]["TransactionSummary"];
 type TransactionStatus = components["schemas"]["TransactionStatus"];
 type JournalEntry = components["schemas"]["JournalEntry"];
 
-/** The newest transaction with this status: the Journey index opens on it. Null when there is none yet. */
-export function useLatestTransaction(status: TransactionStatus) {
+type ReversalReason = components["schemas"]["ReversalReason"];
+
+/**
+ * The newest transaction with this status (and reversal reason, when given): the Journey index
+ * opens on it. Null when there is none yet.
+ */
+export function useLatestTransaction(status: TransactionStatus, reversalReason?: ReversalReason) {
   return useQuery({
-    queryKey: ["transactions", "latest", status],
+    queryKey: ["transactions", "latest", status, reversalReason ?? null],
     queryFn: async (): Promise<TransactionSummary | null> => {
       const { data, error } = await client.GET("/v1/transactions", {
-        params: { query: { status, limit: 1 } },
+        params: { query: { status, reversalReason, limit: 1 } },
         fetch: liveFetch,
       });
       if (error) throw error;

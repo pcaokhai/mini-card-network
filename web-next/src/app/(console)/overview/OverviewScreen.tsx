@@ -13,14 +13,14 @@ import { CutoverCountdown } from "@/components/overview/CutoverCountdown";
 import { LiveFeed } from "@/components/overview/LiveFeed";
 import "@/components/overview/overview.css";
 
-function todayLabel(): string {
-  return new Intl.DateTimeFormat("vi-VN", {
-    weekday: "long",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  })
-    .format(new Date())
+/**
+ * "Hôm nay" is the acquirer's business date, rolled at cutover (ADR-007), not the viewer's
+ * calendar day. The date is formatted from its parts, so no timezone can shift it.
+ */
+function businessDayLabel(businessDate: string): string {
+  const [year, month, day] = businessDate.split("-").map(Number);
+  return new Intl.DateTimeFormat("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit", year: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(year, month - 1, day)))
     .replace(/^./, (c) => c.toUpperCase());
 }
 
@@ -32,7 +32,23 @@ export function OverviewScreen() {
   const switchQuery = useSwitchStatus();
   const keysQuery = useAcquirerKeys();
   const expertMode = useDisplayMode((s) => s.mode === "expert");
-  if (!overviewQuery.data) return null;
+  if (overviewQuery.isError) {
+    return (
+      <p role="alert" className="rounded-card border border-border bg-surface px-5.5 py-5 font-semibold text-bad">
+        {t("loadFailed")}
+      </p>
+    );
+  }
+  if (!overviewQuery.data) {
+    return (
+      <div role="status" aria-label={t("loading")} aria-busy="true" className="flex flex-col gap-6">
+        <div className="h-9 w-72 animate-pulse rounded-lg bg-[#EFEDE6] motion-reduce:animate-none" />
+        <div className="h-32 animate-pulse rounded-card bg-[#EFEDE6] motion-reduce:animate-none" />
+        <div className="h-80 animate-pulse rounded-card bg-[#EFEDE6] motion-reduce:animate-none" />
+      </div>
+    );
+  }
+  const { businessDate } = overviewQuery.data;
 
   return (
     <section aria-labelledby="overview-heading" className="flex flex-col gap-6">
@@ -41,9 +57,8 @@ export function OverviewScreen() {
           <h1 id="overview-heading" className="text-[30px] font-bold tracking-[-0.01em]">
             {t("title")}
           </h1>
-          {/* The date is the viewer's local day; the server has no timezone to match it. */}
-          <p className="mt-1.5 text-[15px] text-muted" suppressHydrationWarning>
-            {`${todayLabel()} · ${t("subtitle")}`}
+          <p className="mt-1.5 text-[15px] text-muted">
+            {businessDate ? `${t("businessDay", { date: businessDayLabel(businessDate) })} · ${t("subtitle")}` : t("subtitle")}
           </p>
         </div>
         <div className="flex gap-2.5">

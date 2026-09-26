@@ -284,6 +284,14 @@
   background: var(--color-surface);
   color: var(--color-ink);
 }
+.cards-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
 .cards-audit {
   display: flex;
   align-items: center;

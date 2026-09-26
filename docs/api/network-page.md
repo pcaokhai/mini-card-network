@@ -3,7 +3,7 @@
 | | |
 | --- | --- |
 | Document | `docs/api/network-page.md` |
-| Version | 1.4 |
+| Version | 1.5 |
 | Status | Approved for integration (links, events, SAF, echo); Draft for `/v1/network/switch` and `/v1/terminals`, which the provider doesn't have yet |
 | Date | 2026-09-25 |
 | Screen | route `/network`, container `web-next/src/app/(console)/network/NetworkScreen.tsx` |
@@ -503,7 +503,7 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | NET-G12 | `GET /v1/network/events` ignores `limit` and `cursor`; `nextCursor` is always null. | `internal/api/network.go` (`defaultEventsLimit`); `?limit=2` returned 16 items | GW | **Fixed** in #121: keyset pagination on `id`; `limit` 1–200 (default 50), bad limit/cursor → 400 `validation-error` |
 | NET-G13 | `GET /v1/terminals` isn't implemented anywhere (404), though docs/04 routes it to gateway-go. | curl → 404; no handler in `internal/api` | GW | **Fixed** in #121: `GET /v1/terminals` from `terminal` + `merchant` |
 | NET-G14 | Idempotency: the link actions ignore `Idempotency-Key`. The contract marks it required, and docs/04 §2 requires replay for 24 h. | `internal/api/network.go` | GW | **Fixed** in #121: UUID key required on echo/sign-on/sign-off; sign-on/off replay per key (in memory), echo is not replayed (a stale result would mislead) |
-| NET-G15 | Gateway event texts are English only, with no language-neutral code. The web maps five exact strings, so any wording change silently falls back to English. | `network-model.ts` `GATEWAY_EVENT_KEYS`; Ruling 7 | contracts + GW | **Fixed** in #121 (provider): every supervisor event carries `code` (migration 00008). The late-response event from #117 gets `LATE_RESPONSE` in a follow-up once both merge. WEB still maps by text |
+| NET-G15 | Gateway event texts are English only, with no language-neutral code. The web maps five exact strings, so any wording change silently falls back to English. | `network-model.ts` `GATEWAY_EVENT_KEYS`; Ruling 7 | contracts + GW | **Fixed**: provider in #121 (`code` on every supervisor event), web in #125 (copy keyed by `code`, no text matching; a codeless older row shows the provider text). The late-response event's `LATE_RESPONSE` code follows #117 |
 | NET-G16 | `p99LatencyMs` is always null and `inFlight` always 0: nothing writes those columns. The "Độ trễ" column is always "—" on the real stack. | `migrations/00001_link_state_and_network_event.sql`; no writer in `internal/` | GW | **Fixed** in #121: `p99LatencyMs` over the last 1000 echo/request round trips and `inFlight` from the MUX, computed live rather than stored |
 | NET-G17 | Problem `type` values are bare slugs (`unknown-link`, `link-not-ready`), not docs/04 URIs, and `link-not-ready` isn't in the docs/04 §3 catalogue (the nearest is `link-down` 503). | `internal/api/lab.go` `problem()`; `network.go:162` | GW | Shared URI problem writer; align with the catalogue |
 | NET-G18 | A manual sign-off does not last: the next request that gets RC 91 makes the supervisor sign on again automatically (`resignOn`), so the operator's choice is silently undone. | `internal/isonet/supervisor.go` `Send` → `signOnAgain` | GW | Remember a manual sign-off and suppress the automatic re-sign-on until a manual sign-on (or reconnect) |
@@ -518,4 +518,5 @@ Polling load per open page: 4 requests every 5 s (links, SAF, events, switch; th
 | 1.1 | 2026-09-25 | NET-G1–G4, G7, G9, G12–G16 fixed on the provider side (#121) |
 | 1.2 | 2026-09-26 | NET-G18 added; `ECHO_TIMEOUT` is validated (≤ 15 s) so manual triggers stay under the HTTP WriteTimeout (#121 review) |
 | 1.3 | 2026-09-26 | NET-G8, NET-G10, NET-G11 fixed on the web side (#124) |
-| 1.4 | 2026-09-26 | NET-G19 (issuer 0430 unsigned) Fixed in #122; NET-G20 (gateway doesn't verify the 0430 MAC) added, open. |
+| 1.4 | 2026-09-26 | NET-G15 web half fixed (#125) |
+| 1.5 | 2026-09-26 | NET-G19 (issuer 0430 unsigned) Fixed in #122; NET-G20 (gateway doesn't verify the 0430 MAC) added, open. |

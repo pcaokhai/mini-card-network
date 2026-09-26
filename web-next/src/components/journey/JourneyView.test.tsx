@@ -9,6 +9,7 @@ import { journeyHandlers } from "@/mocks/journey-handlers";
 import { cardsHandlers } from "@/mocks/pages/cards";
 import { APPROVED_JOURNEY, AUTO_REVERSED_JOURNEY, DECLINED_JOURNEY } from "@/mocks/journey-fixtures";
 import { useDisplayMode } from "@/shared/state/display-mode";
+import { journeyRefetchInterval } from "@/shared/api/journey-client";
 import { AUTOPLAY_INTERVAL_MS, JourneyView } from "./JourneyView";
 
 const server = setupServer(...journeyHandlers, ...cardsHandlers);
@@ -140,5 +141,51 @@ describe("JourneyView (MCN-307: summary, timeline, detail, money as in the desig
     expect(screen.getAllByText("Reason: Insufficient funds. Nothing was debited.").length).toBeGreaterThan(0);
     expect(screen.getByText("Nothing debited")).toBeInTheDocument();
     expect(screen.queryByText("Before the transaction")).not.toBeInTheDocument();
+  });
+
+  it("tells a missing transaction apart from a failed load, and doesn't retry a 404 __JRN_G9", async () => {
+    let calls = 0;
+    server.use(
+      http.get("*/v1/transactions/:rrn/journey", ({ params }) => {
+        calls += 1;
+        return params.rrn === "missing"
+          ? HttpResponse.json({ type: "unknown-transaction", status: 404 }, { status: 404 })
+          : HttpResponse.json({ type: "internal", status: 500 }, { status: 500 });
+      }),
+    );
+    const client = new QueryClient(); // the app's default retries, to check a 404 skips them
+    const { unmount } = render(
+      <QueryClientProvider client={client}>
+        <NextIntlClientProvider locale="en" messages={en}>
+          <JourneyView rrn="missing" />
+        </NextIntlClientProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("Transaction missing was not found.")).toBeInTheDocument();
+    expect(calls).toBe(1);
+    unmount();
+
+    renderJourney("broken"); // any other problem is retried (backoff 1 + 2 + 4 s), then reads as a load failure
+    expect(await screen.findByText(en.journey.loadError, undefined, { timeout: 9000 })).toBeInTheDocument();
+  }, 12_000);
+
+  it("falls back to the provider's text for a step code this build doesn't know __JRN_G11", async () => {
+    const future = { ...APPROVED_JOURNEY.steps[3], code: "SOMETHING_NEW", title: "Provider title", easyText: "Provider easy text" };
+    server.use(
+      http.get("*/v1/transactions/:rrn/journey", () => HttpResponse.json({ ...APPROVED_JOURNEY, steps: [...APPROVED_JOURNEY.steps.slice(0, 3), future] })),
+    );
+    renderJourney("626514000123");
+
+    expect(await screen.findAllByText("Provider title")).not.toHaveLength(0);
+    expect(screen.queryByText(/step\.SOMETHING_NEW/)).not.toBeInTheDocument();
+  });
+});
+
+describe("journeyRefetchInterval (JRN-G5)", () => {
+  it("polls every 2 s while the outcome is still settling, and stops once it is final __JRN_G5", () => {
+    const withStatus = (status: string) => ({ ...APPROVED_JOURNEY, transaction: { ...APPROVED_JOURNEY.transaction, status } }) as typeof APPROVED_JOURNEY;
+    for (const status of ["SENT", "TIMED_OUT", "REVERSAL_PENDING"]) expect(journeyRefetchInterval(withStatus(status))).toBe(2000);
+    for (const status of ["APPROVED", "DECLINED", "REVERSED"]) expect(journeyRefetchInterval(withStatus(status))).toBe(false);
+    expect(journeyRefetchInterval(undefined)).toBe(false);
   });
 });
