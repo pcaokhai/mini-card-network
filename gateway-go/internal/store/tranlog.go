@@ -77,7 +77,6 @@ type TransactionFilter struct {
 
 const defaultTransactionsLimit = 50
 
-
 // Reversal reasons (contracts/openapi.yaml ReversalReason), from DE 39 of the 0420 (docs/03 §7.3).
 const (
 	ReversalCustomerCancellation = "CUSTOMER_CANCELLATION"
