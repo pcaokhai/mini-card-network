@@ -46,17 +46,6 @@ var (
 	ErrNotServing = errors.New("chaos runner is not serving")
 )
 
-// fixtureCardRefs maps each seed cardToken to the issuer's cardRef (contracts/fixtures/cards.json;
-// a test keeps the two in sync). The gateway only knows tokens; the Issuer Admin API only refs.
-var fixtureCardRefs = map[string]string{
-	"tok_normal":  "crd_normal0001",
-	"tok_low":     "crd_lowbal0002",
-	"tok_blocked": "crd_blockd0003",
-	"tok_expired": "crd_expird0004",
-	"tok_limit":   "crd_limit00005",
-	"tok_second":  "crd_second0006",
-}
-
 // PurchaseCreator is the port Runner needs to fire synthetic purchases. *purchase.Service
 // satisfies it.
 type PurchaseCreator interface {

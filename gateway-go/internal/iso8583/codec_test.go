@@ -12,3 +12,14 @@ func TestPack_derivesSecondaryBitmapAndRejectsExplicitDE1(t *testing.T) {
 		t.Fatalf("got %v, want UNKNOWN_FIELD", err)
 	}
 }
+
+// The generated field table carries packager-spec's sensitivity flags, so consumers such as the
+// Lab redact from the spec instead of a hand-kept list (LAB-G8).
+func TestFields_carryThePackagerSpecSensitivity__LAB_G8(t *testing.T) {
+	want := map[int]string{2: "pan", 14: "expiry", 48: "key-material", 52: "pin-block", 55: "emv", 64: "mac", 128: "mac"}
+	for n, spec := range Fields {
+		if spec.Sensitive != want[n] {
+			t.Errorf("DE %d: sensitive %q, want %q", n, spec.Sensitive, want[n])
+		}
+	}
+}

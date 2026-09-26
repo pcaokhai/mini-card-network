@@ -55,17 +55,17 @@ func handleStartRotation(svc Rotator, replays *replayStore) http.HandlerFunc {
 			KeyType string `json:"keyType"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || (body.KeyType != "ZPK" && body.KeyType != "ZAK") {
-			problem(w, http.StatusBadRequest, problemValidation, "keyType must be ZPK or ZAK")
+			problem(w, req, http.StatusBadRequest, problemValidation, "keyType must be ZPK or ZAK")
 			return
 		}
-		replays.serve(req.Context(), w, key, body.KeyType, func(ctx context.Context) (int, any, bool) {
+		replays.serve(req, w, key, body.KeyType, func(ctx context.Context) (int, any, bool) {
 			row, err := svc.StartRotation(ctx, body.KeyType)
 			if errors.Is(err, rotation.ErrRotationInProgress) {
-				problem(w, http.StatusConflict, "conflict", "a key rotation is already running")
+				problem(w, req, http.StatusConflict, "conflict", "a key rotation is already running")
 				return 0, nil, false
 			}
 			if err != nil {
-				problem(w, http.StatusInternalServerError, problemInternal, "could not start the key rotation")
+				problem(w, req, http.StatusInternalServerError, problemInternal, "could not start the key rotation")
 				return 0, nil, false
 			}
 			w.Header().Set("Location", "/v1/keys/acquirer/rotations/"+strconv.FormatInt(row.ID, 10))
@@ -79,16 +79,16 @@ func handleGetRotation(svc Rotator) http.HandlerFunc {
 		// Rotation ids are opaque strings on the wire: one that isn't ours is simply not found.
 		id, err := strconv.ParseInt(chi.URLParam(req, "rotationId"), 10, 64)
 		if err != nil {
-			problem(w, http.StatusNotFound, problemNotFound, "no such key rotation")
+			problem(w, req, http.StatusNotFound, problemNotFound, "no such key rotation")
 			return
 		}
 		row, err := svc.GetRotation(req.Context(), id)
 		if errors.Is(err, rotation.ErrNotFound) {
-			problem(w, http.StatusNotFound, problemNotFound, "no such key rotation")
+			problem(w, req, http.StatusNotFound, problemNotFound, "no such key rotation")
 			return
 		}
 		if err != nil {
-			problem(w, http.StatusInternalServerError, problemInternal, "could not read the key rotation")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not read the key rotation")
 			return
 		}
 		writeJSONBody(w, http.StatusOK, toKeyRotation(row))

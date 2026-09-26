@@ -149,12 +149,12 @@ func TestPutChaosScenario_validatesIdAndEnabled__CHA_G4(t *testing.T) {
 
 	code, got := chaosRequest(t, r, http.MethodPut, "/v1/chaos/scenarios/NOT_A_SCENARIO", testKey, `{"enabled":true}`)
 	require.Equal(t, http.StatusNotFound, code)
-	require.Equal(t, "not-found", got["type"])
+	require.Equal(t, problemTypeBase+"not-found", got["type"])
 
 	for _, body := range []string{`{}`, `{"enabled":null}`, `not json`} {
 		code, got = chaosRequest(t, r, http.MethodPut, "/v1/chaos/scenarios/SLOW_NETWORK", testKey, body)
 		require.Equal(t, http.StatusBadRequest, code, body)
-		require.Equal(t, "validation-error", got["type"], body)
+		require.Equal(t, problemTypeBase+"validation-error", got["type"], body)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestPutChaosScenario_dropResponseWithoutFakeIssuerIsScenarioUnavailable__CH
 
 	code, got := chaosRequest(t, r, http.MethodPut, "/v1/chaos/scenarios/DROP_RESPONSE", testKey, `{"enabled":true}`)
 	require.Equal(t, http.StatusNotImplemented, code)
-	require.Equal(t, "scenario-unavailable", got["type"])
+	require.Equal(t, problemTypeBase+"scenario-unavailable", got["type"])
 }
 
 func TestChaosWrites_requireAUUIDIdempotencyKey__CHA_G5_G12(t *testing.T) {
@@ -175,10 +175,10 @@ func TestChaosWrites_requireAUUIDIdempotencyKey__CHA_G5_G12(t *testing.T) {
 	for _, key := range []string{"", "chaos-1"} {
 		code, got := chaosRequest(t, r, http.MethodPost, "/v1/chaos/runs", key, `{"transactions":10}`)
 		require.Equal(t, http.StatusBadRequest, code)
-		require.Equal(t, "insufficient-idempotency-key", got["type"])
+		require.Equal(t, problemTypeBase+"insufficient-idempotency-key", got["type"])
 		code, got = chaosRequest(t, r, http.MethodPut, "/v1/chaos/scenarios/SLOW_NETWORK", key, `{"enabled":true}`)
 		require.Equal(t, http.StatusBadRequest, code)
-		require.Equal(t, "insufficient-idempotency-key", got["type"])
+		require.Equal(t, problemTypeBase+"insufficient-idempotency-key", got["type"])
 	}
 	require.Zero(t, runner.starts)
 }
@@ -191,7 +191,7 @@ func TestPostChaosRuns_boundsTransactions__CHA_G5(t *testing.T) {
 	for _, body := range []string{`{"transactions":0}`, `{"transactions":10001}`, `{}`, `nope`} {
 		code, got := chaosRequest(t, r, http.MethodPost, "/v1/chaos/runs", testKey, body)
 		require.Equal(t, http.StatusBadRequest, code, body)
-		require.Equal(t, "validation-error", got["type"], body)
+		require.Equal(t, problemTypeBase+"validation-error", got["type"], body)
 	}
 	require.Zero(t, runner.starts)
 }
@@ -210,7 +210,7 @@ func TestPostChaosRuns_replaysTheSameRunForTheSameKey__CHA_G5(t *testing.T) {
 
 	code, got := chaosRequest(t, r, http.MethodPost, "/v1/chaos/runs", testKey, `{"transactions":20}`)
 	require.Equal(t, http.StatusUnprocessableEntity, code)
-	require.Equal(t, "idempotency-key-mismatch", got["type"])
+	require.Equal(t, problemTypeBase+"idempotency-key-mismatch", got["type"])
 	require.Equal(t, 1, runner.starts)
 }
 
@@ -220,7 +220,7 @@ func TestPostChaosRuns_conflictWhileARunIsInProgress__CHA_G5(t *testing.T) {
 
 	code, got := chaosRequest(t, r, http.MethodPost, "/v1/chaos/runs", testKey, `{"transactions":10}`)
 	require.Equal(t, http.StatusConflict, code)
-	require.Equal(t, "conflict", got["type"])
+	require.Equal(t, problemTypeBase+"conflict", got["type"])
 }
 
 func TestGetChaosRuns_listsNewestFirstWithLimit__CHA_G6(t *testing.T) {
@@ -239,7 +239,7 @@ func TestGetChaosRuns_listsNewestFirstWithLimit__CHA_G6(t *testing.T) {
 	for _, bad := range []string{"0", "201", "x"} {
 		code, got = chaosRequest(t, r, http.MethodGet, "/v1/chaos/runs?limit="+bad, "", "")
 		require.Equal(t, http.StatusBadRequest, code, bad)
-		require.Equal(t, "validation-error", got["type"], bad)
+		require.Equal(t, problemTypeBase+"validation-error", got["type"], bad)
 	}
 }
 
@@ -249,5 +249,5 @@ func TestGetChaosRun_unknownIsNotFoundSlug__CHA_G12(t *testing.T) {
 
 	code, got := chaosRequest(t, r, http.MethodGet, "/v1/chaos/runs/nope", "", "")
 	require.Equal(t, http.StatusNotFound, code)
-	require.Equal(t, "not-found", got["type"])
+	require.Equal(t, problemTypeBase+"not-found", got["type"])
 }

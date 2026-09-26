@@ -27,7 +27,7 @@ func MountTerminals(r chi.Router, lister TerminalLister) {
 	r.Get("/v1/terminals", func(w http.ResponseWriter, req *http.Request) {
 		rows, err := lister.List(req.Context())
 		if err != nil {
-			problem(w, http.StatusInternalServerError, problemInternal, "could not read terminals")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not read terminals")
 			return
 		}
 		out := make([]terminal, 0, len(rows))

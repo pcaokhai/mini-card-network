@@ -99,7 +99,7 @@ func TestLabDecode_rawOverMaxLengthIsValidationError__LAB_G6(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, rec.Code)
 			var got map[string]any
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-			require.Equal(t, "validation-error", got["type"])
+			require.Equal(t, problemTypeBase+"validation-error", got["type"])
 		})
 	}
 }
@@ -135,7 +135,7 @@ func TestLabEncode_oversizeBodyIsValidationError__LAB_S4(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, "validation-error", got["type"])
+	require.Equal(t, problemTypeBase+"validation-error", got["type"])
 }
 
 type encodeRequest struct {

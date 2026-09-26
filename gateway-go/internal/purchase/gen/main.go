@@ -13,6 +13,7 @@ import (
 
 type rawCard struct {
 	CardToken string `json:"cardToken"`
+	CardRef   string `json:"cardRef"`
 	PAN       string `json:"pan"`
 	Expiry    string `json:"expiry"`
 	Balance   int64  `json:"balance"`
@@ -37,10 +38,10 @@ func main() {
 	fmt.Fprintln(&buf, "// Code generated from contracts/fixtures/cards.json by internal/purchase/gen. DO NOT EDIT.")
 	fmt.Fprintln(&buf, "package purchase")
 	fmt.Fprintln(&buf)
-	fmt.Fprintln(&buf, "// defaultCards maps a simulator cardToken to its fixture PAN, expiry, balance and currency (see cardtokens.go's Ruling).")
+	fmt.Fprintln(&buf, "// defaultCards maps a simulator cardToken to its fixture PAN, expiry, balance, currency and issuer cardRef (see cardtokens.go's Ruling).")
 	fmt.Fprintln(&buf, "var defaultCards = map[string]CardFixture{")
 	for _, c := range fixture.Cards {
-		fmt.Fprintf(&buf, "\t%q: {PAN: %q, ExpiryYYMM: %q, Balance: %d, Currency: %q},\n", c.CardToken, c.PAN, c.Expiry, c.Balance, c.Currency)
+		fmt.Fprintf(&buf, "\t%q: {PAN: %q, ExpiryYYMM: %q, Balance: %d, Currency: %q, CardRef: %q},\n", c.CardToken, c.PAN, c.Expiry, c.Balance, c.Currency, c.CardRef)
 	}
 	fmt.Fprintln(&buf, "}")
 

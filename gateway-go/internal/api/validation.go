@@ -59,12 +59,9 @@ func (e *fieldErrors) check(ok bool, field, message string) {
 }
 
 // validationProblem writes a 400 validation-error with errors[] filled (docs/04 §3).
-func validationProblem(w http.ResponseWriter, errs fieldErrors) {
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(http.StatusBadRequest)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"type": slugValidation, "title": slugValidation, "status": http.StatusBadRequest,
-		"detail": errs[0].Field + " " + errs[0].Message, "errors": errs,
+func validationProblem(w http.ResponseWriter, req *http.Request, errs fieldErrors) {
+	writeProblem(w, req, problemBody{
+		Status: http.StatusBadRequest, Type: problemValidation, Detail: errs[0].Field + " " + errs[0].Message, Errors: errs,
 	})
 }
 
@@ -73,7 +70,7 @@ func validationProblem(w http.ResponseWriter, errs fieldErrors) {
 func idempotencyKey(w http.ResponseWriter, req *http.Request) (string, bool) {
 	key := req.Header.Get("Idempotency-Key")
 	if _, err := uuid.Parse(key); err != nil {
-		problem(w, http.StatusBadRequest, slugIdempotencyKey, "Idempotency-Key header must be a UUID")
+		problem(w, req, http.StatusBadRequest, problemIdempotencyKey, "Idempotency-Key header must be a UUID")
 		return "", false
 	}
 	return key, true
@@ -84,11 +81,11 @@ func idempotencyKey(w http.ResponseWriter, req *http.Request) (string, bool) {
 func decodeBody[T any](w http.ResponseWriter, req *http.Request, dst *T, check func(T) fieldErrors) bool {
 	req.Body = http.MaxBytesReader(w, req.Body, maxBodyBytes)
 	if err := json.NewDecoder(req.Body).Decode(dst); err != nil {
-		validationProblem(w, fieldErrors{{Field: "body", Message: "must be a JSON object matching the schema"}})
+		validationProblem(w, req, fieldErrors{{Field: fieldBody, Message: "must be a JSON object matching the schema"}})
 		return false
 	}
 	if errs := check(*dst); len(errs) > 0 {
-		validationProblem(w, errs)
+		validationProblem(w, req, errs)
 		return false
 	}
 	return true
@@ -98,7 +95,7 @@ func decodeBody[T any](w http.ResponseWriter, req *http.Request, dst *T, check f
 func pathRRN(w http.ResponseWriter, req *http.Request) (string, bool) {
 	rrn := chi.URLParam(req, "rrn")
 	if !rrnPattern.MatchString(rrn) {
-		validationProblem(w, fieldErrors{{Field: "rrn", Message: "must match ^[0-9A-Z]{12}$"}})
+		validationProblem(w, req, fieldErrors{{Field: "rrn", Message: "must match ^[0-9A-Z]{12}$"}})
 		return "", false
 	}
 	return rrn, true

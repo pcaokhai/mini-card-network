@@ -14,6 +14,7 @@ type CardFixture struct {
 	ExpiryYYMM string
 	Balance    int64
 	Currency   string // ISO 4217 numeric, the card account's currency
+	CardRef    string // the issuer's reference for the card (the Admin API addresses cards by it)
 }
 
 // CardTokenRegistry resolves a simulator cardToken to its CardFixture.

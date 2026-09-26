@@ -350,7 +350,7 @@ Payload bounds: `throughput` always has 24 elements; `declineReasons` has at mos
 | OVW-G9 | The live feed's socket never connects on the BFF origin | `useWsEvents` falls back to `ws://{location.host}/v1/stream`; `curl :3000/v1/stream` → 404; `NEXT_PUBLIC_WS_URL` is set nowhere in the repo | WEB + PLAT | **Fixed** in #124 (documented): `web-next/.env.example` sets `NEXT_PUBLIC_WS_URL`; Route Handlers can't proxy the upgrade |
 | OVW-G10 | WS authentication differs from docs/04 §1 | The hub's `CheckOrigin` accepts every origin and reads no `token`; there is no `/api/stream-token` route under `web-next/src/app/api` | GW + WEB | Implement the token, or amend docs/04 through an ADR |
 | OVW-G11 | ~~A declined row without an RC is counted under `responseCode: ""`~~ | **Fixed** (#117): `purchase.ResponseCodeOf` records a response without DE 39 as RC `30`; `overviewDeclineReasons` skips rows with no RC | GW | Done |
-| OVW-G12 | Gateway problem responses don't follow docs/04 §3 | `problem()` in `internal/api/lab.go` writes the bare slug as both `type` and `title`, with no `https://mcn.local/problems/` prefix, no `instance`, no `traceId`, and the raw Go error as `detail` | GW | One problem writer with the docs/04 shape; `internal` 500s carry only `traceId` |
+| OVW-G12 | ~~Gateway problem responses don't follow docs/04 §3~~ | `problem()` in `internal/api/lab.go` writes the bare slug as both `type` and `title`, with no `https://mcn.local/problems/` prefix, no `instance`, no `traceId`, and the raw Go error as `detail` | GW | **Fixed** (#131, P-1): one problem writer (`internal/api/problems.go`) with the docs/04 §3 shape; `internal` 500s carry a generic detail and the `traceId`, the cause goes to the log |
 
 ### 9.1 Seed data check
 
@@ -399,3 +399,4 @@ Still open for this page: OVW-G1, G10, G12. Also:
 | 2.1 | 2026-09-26 | OVW-G5, OVW-G8 fixed; OVW-G9 closed by #124; the date shown is `Overview.businessDate` (ADR-007) (#125) |
 | 2.2 | 2026-09-25 | OVW-G3 and OVW-G11 fixed (#117) |
 | 2.3 | 2026-09-26 | OVW-G7 fixed (#120): "today" is the acquirer's business date (ADR-007) |
+| 2.4 | 2026-09-26 | OVW-G12 fixed (#131, P-1) |

@@ -39,11 +39,6 @@ const (
 	maxChaosTransactions = 10000 // contracts/openapi.yaml startChaosRun maximum
 	defaultChaosRunLimit = 50    // components.parameters.Limit
 	maxChaosRunLimit     = 200
-
-	slugValidation     = "validation-error"
-	slugNotFound       = "not-found"
-	slugInternal       = "internal"
-	slugIdempotencyKey = "insufficient-idempotency-key"
 )
 
 // MountChaos registers the chaos routes (contracts/openapi.yaml, tag "chaos"). hub may be nil in
@@ -63,7 +58,7 @@ func MountChaos(r chi.Router, toxiproxy ToxiproxyPort, runner RunnerPort, hub ..
 // hasUUIDIdempotencyKey enforces docs/04 §2: every state-changing call carries a UUID key.
 func hasUUIDIdempotencyKey(w http.ResponseWriter, req *http.Request) bool {
 	if uuid.Validate(req.Header.Get("Idempotency-Key")) != nil {
-		problem(w, http.StatusBadRequest, slugIdempotencyKey, "Idempotency-Key header must be a UUID")
+		problem(w, req, http.StatusBadRequest, problemIdempotencyKey, "Idempotency-Key header must be a UUID")
 		return false
 	}
 	return true
@@ -77,7 +72,7 @@ func handleListChaosScenarios(toxiproxy ToxiproxyPort) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		scenarios, err := toxiproxy.ListScenarios(req.Context())
 		if err != nil {
-			problem(w, http.StatusInternalServerError, slugInternal, "could not read chaos scenario state")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not read chaos scenario state")
 			return
 		}
 		writeJSONBody(w, http.StatusOK, scenarios)
@@ -91,27 +86,27 @@ func handleSetChaosScenario(toxiproxy ToxiproxyPort, hub ChaosHub) http.HandlerF
 		}
 		id := chaos.ScenarioID(chi.URLParam(req, "scenarioId"))
 		if !knownScenario(id) {
-			problem(w, http.StatusNotFound, slugNotFound, "no such chaos scenario")
+			problem(w, req, http.StatusNotFound, problemNotFound, "no such chaos scenario")
 			return
 		}
 		var body struct {
 			Enabled *bool `json:"enabled"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Enabled == nil {
-			problem(w, http.StatusBadRequest, slugValidation, "body must be {\"enabled\": true|false}")
+			problem(w, req, http.StatusBadRequest, problemValidation, "body must be {\"enabled\": true|false}")
 			return
 		}
 		if err := toxiproxy.SetScenario(req.Context(), id, *body.Enabled); err != nil {
 			if errors.Is(err, chaos.ErrScenarioNotImplemented) {
-				problem(w, http.StatusNotImplemented, "scenario-unavailable", "this stack cannot run "+string(id)+" (no fake issuer configured)")
+				problem(w, req, http.StatusNotImplemented, "scenario-unavailable", "this stack cannot run "+string(id)+" (no fake issuer configured)")
 				return
 			}
-			problem(w, http.StatusInternalServerError, slugInternal, "could not apply the chaos scenario")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not apply the chaos scenario")
 			return
 		}
 		updated, err := scenarioState(req.Context(), toxiproxy, id)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, slugInternal, "could not read chaos scenario state")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not read chaos scenario state")
 			return
 		}
 		if hub != nil {
@@ -157,7 +152,7 @@ func handleStartChaosRun(runner RunnerPort, replays *runReplays) http.HandlerFun
 			Transactions int `json:"transactions"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Transactions < 1 || body.Transactions > maxChaosTransactions {
-			problem(w, http.StatusBadRequest, slugValidation, "transactions must be an integer from 1 to 10000")
+			problem(w, req, http.StatusBadRequest, problemValidation, "transactions must be an integer from 1 to 10000")
 			return
 		}
 		key := req.Header.Get("Idempotency-Key")
@@ -166,7 +161,7 @@ func handleStartChaosRun(runner RunnerPort, replays *runReplays) http.HandlerFun
 		defer replays.mu.Unlock()
 		if prior, ok := replays.byKey[key]; ok {
 			if prior.transactions != body.Transactions {
-				problem(w, http.StatusUnprocessableEntity, "idempotency-key-mismatch", "Idempotency-Key was already used with a different request")
+				problem(w, req, http.StatusUnprocessableEntity, "idempotency-key-mismatch", "Idempotency-Key was already used with a different request")
 				return
 			}
 			writeJSONBody(w, http.StatusAccepted, prior.run)
@@ -174,11 +169,11 @@ func handleStartChaosRun(runner RunnerPort, replays *runReplays) http.HandlerFun
 		}
 		run, err := runner.Start(req.Context(), body.Transactions)
 		if errors.Is(err, chaos.ErrRunInProgress) {
-			problem(w, http.StatusConflict, "conflict", "a chaos run is already in progress")
+			problem(w, req, http.StatusConflict, "conflict", "a chaos run is already in progress")
 			return
 		}
 		if err != nil {
-			problem(w, http.StatusInternalServerError, slugInternal, "could not start the chaos run")
+			problem(w, req, http.StatusInternalServerError, problemInternal, "could not start the chaos run")
 			return
 		}
 		replays.byKey[key] = runReplay{transactions: body.Transactions, run: *run}
@@ -192,7 +187,7 @@ func handleListChaosRuns(runner RunnerPort) http.HandlerFunc {
 		if raw := req.URL.Query().Get("limit"); raw != "" {
 			n, err := strconv.Atoi(raw)
 			if err != nil || n < 1 || n > maxChaosRunLimit {
-				problem(w, http.StatusBadRequest, slugValidation, "limit must be an integer from 1 to 200")
+				problem(w, req, http.StatusBadRequest, problemValidation, "limit must be an integer from 1 to 200")
 				return
 			}
 			limit = n
@@ -205,7 +200,7 @@ func handleGetChaosRun(runner RunnerPort) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		run, ok := runner.Get(chi.URLParam(req, "runId"))
 		if !ok {
-			problem(w, http.StatusNotFound, slugNotFound, "no such chaos run")
+			problem(w, req, http.StatusNotFound, problemNotFound, "no such chaos run")
 			return
 		}
 		writeJSONBody(w, http.StatusOK, run)

@@ -14,11 +14,12 @@ import (
 // panDE is the data element carrying the PAN (contracts/iso8583/packager-spec.yaml).
 const panDE = 2
 
-// secretDEs never leave the Lab in any form, not even partially (engineering rule 2): PIN block,
-// ICC data (EMV tags 5A and 57 carry the PAN and track 2 equivalent) and MACs.
-// ponytail: duplicates packager-spec.yaml's sensitive flags (LAB-G8); generate from the spec once
-// codegen carries them.
-var secretDEs = map[int]bool{52: true, 55: true, 64: true, 128: true}
+// shownSensitive are the packager-spec sensitivity kinds the Lab may still show, masked where
+// they are text: an expiry date and a key-change cryptogram under the ZMK. Every other flagged
+// field (PIN block, ICC data, whose EMV tags 5A and 57 carry the PAN and track 2 equivalent, and
+// MACs) never leaves the Lab in any form (engineering rule 2), and so does a kind added to the
+// spec later, so a newly flagged field is never shown by mistake (LAB-G8).
+var shownSensitive = map[string]bool{"": true, "pan": true, "expiry": true, "key-material": true}
 
 // freeTextPAN matches any run of 13+ digits in an/ans text, with no word boundaries: obs.MaskPAN's
 // \b\d{13,19}\b misses a PAN glued to letters or "_" (CARD9704..., PAN_9704...) or inside a
@@ -157,7 +158,7 @@ func redactValue(de int, value string) string {
 	switch {
 	case de == panDE:
 		return maskPANByPosition(value)
-	case secretDEs[de]:
+	case !shownSensitive[iso8583.Fields[de].Sensitive]:
 		return strings.Repeat("*", len(value))
 	case strings.HasPrefix(iso8583.Fields[de].Type, "an"):
 		return freeTextPAN.ReplaceAllStringFunc(value, maskPANByPosition)

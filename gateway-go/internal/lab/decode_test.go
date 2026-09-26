@@ -3,6 +3,7 @@ package lab
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -253,5 +254,31 @@ func TestDecode_leavesPackedNull__LAB_G3(t *testing.T) {
 	}
 	if d.Packed != nil {
 		t.Fatalf("packed = %q on decode, want null", *d.Packed)
+	}
+}
+
+// Every field the packager spec flags as a PIN block, ICC data or a MAC is redacted whole, driven
+// by the generated flags rather than a hand-kept list (LAB-G8).
+func TestEncode_redactsEveryFieldTheSpecFlagsAsSecret__LAB_G8(t *testing.T) {
+	for n, spec := range iso8583.Fields {
+		if spec.Sensitive != "pin-block" && spec.Sensitive != "emv" && spec.Sensitive != "mac" {
+			continue
+		}
+		value := strings.Repeat("AB", spec.Length)
+		if spec.Prefix != "" {
+			value = "ABCDEF"
+		}
+		fields := map[string]string{"3": "000000", "11": "000123", strconv.Itoa(n): value}
+		if n > 64 {
+			fields["70"] = "301"
+		}
+		d, err := Encode("0200", fields)
+		if err != nil {
+			t.Fatalf("Encode DE %d: %v", n, err)
+		}
+		f := findField(d.Fields, strconv.Itoa(n))
+		if strings.Trim(f.Value, "*") != "" {
+			t.Fatalf("DE %d (%s): value %q is not redacted", n, spec.Sensitive, f.Value)
+		}
 	}
 }

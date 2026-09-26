@@ -25,7 +25,7 @@ const (
 	slugConflict   = "conflict"
 )
 
-type problemBody struct {
+type decodedProblem struct {
 	Type   string `json:"type"`
 	Errors []struct {
 		Field   string `json:"field"`
@@ -33,10 +33,12 @@ type problemBody struct {
 	} `json:"errors"`
 }
 
-func decodeProblem(t *testing.T, rec *httptest.ResponseRecorder) problemBody {
+func decodeProblem(t *testing.T, rec *httptest.ResponseRecorder) decodedProblem {
 	t.Helper()
-	var p problemBody
+	var p decodedProblem
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &p), rec.Body.String())
+	require.True(t, strings.HasPrefix(p.Type, problemTypeBase), "a full catalogue URI (P-1): %s", p.Type)
+	p.Type = strings.TrimPrefix(p.Type, problemTypeBase)
 	return p
 }
 

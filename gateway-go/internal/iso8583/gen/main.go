@@ -48,8 +48,8 @@ func main() {
 	fmt.Fprintln(&buf, "var Fields = map[int]FieldSpec{")
 	for _, n := range numbers {
 		f := spec.Fields[n]
-		fmt.Fprintf(&buf, "\t%d: {Number: %d, Type: %q, Length: %d, Prefix: %q, Name: %q}, // %s\n",
-			n, n, f.Type, f.Length, f.Prefix, f.Name, f.Name)
+		fmt.Fprintf(&buf, "\t%d: {Number: %d, Type: %q, Length: %d, Prefix: %q, Name: %q, Sensitive: %q}, // %s\n",
+			n, n, f.Type, f.Length, f.Prefix, f.Name, f.Sensitive, f.Name)
 	}
 	fmt.Fprintln(&buf, "}")
 

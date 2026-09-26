@@ -40,16 +40,16 @@ func handleListTransactions(reader TranLogReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		filter, errs := parseTransactionFilter(req)
 		if len(errs) > 0 {
-			validationProblem(w, errs)
+			validationProblem(w, req, errs)
 			return
 		}
 		page, nextCursor, err := reader.List(req.Context(), filter)
 		if errors.Is(err, store.ErrInvalidCursor) {
-			validationProblem(w, fieldErrors{{Field: "cursor", Message: "is not a cursor this API returned"}})
+			validationProblem(w, req, fieldErrors{{Field: "cursor", Message: "is not a cursor this API returned"}})
 			return
 		}
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "transactions-read-failed", err.Error())
+			internalProblem(w, req, "transactions-read-failed", err)
 			return
 		}
 		items := make([]transactionSummaryDTO, len(page))
@@ -71,11 +71,11 @@ func handleGetTransaction(reader TranLogReader) http.HandlerFunc {
 		}
 		row, err := reader.Get(req.Context(), rrn)
 		if errors.Is(err, store.ErrNotFound) {
-			problem(w, http.StatusNotFound, "unknown-transaction", "no such transaction")
+			problem(w, req, http.StatusNotFound, problemNotFound, "no such transaction")
 			return
 		}
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "transaction-read-failed", err.Error())
+			internalProblem(w, req, "transaction-read-failed", err)
 			return
 		}
 		writeJSONBody(w, http.StatusOK, toTransactionDTO(row))
@@ -90,21 +90,21 @@ func handleGetTransactionJourney(reader TranLogReader, reversals ReversalReader)
 		}
 		row, err := reader.Get(req.Context(), rrn)
 		if errors.Is(err, store.ErrNotFound) {
-			problem(w, http.StatusNotFound, "unknown-transaction", "no such transaction")
+			problem(w, req, http.StatusNotFound, problemNotFound, "no such transaction")
 			return
 		}
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "transaction-read-failed", err.Error())
+			internalProblem(w, req, "transaction-read-failed", err)
 			return
 		}
 		history, err := reader.ListStateHistory(req.Context(), row.ID)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "journey-read-failed", err.Error())
+			internalProblem(w, req, "journey-read-failed", err)
 			return
 		}
 		rev, err := findReversal(req.Context(), reversals, row.ID, history)
 		if err != nil {
-			problem(w, http.StatusInternalServerError, "journey-read-failed", err.Error())
+			internalProblem(w, req, "journey-read-failed", err)
 			return
 		}
 		j := journey.BuildJourney(row, history, rev)
