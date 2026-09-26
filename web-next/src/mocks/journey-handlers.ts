@@ -17,11 +17,14 @@ function summaryOf(rrn: string): TransactionSummary {
  */
 export const journeyHandlers = [
   http.get("*/v1/transactions", ({ request }) => {
-    const status = new URL(request.url).searchParams.get("status");
+    const query = new URL(request.url).searchParams;
+    const status = query.get("status");
     if (!status) return passthrough();
+    const reversalReason = query.get("reversalReason");
     const items = Object.keys(JOURNEYS)
       .filter((rrn) => JOURNEYS[rrn].transaction.status === status)
-      .map(summaryOf);
+      .map(summaryOf)
+      .filter((row) => !reversalReason || row.reversalReason === reversalReason);
     return HttpResponse.json({ items, nextCursor: null });
   }),
   http.get("*/v1/transactions/:rrn/journey", ({ params }) => {

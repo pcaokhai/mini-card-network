@@ -370,11 +370,15 @@
       "empty": "Hôm nay chưa có sự kiện mạng nào.",
       "showMore": "Xem thêm {count} sự kiện",
       "known": {
-        "linkUp": "Đường kết nối tới ngân hàng phát hành đã hoạt động",
-        "linkDown": "Mất kết nối tới ngân hàng phát hành, đang thử kết nối lại",
-        "signedOnAgain": "Đã đăng nhập lại: ngân hàng phát hành đã đăng xuất đường kết nối",
-        "stillSignedOff": "Ngân hàng phát hành vẫn đang giữ đường kết nối ở trạng thái đăng xuất",
-        "lateResponse": "Có câu trả lời đến quá muộn cho một giao dịch"
+        "LINK_UP": "Đường kết nối tới ngân hàng phát hành đã hoạt động",
+        "LINK_DOWN": "Mất kết nối tới ngân hàng phát hành, đang thử kết nối lại",
+        "SIGNED_ON": "Đã đăng nhập vào ngân hàng phát hành",
+        "SIGNED_OFF": "Đã đăng xuất khỏi ngân hàng phát hành",
+        "SIGNED_ON_AGAIN": "Đã đăng nhập lại: ngân hàng phát hành đã đăng xuất đường kết nối",
+        "SIGN_ON_FAILED": "Đăng nhập vào ngân hàng phát hành không thành công",
+        "ECHO_OK": "Kiểm tra kết nối: ngân hàng phát hành đã trả lời",
+        "ECHO_FAILED": "Kiểm tra kết nối: ngân hàng phát hành không trả lời",
+        "LATE_RESPONSE": "Có câu trả lời đến quá muộn cho một giao dịch"
       }
     },
     "breaker": {
@@ -584,7 +588,8 @@
       "heading": "Lượng giao dịch trong 60 phút qua"
     },
     "declineReasons": {
-      "heading": "Vì sao giao dịch bị từ chối"
+      "heading": "Vì sao giao dịch bị từ chối",
+      "other": "Lý do khác"
     },
     "health": {
       "heading": "Sức khỏe hệ thống",
@@ -629,7 +634,10 @@
       "openChaosLab": "Mở phòng lab sự cố",
       "createTestTransaction": "Tạo giao dịch thử"
     },
-    "throughputTech": "TPS theo từng 2,5 phút · 60 phút qua"
+    "throughputTech": "TPS theo từng 2,5 phút · 60 phút qua",
+    "loading": "Đang tải tổng quan…",
+    "loadFailed": "Không tải được số liệu tổng quan. Thử tải lại trang.",
+    "businessDay": "{date} · ngày giao dịch"
   },
   "cards": {
     "title": "Thẻ và tài khoản",
@@ -669,8 +677,10 @@
       "confirmUnblockButton": "Xác nhận mở khóa",
       "cancel": "Hủy",
       "failed": "Không đổi được trạng thái thẻ: {detail}",
-      "auditEasy": "Đã ghi nhật ký: {action, select, block {khóa} other {mở khóa}} thẻ •••• {last4} lúc {time}",
-      "auditExpert": "audit_log · {action, select, block {CARD_BLOCKED} other {CARD_UNBLOCKED}} · card {last4} · actor ops"
+      "auditHeading": "Nhật ký thao tác",
+      "auditEasy": "{action, select, CARD_BLOCKED {Khóa} CARD_UNBLOCKED {Mở khóa} other {Đổi hạn mức}} thẻ •••• {last4} lúc {time} · {actor}",
+      "auditExpert": "audit_log · {action} · card {last4} · {time} · actor {actor}",
+      "noUnblock": "Thẻ báo mất, bị đánh cắp hoặc khóa PIN không mở khóa được. Khách cần được phát hành thẻ mới."
     },
     "balance": {
       "heading": "Số dư",
@@ -701,7 +711,7 @@
       "unset": "Chưa đặt",
       "used": "Đã dùng hôm nay {used} · {percent}% hạn mức",
       "usedNoLimit": "Đã dùng hôm nay {used}",
-      "stale": "Someone changed this card. Reload to continue.",
+      "stale": "Có người vừa thay đổi thẻ này. Tải lại để tiếp tục.",
       "reload": "Tải lại",
       "failed": "Không lưu được hạn mức: {detail}"
     },
@@ -718,7 +728,7 @@
         "note": "Mỗi journal: Σ Nợ = Σ Có, kiểm tra lúc COMMIT",
         "a": "Vế Nợ",
         "b": "Vế Có",
-        "more": "Load more"
+        "more": "Tải thêm"
       },
       "time": "Giờ",
       "description": "Nội dung",

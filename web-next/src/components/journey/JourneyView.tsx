@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { useCustomerLedger, useJourney, type Journey } from "@/shared/api/journey-client";
+import { JourneyNotFoundError, useCustomerLedger, useJourney, type Journey } from "@/shared/api/journey-client";
 import { CountdownRing } from "./CountdownRing";
 import { MoneyPanel } from "./MoneyPanel";
 import { PlaybackControls } from "./PlaybackControls";
@@ -17,8 +17,8 @@ export const AUTOPLAY_INTERVAL_MS = 950;
 
 export function JourneyView({ rrn }: { rrn: string }) {
   const t = useTranslations("journey");
-  const { data: journey, isError } = useJourney(rrn);
-  if (isError) return <Notice>{t("notFound", { rrn })}</Notice>;
+  const { data: journey, error } = useJourney(rrn);
+  if (error) return <Notice>{error instanceof JourneyNotFoundError ? t("notFound", { rrn }) : t("loadError")}</Notice>;
   if (!journey) return null;
   // Keyed on the RRN so switching transactions resets playback to the final step.
   return <LoadedJourney key={rrn} journey={journey} />;

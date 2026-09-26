@@ -370,11 +370,15 @@
       "empty": "No network events today.",
       "showMore": "Show {count} more events",
       "known": {
-        "linkUp": "Link to the issuing bank is up",
-        "linkDown": "Link to the issuing bank is down, reconnecting",
-        "signedOnAgain": "Signed on again: the issuing bank had signed the link off",
-        "stillSignedOff": "The issuing bank still holds the link signed off",
-        "lateResponse": "A response arrived too late for a transaction"
+        "LINK_UP": "The link to the issuer is up",
+        "LINK_DOWN": "The link to the issuer is down, reconnecting",
+        "SIGNED_ON": "Signed on to the issuer",
+        "SIGNED_OFF": "Signed off from the issuer",
+        "SIGNED_ON_AGAIN": "Signed on again: the issuer had the link signed off",
+        "SIGN_ON_FAILED": "Sign-on to the issuer failed",
+        "ECHO_OK": "Echo: the issuer answered",
+        "ECHO_FAILED": "Echo: the issuer did not answer",
+        "LATE_RESPONSE": "A response arrived too late for a transaction"
       }
     },
     "breaker": {
@@ -584,7 +588,8 @@
       "heading": "Transaction volume over the last 60 minutes"
     },
     "declineReasons": {
-      "heading": "Why transactions are declined"
+      "heading": "Why transactions are declined",
+      "other": "Other reasons"
     },
     "health": {
       "heading": "System health",
@@ -629,7 +634,10 @@
       "openChaosLab": "Open chaos lab",
       "createTestTransaction": "Create test transaction"
     },
-    "throughputTech": "TPS per 2.5 min · last 60 minutes"
+    "throughputTech": "TPS per 2.5 min · last 60 minutes",
+    "loading": "Loading the overview…",
+    "loadFailed": "The overview could not be loaded. Try reloading the page.",
+    "businessDay": "{date} · business date"
   },
   "cards": {
     "title": "Cards and accounts",
@@ -669,8 +677,10 @@
       "confirmUnblockButton": "Confirm unblock",
       "cancel": "Cancel",
       "failed": "The card status could not be changed: {detail}",
-      "auditEasy": "Logged: {action, select, block {blocked} other {unblocked}} card •••• {last4} at {time}",
-      "auditExpert": "audit_log · {action, select, block {CARD_BLOCKED} other {CARD_UNBLOCKED}} · card {last4} · actor ops"
+      "auditHeading": "Activity log",
+      "auditEasy": "{action, select, CARD_BLOCKED {Blocked} CARD_UNBLOCKED {Unblocked} other {Changed the limits of}} card •••• {last4} at {time} · {actor}",
+      "auditExpert": "audit_log · {action} · card {last4} · {time} · actor {actor}",
+      "noUnblock": "A lost, stolen or PIN-blocked card can't be unblocked. The customer needs a new card."
     },
     "balance": {
       "heading": "Balance",

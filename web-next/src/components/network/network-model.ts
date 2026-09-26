@@ -93,16 +93,21 @@ export function todaysEvents(events: NetworkEvent[], now: number): NetworkEvent[
     .slice(0, MAX_EVENTS);
 }
 
-// Every easyText gateway-go emits (internal/isonet/supervisor.go, internal/purchase/service.go), keyed
-// to network.events.known copy. The gateway writes English; unknown text renders as sent.
-const GATEWAY_EVENT_KEYS: Record<string, string> = {
-  "Link to issuer is up": "linkUp",
-  "Link to issuer is down": "linkDown",
-  "Signed on again: the issuer had the link signed off": "signedOnAgain",
-  "Issuer still holds the link signed off": "stillSignedOff",
-  "A response arrived too late for a transaction": "lateResponse",
-};
+// Codes with Vietnamese copy in network.events.known (contracts NetworkEventCode). The gateway's
+// easyText is its English fallback; a row without a code (written before the code existed) shows it.
+const KNOWN_EVENT_CODES = new Set<string>([
+  "LINK_UP",
+  "LINK_DOWN",
+  "SIGNED_ON",
+  "SIGNED_OFF",
+  "SIGNED_ON_AGAIN",
+  "SIGN_ON_FAILED",
+  "ECHO_OK",
+  "ECHO_FAILED",
+  "LATE_RESPONSE",
+]);
 
-export function gatewayEventKey(easyText: string): string | undefined {
-  return GATEWAY_EVENT_KEYS[easyText];
+/** The copy key for an event, from its language-neutral code (NET-G15); undefined keeps the provider text. */
+export function networkEventKey(event: NetworkEvent): string | undefined {
+  return event.code && KNOWN_EVENT_CODES.has(event.code) ? event.code : undefined;
 }

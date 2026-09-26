@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { gatewayEventKey, todaysEvents, type Tone } from "./network-model";
+import { networkEventKey, todaysEvents, type Tone } from "./network-model";
 import type { NetworkEvent } from "@/shared/api/network-client";
 
 const SEVERITY_TONE: Record<NetworkEvent["severity"], Tone> = { OK: "ok", INFO: "info", WARN: "warn", ERROR: "bad" };
@@ -18,7 +18,7 @@ export function EventLog({ events, expert, now }: { events: NetworkEvent[]; expe
   const rows = expanded ? all : all.slice(0, VISIBLE_ROWS);
   const hidden = all.length - rows.length;
   const easyText = (event: NetworkEvent) => {
-    const key = gatewayEventKey(event.easyText);
+    const key = networkEventKey(event);
     return key ? t(`known.${key}`) : event.easyText;
   };
 

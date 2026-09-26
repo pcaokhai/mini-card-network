@@ -76,7 +76,7 @@ describe("CardsScreen (MCN-309, as in Cards.dc.html)", () => {
     expect(rows[1]).toHaveTextContent("Có SETTLEMENT_SUSPENSE · 250.000");
   });
 
-  it("blocks only after the inline confirmation, then shows the lock overlay and an audit line MCN-309-AC2", async () => {
+  it("blocks only after the inline confirmation, then shows the lock overlay and the issuer's audit entry MCN-309-AC2", async () => {
     const user = userEvent.setup();
     await openCard("crd_normal0001");
     const status = region("Trạng thái thẻ");
@@ -88,7 +88,8 @@ describe("CardsScreen (MCN-309, as in Cards.dc.html)", () => {
     await user.click(within(status).getByRole("button", { name: "Xác nhận khóa" }));
     expect(await screen.findByText("Thẻ đang bị khóa")).toBeInTheDocument();
     expect(await within(status).findByText("Đã khóa")).toBeInTheDocument();
-    expect(within(status).getByText(/^Đã ghi nhật ký: khóa thẻ •••• 4417 lúc \d{2}:\d{2}$/)).toBeInTheDocument();
+    const audit = within(status).getByRole("list", { name: "Nhật ký thao tác" });
+    expect(await within(audit).findByText(/^Khóa thẻ •••• 4417 lúc \d{2}:\d{2} · console$/)).toBeInTheDocument();
     expect(within(status).getByRole("button", { name: "Mở khóa thẻ" })).toBeInTheDocument();
     const list = region("Thẻ của khách hàng");
     expect(await within(list).findByText("Đã khóa", { selector: "a[href='/cards/crd_normal0001'] *" })).toBeInTheDocument();
@@ -129,7 +130,7 @@ describe("CardsScreen (MCN-309, as in Cards.dc.html)", () => {
     server.events.removeAllListeners();
   });
 
-  it("shows 'Someone changed this card. Reload to continue.' on a 412 and reloads the card MCN-309-AC3", async () => {
+  it("shows 'Có người vừa thay đổi thẻ này. Tải lại để tiếp tục.' on a 412 and reloads the card MCN-309-AC3 CARDS-G15", async () => {
     server.use(
       http.put("*/v1/cards/:cardRef/limits", () =>
         HttpResponse.json({ title: "ETag mismatch", status: 412 }, { status: 412, headers: { "Content-Type": "application/problem+json" } }),
@@ -143,7 +144,7 @@ describe("CardsScreen (MCN-309, as in Cards.dc.html)", () => {
     await act(async () => fireEvent.keyUp(slider, { key: "ArrowRight" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Someone changed this card. Reload to continue.");
+    expect(alert).toHaveTextContent("Có người vừa thay đổi thẻ này. Tải lại để tiếp tục.");
     await user.click(within(alert).getByRole("button", { name: "Tải lại" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(slider).toHaveValue("10000000");
@@ -189,7 +190,7 @@ describe("CardsScreen (MCN-309, as in Cards.dc.html)", () => {
     expect(within(ledger).queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("labels load-more for Expert mode", async () => {
+  it("labels load-more in Vietnamese in Expert mode too CARDS-G15", async () => {
     useDisplayMode.setState({ mode: "expert" });
     server.use(
       http.get("*/v1/cards/:cardRef/ledger", () =>
@@ -197,7 +198,7 @@ describe("CardsScreen (MCN-309, as in Cards.dc.html)", () => {
       ),
     );
     await openCard("crd_normal0001");
-    expect(await within(region("Bút toán kép (journal)")).findByRole("button", { name: "Load more" })).toBeInTheDocument();
+    expect(await within(region("Bút toán kép (journal)")).findByRole("button", { name: "Tải thêm" })).toBeInTheDocument();
   });
 
   it("names the entry type when the issuer only generated a description", async () => {
@@ -225,5 +226,26 @@ describe("CardsScreen (MCN-309, as in Cards.dc.html)", () => {
     const rows = await within(region("Lịch sử tiền vào, tiền ra")).findAllByRole("row");
     expect(rows[1]).toHaveTextContent("Mua hàng");
     expect(rows[1]).not.toHaveTextContent("journal 244");
+  });
+
+  it("shows the card's audit timeline from the issuer, newest first, with who did it CARDS-AUDIT", async () => {
+    server.use(
+      http.get("*/v1/cards/:cardRef/audit", () =>
+        HttpResponse.json({
+          items: [
+            { auditId: "a2", occurredAt: "2026-09-25T07:05:00Z", actor: "ops-lan", action: "CARD_LIMITS_UPDATED", before: null, after: null },
+            { auditId: "a1", occurredAt: "2026-09-25T06:30:00Z", actor: "ops-minh", action: "CARD_UNBLOCKED", before: null, after: null },
+          ],
+          nextCursor: null,
+        }),
+      ),
+    );
+    await openCard("crd_normal0001");
+    const audit = await within(region("Trạng thái thẻ")).findByRole("list", { name: "Nhật ký thao tác" });
+
+    const items = await within(audit).findAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent(/^Đổi hạn mức thẻ •••• 4417 lúc \d{2}:\d{2} · ops-lan$/);
+    expect(items[1]).toHaveTextContent(/^Mở khóa thẻ •••• 4417 lúc \d{2}:\d{2} · ops-minh$/);
   });
 });

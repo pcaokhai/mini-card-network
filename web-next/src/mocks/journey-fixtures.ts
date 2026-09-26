@@ -63,7 +63,7 @@ export const APPROVED_JOURNEY: Journey = {
 
 const reversedData = { pan: "970436******5540", amount: "000000600000", stan: "000124", de7: "0921073244", rrn: "626514000124" };
 export const AUTO_REVERSED_JOURNEY: Journey = {
-  transaction: txn("626514000124", "REVERSED", 600_000, "5540", "Trạm xăng Bến Nghé", null),
+  transaction: { ...txn("626514000124", "REVERSED", 600_000, "5540", "Trạm xăng Bến Nghé", null), reversalReason: "TIMEOUT" },
   steps: [
     step(1, "POS_REQUEST", "POS", 0, "OK", "POST /v1/transactions/purchases · entry mode 051"),
     step(2, "REQUEST_SENT", "ACQUIRER", 8, "OK", "Build 0200 · STAN 000124 · start timer 30 s", message("0200", reversedData)),

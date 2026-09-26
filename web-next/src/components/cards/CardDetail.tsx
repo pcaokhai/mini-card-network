@@ -1,10 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { useBlockCard, useCard, useCardLedgerPages, useUnblockCard } from "@/shared/api/cards-client";
+import { useBlockCard, useCard, useCardAudit, useCardLedgerPages, useUnblockCard } from "@/shared/api/cards-client";
 import { BalancePanel } from "./BalancePanel";
-import { type AuditEntry, CardStatusPanel, type ToggleAction } from "./CardStatusPanel";
+import { CardStatusPanel, type ToggleAction } from "./CardStatusPanel";
 import { CardVisual } from "./CardVisual";
 import { LedgerPanel } from "./LedgerPanel";
 import { LimitsPanel } from "./LimitsPanel";
@@ -13,7 +12,6 @@ import { problemDetail } from "./problem-detail";
 
 // The canvas shows a short ledger; older journals load on demand.
 export const LEDGER_PAGE_SIZE = 8;
-const clock = new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
 export function CardDetail({ cardRef, expert, today }: { cardRef: string; expert: boolean; today: Date }) {
   const t = useTranslations("cards");
@@ -21,8 +19,7 @@ export function CardDetail({ cardRef, expert, today }: { cardRef: string; expert
   const ledger = useCardLedgerPages(cardRef, LEDGER_PAGE_SIZE);
   const block = useBlockCard(cardRef);
   const unblock = useUnblockCard(cardRef);
-  // The issuer writes audit_log itself but has no read API yet; this echoes what this session did.
-  const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const audit = useCardAudit(cardRef);
 
   if (cardQuery.isError) {
     return (
@@ -37,9 +34,8 @@ export function CardDetail({ cardRef, expert, today }: { cardRef: string; expert
   const kind = statusKind(card, today);
 
   function toggle(action: ToggleAction) {
-    const logged = { onSuccess: () => setAudit((a) => [...a, { action, time: clock.format(new Date()) }]) };
-    if (action === "block") block.mutate("CUSTOMER_REQUEST", logged);
-    else unblock.mutate(undefined, logged);
+    if (action === "block") block.mutate("CUSTOMER_REQUEST");
+    else unblock.mutate();
   }
   const toggleError = block.error ?? unblock.error;
 
@@ -51,7 +47,7 @@ export function CardDetail({ cardRef, expert, today }: { cardRef: string; expert
           card={card}
           kind={kind}
           expert={expert}
-          audit={audit}
+          audit={audit.data ?? []}
           pending={block.isPending || unblock.isPending}
           error={toggleError ? problemDetail(toggleError) : null}
           onConfirm={toggle}

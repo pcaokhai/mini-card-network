@@ -62,4 +62,16 @@ describe("dev:mock POS outcomes", () => {
     // tok_low holds 80 000 ₫: a second real charge of 50 000 would have declined 51.
     expect((await purchase("tok_low", 50_000)).responseCode).toBe("51");
   });
+
+  it("answers a completion of an unknown RRN like the gateway: 404 unknown-transaction __POS_G13", async () => {
+    const res = await fetch("http://localhost/v1/transactions/626807999999/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": "completion-unknown" },
+      body: JSON.stringify({ amount: { amount: 10_000, currency: "704" } }),
+    });
+
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Type")).toContain("application/problem+json");
+    expect(await res.json()).toMatchObject({ type: "unknown-transaction", status: 404 });
+  });
 });
